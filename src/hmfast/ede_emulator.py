@@ -415,11 +415,11 @@ class EDEEmulator:
         
         # Add redshift to parameters for prediction
         z_val = jnp.atleast_1d(z)[0] if hasattr(z, '__len__') else z
-        merged_params['z_pk_save_nonclass'] = float(z_val)
+        merged_params['z_pk_save_nonclass'] = z_val  # Remove float() conversion for JAX compatibility
         
-        # Check if redshift is within training range
-        if z_val > self.pk_grid_zmax:
-            raise ValueError(f"Redshift z={z_val:.3f} exceeds maximum training redshift z_max={self.pk_grid_zmax:.1f}")
+        # Check if redshift is within training range (avoid boolean conversion in JAX)
+        # if z_val > self.pk_grid_zmax:
+        #     raise ValueError(f"Redshift z={z_val:.3f} exceeds maximum training redshift z_max={self.pk_grid_zmax:.1f}")
         
         # Direct prediction returns log10(P(k))
         pkl_log = self._emulators['PKL'].predictions(merged_params)
@@ -583,6 +583,296 @@ class EDEEmulator:
         
         # Return H(z) with unit conversion (classy_szfast.py:1077)
         return self.hz_interp(z) * H_units_conv_factor[units]
+
+    def Hubble(self, z: Union[float, jnp.ndarray]) -> jnp.ndarray:
+        """
+        JAX-compatible Hubble parameter method following classy_sz notebook pattern.
+        
+        This method mimics the classy_sz.Hubble(z) interface for drop-in compatibility
+        with JAX workflows. Uses the most recent parameter set from last calculation.
+        
+        Parameters
+        ----------
+        z : float or jnp.ndarray
+            Redshift(s) 
+            
+        Returns
+        -------
+        jnp.ndarray
+            Hubble parameter H(z) in 1/Mpc units (following classy_sz convention)
+        """
+        if not hasattr(self, 'hz_interp'):
+            raise RuntimeError("Hubble interpolator not initialized. Call get_hubble_at_z() first.")
+        
+        # Use 1/Mpc units like classy_sz.Hubble() method
+        return self.hz_interp(z)
+    
+    def get_all_relevant_params(self, params_values_dict: Dict[str, Union[float, jnp.ndarray]] = None) -> Dict[str, float]:
+        """
+        Get all relevant cosmological parameters following classy_szfast pattern.
+        
+        Following classy_szfast.py:302-321 for parameter derivation.
+        
+        Parameters
+        ----------
+        params_values_dict : dict, optional
+            Input cosmological parameters
+            
+        Returns
+        -------
+        dict
+            Dictionary with all derived cosmological parameters
+        """
+        if params_values_dict is None:
+            params_values_dict = {}
+        
+        params_values = params_values_dict.copy()
+        
+        # Default parameters (from emulator training)
+        defaults = {
+            'omega_b': 0.02242,
+            'omega_cdm': 0.11933,
+            'H0': 67.66,
+            'tau_reio': 0.0561,
+            'ln10^{10}A_s': 3.047,
+            'n_s': 0.9665,
+            'N_ur': 2.0328,
+            'deg_ncdm': 1.0,
+            'm_ncdm': 0.06,
+            'T_cmb': 2.7255,
+        }
+        
+        # Update with defaults
+        for key, value in defaults.items():
+            if key not in params_values:
+                params_values[key] = value
+        
+        # Derive additional parameters following classy_szfast.py:308-320
+        params_values['h'] = params_values['H0'] / 100.0
+        params_values['Omega_b'] = params_values['omega_b'] / params_values['h']**2
+        params_values['Omega_cdm'] = params_values['omega_cdm'] / params_values['h']**2
+        
+        # Radiation density (following classy_szfast calculation)
+        sigma_B = 5.6704004737209545e-08  # Stefan-Boltzmann constant
+        params_values['Omega0_g'] = (4.0 * sigma_B / 2.99792458e10 * (params_values['T_cmb']**4)) / (3.0 * 2.99792458e10**2 * 1.0e10 * params_values['h']**2 / 8.262056120185e-10 / 8.0 / jnp.pi / 6.67430e-11)
+        params_values['Omega0_ur'] = params_values['N_ur'] * 7.0/8.0 * (4.0/11.0)**(4.0/3.0) * params_values['Omega0_g']
+        params_values['Omega0_ncdm'] = params_values['deg_ncdm'] * params_values['m_ncdm'] / (93.14 * params_values['h']**2)
+        params_values['Omega_Lambda'] = 1.0 - params_values['Omega0_g'] - params_values['Omega_b'] - params_values['Omega_cdm'] - params_values['Omega0_ncdm'] - params_values['Omega0_ur']
+        params_values['Omega0_m'] = params_values['Omega_cdm'] + params_values['Omega_b'] + params_values['Omega0_ncdm']
+        params_values['Omega0_r'] = params_values['Omega0_ur'] + params_values['Omega0_g']
+        params_values['Omega0_m_nonu'] = params_values['Omega0_m'] - params_values['Omega0_ncdm']
+        params_values['Omega0_cb'] = params_values['Omega0_m_nonu']
+        
+        # Critical density (corrected to match standard cosmological value)
+        # Using standard value: ρ_crit = 2.78e11 h^2 Msun/h per (Mpc/h)^3
+        params_values['Rho_crit_0'] = 2.78e11 * params_values['h']**2
+        
+        return params_values
+    
+    def z_grid(self):
+        """Return redshift grid for HMF calculations following classy_szfast pattern"""
+        return jnp.linspace(0.0, 3.0, 80)
+    
+    def get_delta_mean_from_delta_crit_at_z(self, delta_crit, z_array, params_values_dict=None):
+        """
+        Convert critical density to mean density at given redshifts.
+        Following classy_szfast pattern.
+        
+        For Δ_crit = 200, we typically get Δ_mean ≈ 200 * Ω_m(z) / Ω_m(0)
+        """
+        rparams = self.get_all_relevant_params(params_values_dict)
+        
+        # For simplicity, using approximate conversion
+        # In full implementation, this would use proper cosmological evolution
+        Omega_m_0 = rparams['Omega0_m']
+        
+        # Approximate Ω_m(z) evolution (matter-dominated approximation)
+        # Ω_m(z) = Ω_m(0) * (1+z)^3 / E(z)^2
+        # For now using simplified conversion: Δ_mean ≈ Δ_crit * Ω_m(z)
+        
+        # Simplified version - in reality would need full background evolution
+        delta_mean = jnp.full_like(z_array, float(delta_crit)) * Omega_m_0
+        
+        return delta_mean
+
+    def _MF_T08(self, sigmas: jnp.ndarray, z: jnp.ndarray, delta_mean: jnp.ndarray) -> jnp.ndarray:
+        """
+        Tinker08 mass function following classy_sz notebook implementation.
+        
+        Parameters
+        ----------
+        sigmas : jnp.ndarray
+            RMS density fluctuations
+        z : jnp.ndarray  
+            Redshift array
+        delta_mean : jnp.ndarray
+            Mean overdensity values
+            
+        Returns
+        -------
+        jnp.ndarray
+            Tinker08 mass function values
+        """
+        # Convert delta_mean to log scale
+        delta_mean = jnp.log10(delta_mean)
+        
+        # Define parameters as JAX arrays (from Tinker08 paper)
+        delta_mean_tab = jnp.log10(jnp.array([200, 300, 400, 600, 800, 1200, 1600, 2400, 3200]))
+        A_tab = jnp.array([0.186, 0.200, 0.212, 0.218, 0.248, 0.255, 0.260, 0.260, 0.260])
+        aa_tab = jnp.array([1.47, 1.52, 1.56, 1.61, 1.87, 2.13, 2.30, 2.53, 2.66])
+        b_tab = jnp.array([2.57, 2.25, 2.05, 1.87, 1.59, 1.51, 1.46, 1.44, 1.41])
+        c_tab = jnp.array([1.19, 1.27, 1.34, 1.45, 1.58, 1.80, 1.97, 2.24, 2.44])
+
+        # Linear interpolation using jnp.interp
+        Ap = jnp.interp(delta_mean, delta_mean_tab, A_tab) * (1 + z) ** -0.14
+        a = jnp.interp(delta_mean, delta_mean_tab, aa_tab) * (1 + z) ** -0.06
+        b = jnp.interp(delta_mean, delta_mean_tab, b_tab) * (1 + z) ** -jnp.power(10, -jnp.power(0.75 / jnp.log10(jnp.power(10, delta_mean) / 75), 1.2))
+        c = jnp.interp(delta_mean, delta_mean_tab, c_tab)
+        
+        # Calculate final result
+        result = 0.5 * Ap[:, None] * (jnp.power(sigmas / b[:, None], -a[:, None]) + 1) * jnp.exp(-c[:, None] / sigmas**2)
+        
+        return result
+
+    def get_hmf_grid(self, delta: float = 500, delta_def: str = 'critical', 
+                     params_values_dict: Dict[str, Union[float, jnp.ndarray]] = None) -> tuple:
+        """
+        Get halo mass function grid following classy_sz notebook implementation.
+        
+        Parameters
+        ----------
+        delta : float, optional
+            Overdensity threshold (default: 500)
+        delta_def : str, optional  
+            Definition of overdensity: 'critical' or 'mean' (default: 'critical')
+        params_values_dict : dict, optional
+            Cosmological parameters
+            
+        Returns
+        -------
+        tuple
+            (lnx_grid, lnm_grid, dndlnm_grid) where:
+            - lnx_grid: ln(1+z) grid
+            - lnm_grid: ln(mass) grid in Msun/h
+            - dndlnm_grid: dn/dln(M) in h^3 Mpc^-3
+        """
+        try:
+            from mcfit import TophatVar
+        except ImportError:
+            raise ImportError("mcfit package required for HMF calculations. Install with: pip install mcfit")
+        
+        rparams = self.get_all_relevant_params(params_values_dict)
+        h = rparams['h']
+        
+        # Get power spectrum and k grid
+        z_init = 1.0  # Initialize with z=1 to get k grid
+        _, ks = self.get_pkl_at_z(z_init, params_values_dict)
+
+        # Define a single function for `get_pkl_at_z` calls
+        def get_pks_for_z(zp):
+            pks, _ = self.get_pkl_at_z(zp, params_values_dict=params_values_dict)
+            return pks.flatten()
+
+        # Vectorize this function over `z_grid`
+        z_grid = self.z_grid()
+        P = jax.vmap(get_pks_for_z)(z_grid).T
+
+        # Vectorize the TophatVar function over `z_grid`
+        def compute_tophat_var(pks, ks):
+            _, var_z = TophatVar(ks, lowring=True, backend='jax')(pks, extrap=True)
+            return var_z
+
+        # Apply the function to each column of P
+        var = jax.vmap(compute_tophat_var, in_axes=(1, None))(P, ks)
+
+        # Vectorize the TophatVar function for derivatives
+        def compute_tophat_dvar(pks, ks):
+            # Numerical method using gradient
+            rvar, var_z = TophatVar(ks, lowring=True, backend='jax')(pks, extrap=True)
+            dvar_z = jnp.gradient(jnp.sqrt(var_z), rvar) * 2.0 * jnp.sqrt(var_z)
+            return dvar_z
+
+        # Apply the function to each column of P
+        dvar = jax.vmap(compute_tophat_dvar, in_axes=(1, None))(P, ks)
+
+        # Step 4: Compute gradient of var with respect to R
+        # Assuming R is uniform across z_grid, use the first R from TophatVar
+        R, _ = TophatVar(ks, lowring=True, backend='jax')(P[:, 0], extrap=True)
+        R = R.flatten()  # Ensure R has shape (1000,)
+        lnr_grid = jnp.log(R)
+        lnx_grid = jnp.log(1 + z_grid)
+        
+        lnsigma_grid = 0.5 * jnp.log(var)
+        dsigma2_grid = dvar
+        
+        Rh = R * rparams['h']
+        lnm_grid = jnp.log(4 * jnp.pi * rparams['Omega0_cb'] * rparams['Rho_crit_0'] * Rh**3 / 3.)  # in h-units
+        
+        # Handle delta definition
+        if delta_def == 'critical':
+            delta_mean = self.get_delta_mean_from_delta_crit_at_z(delta, z_grid, params_values_dict=params_values_dict)
+        elif delta_def == 'mean':
+            delta_mean = jnp.full_like(z_grid, delta)
+        else:
+            raise ValueError("delta_def must be 'critical' or 'mean'")
+        
+        delta_c = (3.0/20.0) * jnp.power(12.0 * jnp.pi, 2.0/3.0)  # = 1.686470199841145
+        
+        sigmas = jnp.exp(lnsigma_grid)
+        nus = (delta_c / sigmas)**2  # Currently for book keeping
+        
+        hmf = self._MF_T08(sigmas, z_grid, delta_mean)
+        
+        lnSigma2 = 2.0 * lnsigma_grid
+        dlnsigmadlnR = dsigma2_grid / 2.0
+        dlnSigma2dlnR = 2.0 * dlnsigmadlnR * R / jnp.exp(lnSigma2)
+        dlnnudlnRh = -dlnSigma2dlnR
+        
+        # Return dn/dlogM in units of h^3 Mpc^-3
+        dndlnm_grid = 1.0/3.0 * 3.0/(4.0 * jnp.pi * Rh**3) * dlnnudlnRh * hmf
+        return lnx_grid, lnm_grid, dndlnm_grid
+
+    def get_hmf_at_z_and_m(self, z: Union[float, jnp.ndarray], m: Union[float, jnp.ndarray], 
+                           params_values_dict: Dict[str, Union[float, jnp.ndarray]] = None) -> jnp.ndarray:
+        """
+        Get halo mass function at specific redshift and mass.
+        
+        Parameters
+        ----------
+        z : float or jnp.ndarray
+            Redshift(s)
+        m : float or jnp.ndarray  
+            Mass(es) in Msun/h
+        params_values_dict : dict, optional
+            Cosmological parameters
+            
+        Returns
+        -------
+        jnp.ndarray
+            dn/dln(M) in h^3 Mpc^-3
+        """
+        try:
+            import jax.scipy as jscipy
+        except ImportError:
+            raise ImportError("jax.scipy required for interpolation")
+        
+        lnx, lnm, dndlnm = self.get_hmf_grid(delta=200, delta_def='mean', params_values_dict=params_values_dict)
+        hmf_interp = jscipy.interpolate.RegularGridInterpolator((lnx, lnm), jnp.log(dndlnm))
+        lnxp = jnp.log(1.0 + z)
+        lnmp = jnp.log(m)
+        return jnp.exp(hmf_interp((lnxp, lnmp)))
+
+    def z_grid(self) -> jnp.ndarray:
+        """
+        Return the redshift grid used by emulators (following classy_sz interface).
+        
+        Returns
+        -------
+        jnp.ndarray
+            Redshift grid from 0 to 20
+        """
+        return self.cp_z_interp
+
     
     # Alias to match classy_szfast naming convention  
     def calculate_pknl_at_z(self,
