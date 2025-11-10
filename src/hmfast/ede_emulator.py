@@ -256,6 +256,11 @@ class EDEEmulator:
         # Get z-grid from S8Z emulator  
         self.s8z_z_grid = jnp.array(self._emulators['S8Z'].modes, dtype=jnp.float64)
         
+        # Get z-grid from DAZ emulator following classy_szfast.py:271-272
+        # cp_z_interp = self.linspace(0.,self.cp_z_interp_zmax,5000)
+        self.cp_z_interp_zmax = 20.0
+        self.cp_z_interp = jnp.linspace(0.0, self.cp_z_interp_zmax, 5000, dtype=jnp.float64)
+        
         # k grid for power spectra (EDE-v2 range from classy_szfast)
         # Original modes are just indices, need to construct actual k values
         n_k = len(self._emulators['PKL'].modes)  # Get number of k points from emulator
@@ -478,6 +483,106 @@ class EDEEmulator:
         # Convert to linear scale and apply scaling factor like classy_szfast
         pknl = 10.0**pknl_log * self.pk_power_fac
         return pknl, self.k_grid
+    
+    def calculate_chi(self, **params_values_dict):
+        """
+        Calculate comoving distance (chi) following classy_szfast.py:962-1013
+        
+        This is the internal method that sets up chi_interp following the 
+        classy_szfast pattern exactly.
+        """
+        merged_params = self._merge_with_defaults(params_values_dict)
+        
+        # Get D_A predictions from emulator (classy_szfast.py:997)
+        daz_log_predictions = self._emulators['DAZ'].predictions(merged_params)
+        cp_predicted_da = 10.0**daz_log_predictions
+        
+        # For EDE-v2, insert D_A(z=0) = 0 at beginning (classy_szfast.py:998)
+        cp_predicted_da = jnp.insert(cp_predicted_da, 0, 0.0)
+        
+        # Convert D_A to chi by multiplying by (1+z) (classy_szfast.py:1007)
+        chi_values = cp_predicted_da * (1.0 + self.cp_z_interp)
+        
+        # Create interpolation function (classy_szfast.py:1005-1013)
+        def chi_interp(z_requested):
+            return jnp.interp(z_requested, self.cp_z_interp, chi_values, left=jnp.nan, right=jnp.nan)
+        
+        self.chi_interp = chi_interp
+
+    def calculate_hubble(self, **params_values_dict):
+        """
+        Calculate Hubble parameter H(z) following classy_szfast.py:915-960
+        
+        This method sets up hz_interp following the classy_szfast pattern exactly.
+        """
+        merged_params = self._merge_with_defaults(params_values_dict)
+        
+        # Get H(z) predictions from emulator (classy_szfast.py:936,948)
+        hz_log_predictions = self._emulators['HZ'].predictions(merged_params)
+        cp_predicted_hubble = 10.0**hz_log_predictions
+        
+        # Create interpolation function (classy_szfast.py:942-943, 952-960)
+        def hz_interp(z_requested):
+            return jnp.interp(z_requested, self.cp_z_interp, cp_predicted_hubble, left=jnp.nan, right=jnp.nan)
+        
+        self.hz_interp = hz_interp
+
+    def get_angular_distance_at_z(self, 
+                                 z: Union[float, jnp.ndarray], 
+                                 params_values_dict: Dict[str, Union[float, jnp.ndarray]]) -> jnp.ndarray:
+        """
+        Get angular diameter distance D_A(z) following classy_szfast.py:336
+        
+        D_A(z) = chi(z) / (1+z) where chi is the comoving distance
+        
+        Parameters
+        ----------
+        z : float or jnp.ndarray
+            Redshift(s)
+        params_values_dict : dict
+            Cosmological parameters
+            
+        Returns
+        -------
+        jnp.ndarray
+            Angular diameter distance D_A(z) in Mpc/h
+        """
+        # Calculate comoving distance interpolator
+        self.calculate_chi(**params_values_dict)
+        
+        # Return D_A = chi/(1+z) following classy_szfast.py:336
+        return self.chi_interp(z) / (1.0 + z)
+
+    def get_hubble_at_z(self, 
+                       z: Union[float, jnp.ndarray], 
+                       params_values_dict: Dict[str, Union[float, jnp.ndarray]],
+                       units: str = "1/Mpc") -> jnp.ndarray:
+        """
+        Get Hubble parameter H(z) following classy_szfast.py:1075-1079
+        
+        Parameters
+        ----------
+        z : float or jnp.ndarray
+            Redshift(s)
+        params_values_dict : dict
+            Cosmological parameters
+        units : str
+            Units for H(z): "1/Mpc" or "km/s/Mpc"
+            
+        Returns
+        -------
+        jnp.ndarray
+            Hubble parameter H(z)
+        """
+        # Calculate Hubble interpolator
+        self.calculate_hubble(**params_values_dict)
+        
+        # Unit conversion factors from classy_szfast.py:20
+        # H_units_conv_factor = {"1/Mpc": 1, "km/s/Mpc": Const.c_km_s}
+        H_units_conv_factor = {"1/Mpc": 1.0, "km/s/Mpc": 299792.458}
+        
+        # Return H(z) with unit conversion (classy_szfast.py:1077)
+        return self.hz_interp(z) * H_units_conv_factor[units]
     
     # Alias to match classy_szfast naming convention  
     def calculate_pknl_at_z(self,
