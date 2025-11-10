@@ -96,4 +96,4 @@ python convert_ede_v2.py /path/to/ede /path/to/ede_v2_numpy
 
 - **cl^TT calculation**: 7.9ms average (excellent)
 - **Parameter range tested**: fEDE 0.001→0.121, H0 65→75
-
+- **JAX-accelerated**: Fast and differentiable
