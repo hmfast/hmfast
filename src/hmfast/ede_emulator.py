@@ -79,6 +79,9 @@ class EDEEmulator:
         
         # Set up interpolation grids using actual emulator modes
         self._setup_interpolation_grids_post_load()
+        
+        # Initialize HMF grid cache to avoid recomputing
+        self._hmf_cache = {}
     
     def _get_data_path(self, provided_path: Optional[str] = None) -> str:
         """
@@ -833,6 +836,7 @@ class EDEEmulator:
         return lnx_grid, lnm_grid, dndlnm_grid
 
     def get_hmf_at_z_and_m(self, z: Union[float, jnp.ndarray], m: Union[float, jnp.ndarray], 
+                           delta: float = 500, delta_def: str = 'critical',
                            params_values_dict: Dict[str, Union[float, jnp.ndarray]] = None) -> jnp.ndarray:
         """
         Get halo mass function at specific redshift and mass.
@@ -843,6 +847,10 @@ class EDEEmulator:
             Redshift(s)
         m : float or jnp.ndarray  
             Mass(es) in Msun/h
+        delta : float, optional
+            Overdensity parameter (default: 500)
+        delta_def : str, optional
+            Overdensity definition ('critical' or 'mean', default: 'critical')
         params_values_dict : dict, optional
             Cosmological parameters
             
@@ -856,8 +864,33 @@ class EDEEmulator:
         except ImportError:
             raise ImportError("jax.scipy required for interpolation")
         
-        lnx, lnm, dndlnm = self.get_hmf_grid(delta=200, delta_def='mean', params_values_dict=params_values_dict)
-        hmf_interp = jscipy.interpolate.RegularGridInterpolator((lnx, lnm), jnp.log(dndlnm))
+        # Create cache key based on parameters that affect HMF grid
+        import hashlib
+        if params_values_dict is not None:
+            # Use key cosmological parameters that affect HMF
+            key_params = {
+                'omega_b': params_values_dict.get('omega_b', 0.02242),
+                'omega_cdm': params_values_dict.get('omega_cdm', 0.11933),
+                'H0': params_values_dict.get('H0', 67.66),
+                'ln10^{10}A_s': params_values_dict.get('ln10^{10}A_s', 3.047),
+                'n_s': params_values_dict.get('n_s', 0.9665),
+                'fEDE': params_values_dict.get('fEDE', 0.0),
+                'delta': delta,
+                'delta_def': delta_def
+            }
+            cache_key = hashlib.md5(str(sorted(key_params.items())).encode()).hexdigest()
+        else:
+            cache_key = f"default_delta{delta}_{delta_def}"
+        
+        # Check cache first
+        if cache_key in self._hmf_cache:
+            hmf_interp = self._hmf_cache[cache_key]
+        else:
+            # Compute and cache the interpolator
+            lnx, lnm, dndlnm = self.get_hmf_grid(delta=delta, delta_def=delta_def, params_values_dict=params_values_dict)
+            hmf_interp = jscipy.interpolate.RegularGridInterpolator((lnx, lnm), jnp.log(dndlnm))
+            self._hmf_cache[cache_key] = hmf_interp
+        
         lnxp = jnp.log(1.0 + z)
         lnmp = jnp.log(m)
         return jnp.exp(hmf_interp((lnxp, lnmp)))

@@ -19,7 +19,8 @@ from mcfit import Hankel
 from .ede_emulator import EDEEmulator
 from .utils import (
     me_in_eV, sigmat_cm, sigmat_over_mec2, Mpc_to_cm, 
-    get_ell_range, get_ell_binwidth, simpson, mpc_per_h_to_cm
+    get_ell_range, get_ell_binwidth, simpson, mpc_per_h_to_cm,
+    compute_rho_crit_z0, compute_r_delta, Const
 )
 
 # JAX configuration
@@ -249,7 +250,7 @@ class TSZPowerSpectrum:
         # Get r_delta using critical density at z=0
         # r_delta = (3M / (4π * δ * ρ_crit * Ω_m))^(1/3)
         # Using critical density at z=0: ρ_crit = 2.78e11 h^2 M_sun/h per (Mpc/h)^3
-        rho_crit = 2.78e11 * h**2  # M_sun/h per (Mpc/h)^3
+        rho_crit = compute_rho_crit_z0(h)  # Use proper calculation from utils
         Omega_m = rparams['Omega0_m']
         rho_mean = rho_crit * Omega_m
         
@@ -304,7 +305,7 @@ class TSZPowerSpectrum:
         
         # Approximate r_delta calculation - use same as prefactor
         delta = 500
-        rho_crit = 2.78e11 * h**2  # M_sun/h per (Mpc/h)^3
+        rho_crit = compute_rho_crit_z0(h)  # Use proper calculation from utils
         Omega_m = rparams['Omega0_m']
         rho_mean = rho_crit * Omega_m
         r_delta = ((3.0 * m) / (4.0 * jnp.pi * delta * rho_mean))**(1.0/3.0) / (B**(1.0/3.0))
@@ -373,7 +374,7 @@ class TSZPowerSpectrum:
         
         # Get HMF for all redshifts (fast)
         def get_hmf_for_z(zp):
-            return self.emulator.get_hmf_at_z_and_m(zp, m_grid, params_values_dict=params_values_dict)
+            return self.emulator.get_hmf_at_z_and_m(zp, m_grid, delta=500, delta_def='critical', params_values_dict=params_values_dict)
         
         dndlnm_mz = jax.vmap(get_hmf_for_z)(z_grid)
         # Shape: (n_z, n_m)

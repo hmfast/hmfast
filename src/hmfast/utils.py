@@ -151,6 +151,66 @@ def simpson(y, x=None, dx=1.0, axis=0):
     else:
         return jnp.trapezoid(y, dx=dx, axis=axis)
 
+def compute_rho_crit_z0(h):
+    """
+    Compute critical density at z=0 from fundamental constants.
+    
+    Parameters
+    ----------
+    h : float
+        Dimensionless Hubble parameter (H0/100)
+        
+    Returns
+    -------
+    float
+        Critical density in M_sun h^2 / (Mpc/h)^3
+    """
+    # H0 in SI units: H0 = 100 * h km/s/Mpc
+    H0_SI = 100.0 * h * 1e3 / Const._Mpc_over_m_  # Convert to 1/s
+    
+    # Critical density: rho_crit = 3 H0^2 / (8 π G)
+    rho_crit_SI = 3.0 * H0_SI**2 / (8.0 * jnp.pi * Const._G_)  # kg/m^3
+    
+    # Convert to M_sun h^2 / (Mpc/h)^3
+    # Factor of h^2 comes from: (Mpc/h)^3 -> Mpc^3 requires /h^3, M_sun/h -> M_sun requires /h
+    # Net: (kg/m^3) * (m^3/Mpc^3) * (M_sun/kg) * h^3 / h = M_sun h^2 / (Mpc/h)^3
+    rho_crit_cosmo = rho_crit_SI * (Const._Mpc_over_m_**3 / Const._M_sun_) * h**2
+    
+    return rho_crit_cosmo
+
+def compute_r_delta(m_delta, delta, z, omega_m, h):
+    """
+    Compute r_delta from mass, overdensity, redshift and cosmology.
+    
+    Parameters
+    ----------
+    m_delta : float or array
+        Halo mass in M_sun/h
+    delta : float
+        Overdensity parameter (e.g., 200, 500)
+    z : float  
+        Redshift
+    omega_m : float
+        Matter density parameter
+    h : float
+        Dimensionless Hubble parameter
+        
+    Returns
+    -------
+    float or array
+        r_delta in Mpc/h
+    """
+    # Critical density at z=0
+    rho_crit_0 = compute_rho_crit_z0(h)
+    
+    # Mean density at redshift z
+    rho_mean_z = rho_crit_0 * omega_m * (1.0 + z)**3
+    
+    # r_delta = (3 M_delta / (4π δ ρ_mean(z)))^(1/3)
+    r_delta = ((3.0 * m_delta) / (4.0 * jnp.pi * delta * rho_mean_z))**(1.0/3.0)
+    
+    return r_delta
+
 
 # Legacy cosmology utils (keeping for backward compatibility)
 # ===========================================================
