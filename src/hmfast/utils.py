@@ -34,6 +34,9 @@ sigmat_over_mec2 = sigmat_cm / me_in_eV
 # Unit conversions
 Mpc_to_cm = 3.085677581e24  # 1 Mpc in cm
 
+# Speed of light (matching classy_szfast)
+c_km_s = 299792.458  # km/s
+
 class Const:
     """
     Physical constants class matching classy_szfast structure.

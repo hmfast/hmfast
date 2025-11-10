@@ -18,7 +18,7 @@ import mcfit
 from mcfit import Hankel
 from .ede_emulator import EDEEmulator
 from .utils import (
-    me_in_eV, sigmat_cm, sigmat_over_mec2, Mpc_to_cm, 
+    me_in_eV, sigmat_cm, sigmat_over_mec2, Mpc_to_cm, c_km_s,
     get_ell_range, get_ell_binwidth, simpson, mpc_per_h_to_cm,
     compute_rho_crit_z0, compute_r_delta, Const
 )
@@ -146,7 +146,7 @@ class TSZPowerSpectrum:
         rparams = self.emulator.get_all_relevant_params(params_values_dict)
         
         # Physical constants and conversions
-        conv_fac = 299792.458  # speed of light km/s
+        conv_fac = c_km_s  # speed of light from utils
         h = rparams['h']
         
         # Hubble parameters
@@ -212,7 +212,7 @@ class TSZPowerSpectrum:
     
     def mpc_per_h_to_cm(self, mpc_per_h, h):
         """Convert Mpc/h to cm."""
-        Mpc_to_cm = 3.085677581e24  # cm per Mpc
+        # Use Mpc_to_cm from utils (already imported)
         return (mpc_per_h / h) * Mpc_to_cm
     
     def y_ell_prefactor(self, z, m, delta=500, params_values_dict=None):
@@ -239,17 +239,14 @@ class TSZPowerSpectrum:
         h = rparams['h']
         B = rparams.get('B', 1.0)
         
-        # Physical constants
-        me_in_eV = 510998.95  # electron mass in eV/c^2
-        sigmat_cm = 6.6524587321e-25  # Thomson cross section in cm^2
-        sigmat_over_mec2 = sigmat_cm / me_in_eV
+        # Physical constants from utils (already imported)
         
         # Distances and scales
         dAz = self.emulator.get_angular_distance_at_z(z, params_values_dict=params_values_dict) * h
         
         # Get r_delta using critical density at z=0
         # r_delta = (3M / (4π * δ * ρ_crit * Ω_m))^(1/3)
-        # Using critical density at z=0: ρ_crit = 2.78e11 h^2 M_sun/h per (Mpc/h)^3
+        # Use proper r_delta calculation from utils (computed from fundamental constants)
         rho_crit = compute_rho_crit_z0(h)  # Use proper calculation from utils
         Omega_m = rparams['Omega0_m']
         rho_mean = rho_crit * Omega_m
