@@ -256,8 +256,15 @@ class EDEEmulator:
         # Get z-grid from S8Z emulator  
         self.s8z_z_grid = jnp.array(self._emulators['S8Z'].modes, dtype=jnp.float64)
         
-        # k grid for power spectra (get from PKL emulator)
-        self.k_grid = jnp.array(self._emulators['PKL'].modes, dtype=jnp.float64)
+        # k grid for power spectra (EDE-v2 range from classy_szfast)
+        # Original modes are just indices, need to construct actual k values
+        n_k = len(self._emulators['PKL'].modes)  # Get number of k points from emulator
+        k_min = 5e-4  # h/Mpc, from classy_szfast EDE-v2 settings
+        k_max = 10.0  # h/Mpc, from classy_szfast EDE-v2 settings  
+        self.k_grid = jnp.geomspace(k_min, k_max, n_k, dtype=jnp.float64)
+        
+        # P(k) scaling factor for EDE-v2 (from classy_szfast line 261)
+        self.pk_power_fac = self.k_grid**(-3)  # k^(-3) factor
         
         # Maximum redshift for power spectrum grid
         self.pk_grid_zmax = 4999.0
@@ -405,25 +412,39 @@ class EDEEmulator:
         z_val = jnp.atleast_1d(z)[0] if hasattr(z, '__len__') else z
         merged_params['z_pk_save_nonclass'] = float(z_val)
         
-        # Handle extrapolation beyond training redshift
+        # Check if redshift is within training range
         if z_val > self.pk_grid_zmax:
-            # Get power spectrum at maximum redshift and scale
-            z_max = self.pk_grid_zmax
-            merged_params_zmax = merged_params.copy()
-            merged_params_zmax['z_pk_save_nonclass'] = float(z_max)
-            
-            # Get power spectrum at z_max
-            pkl_zmax = self._emulators['PKL'].predictions(merged_params_zmax)
-            
-            # Scale by growth factor: P(k,z) ~ D(z)^2
-            # In matter domination: D(z) ~ 1/(1+z)
-            scale_factor = ((1 + z_max) / (1 + z_val))**2
-            pkl = pkl_zmax * scale_factor
-        else:
-            # Direct prediction
-            pkl = self._emulators['PKL'].predictions(merged_params)
+            raise ValueError(f"Redshift z={z_val:.3f} exceeds maximum training redshift z_max={self.pk_grid_zmax:.1f}")
+        
+        # Direct prediction returns log10(P(k))
+        pkl_log = self._emulators['PKL'].predictions(merged_params)
+        # Convert to linear scale and apply scaling factor like classy_szfast
+        pkl = 10.0**pkl_log * self.pk_power_fac
         
         return pkl, self.k_grid
+    
+    # Alias to match classy_szfast naming convention
+    def calculate_pkl_at_z(self, 
+                          z_asked: Union[float, jnp.ndarray],
+                          params_values_dict: Dict[str, Union[float, jnp.ndarray]] = None) -> tuple[jnp.ndarray, jnp.ndarray]:
+        """
+        Alias for get_pkl_at_z() to match classy_szfast naming convention.
+        
+        Parameters
+        ----------
+        z_asked : float or jnp.ndarray
+            Redshift(s)
+        params_values_dict : dict, optional
+            Cosmological parameters
+            
+        Returns
+        -------
+        tuple[jnp.ndarray, jnp.ndarray]
+            Linear power spectrum and k array
+        """
+        if params_values_dict is None:
+            raise ValueError("params_values_dict is required")
+        return self.get_pkl_at_z(z_asked, params_values_dict)
     
     def get_pknl_at_z(self, 
                      z: Union[float, jnp.ndarray], 
@@ -448,16 +469,38 @@ class EDEEmulator:
         z_val = jnp.atleast_1d(z)[0] if hasattr(z, '__len__') else z
         merged_params['z_pk_save_nonclass'] = float(z_val)
         
-        # Handle extrapolation beyond training redshift
+        # Check if redshift is within training range
         if z_val > self.pk_grid_zmax:
-            # Use linear power spectrum scaled by growth factor
-            pkl, k = self.get_pkl_at_z(z, params_values_dict)
-            # For high z, nonlinear and linear should be similar
-            return pkl, k
-        else:
-            # Direct prediction
-            pknl = self._emulators['PKNL'].predictions(merged_params)
-            return pknl, self.k_grid
+            raise ValueError(f"Redshift z={z_val:.3f} exceeds maximum training redshift z_max={self.pk_grid_zmax:.1f}")
+        
+        # Direct prediction returns log10(P_nl(k))
+        pknl_log = self._emulators['PKNL'].predictions(merged_params)
+        # Convert to linear scale and apply scaling factor like classy_szfast
+        pknl = 10.0**pknl_log * self.pk_power_fac
+        return pknl, self.k_grid
+    
+    # Alias to match classy_szfast naming convention  
+    def calculate_pknl_at_z(self,
+                           z_asked: Union[float, jnp.ndarray], 
+                           params_values_dict: Dict[str, Union[float, jnp.ndarray]] = None) -> tuple[jnp.ndarray, jnp.ndarray]:
+        """
+        Alias for get_pknl_at_z() to match classy_szfast naming convention.
+        
+        Parameters
+        ----------
+        z_asked : float or jnp.ndarray
+            Redshift(s)
+        params_values_dict : dict, optional
+            Cosmological parameters
+            
+        Returns
+        -------
+        tuple[jnp.ndarray, jnp.ndarray]
+            Nonlinear power spectrum and k array
+        """
+        if params_values_dict is None:
+            raise ValueError("params_values_dict is required")
+        return self.get_pknl_at_z(z_asked, params_values_dict)
     
     def get_sigma8_at_z(self, 
                        z: Union[float, jnp.ndarray], 
