@@ -9,8 +9,8 @@ __version__ = "0.1.0"
 __author__ = "Boris"
 __email__ = "boris@example.com"
 
-from .halo_model import HaloModel
-from .emulator import HaloEmulator
+from .ede_emulator import EDEEmulator
+from .clean_nn_emulator import CleanRestoreNN, CleanRestorePCAplusNN
 from .utils import cosmology_utils
 
-__all__ = ["HaloModel", "HaloEmulator", "cosmology_utils"]
+__all__ = ["EDEEmulator", "CleanRestoreNN", "CleanRestorePCAplusNN", "cosmology_utils"]

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -25,12 +25,6 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Astronomy",
     "Topic :: Scientific/Engineering :: Physics",
 ]
-dependencies = [
-    "jax>=0.4.0",
-    "jaxlib>=0.4.0",
-    "numpy>=1.20.0",
-    "scipy>=1.7.0",
-]
 
 [project.optional-dependencies]
 dev = [
@@ -40,11 +34,7 @@ dev = [
     "isort",
     "flake8",
 ]
-docs = [
-    "sphinx",
-    "sphinx-rtd-theme",
-    "numpydoc",
-]
+
 
 [project.urls]
 Homepage = "https://github.com/class_sz_organization/hmfast"
