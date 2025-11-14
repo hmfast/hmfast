@@ -15,4 +15,4 @@ from .tracers.tsz import gnfw_pressure_profile, TSZTracer
 from .load_emulator import EmulatorLoader, EmulatorLoaderPCA
 from .ede_emulator import EDEEmulator
 
-__all__ = ["HaloModel", "EDEEmulator", "EDEEmulator"]
+__all__ = ["HaloModel", "EDEEmulator", "TSZTracer"]
