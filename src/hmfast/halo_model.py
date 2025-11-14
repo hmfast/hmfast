@@ -8,7 +8,7 @@ import jax.scipy as jscipy
 from typing import Dict, Any, Optional, Callable
 from functools import partial
 from hmfast.halo_fits import MF_T08, BF_T10
-from hmfast.utils import interpolate_tracer, trapezoid
+from hmfast.utils import interpolate_tracer#, trapezoid
 from hmfast.ede_emulator import EDEEmulator
 from mcfit import TophatVar
 jax.config.update("jax_enable_x64", True)
@@ -22,7 +22,7 @@ class HaloModel:
     with automatic differentiation capabilities.
     """
     
-    def __init__(self, emulator, params, mass_model = MF_T08, bias_model = BF_T10, Delta=500, Delta_ref=0):
+    def __init__(self, emulator, params, mass_model = MF_T08, bias_model = BF_T10):
         """
         Initialize the halo model.
         
@@ -34,11 +34,6 @@ class HaloModel:
             Mass function to use.
         bias_model : function, default BF_T10 (i.e. the halo bias function model from Tinker et al 2010)
             Bias function to use.
-        Delta : float, default 500
-            Overdensity threshold for defining halos.
-        Delta_ref : float or str, default 0
-            Reference for overdensity threshold. Can be 0 ("critical") or 1 ("mean").
-        
         """
         
 
@@ -46,8 +41,6 @@ class HaloModel:
         self.mass_model = mass_model
         self.bias_model = bias_model
         self.params = self.emulator.get_all_relevant_params(params)
-        self.Delta = Delta
-        self.Delta_ref = Delta_ref
 
         # Create TophatVar instance once
         _, dummy_k = emulator.get_pkl_at_z(1., params_values_dict=self.params)
@@ -90,7 +83,7 @@ class HaloModel:
         """
     
         params = self.params
-        h = params['h']
+        h, delta = params['h'], params['delta']
     
         # Get sigma(R, z) and radius grid
         R_grid, sigma_grid = self._compute_sigma_grid()  # shape: (n_R,), (n_R, n_z)
@@ -106,7 +99,7 @@ class HaloModel:
                              in_axes=1)(P)  # shape: (n_z, n_R)
     
         # Compute overdensity threshold and then the HMF
-        delta_mean = self.emulator.get_delta_mean_from_delta_crit_at_z(self.Delta, z_grid, params_values_dict=params)
+        delta_mean = self.emulator.get_delta_mean_from_delta_crit_at_z(delta, z_grid, params_values_dict=params)
         hmf_grid = self.mass_model(sigma_grid, z_grid, delta_mean)
     
         # Mass grid
@@ -160,13 +153,13 @@ class HaloModel:
             Halo bias
         """
 
-        
+        delta = self.params["delta"]
         sigma_interp = self._sigma_interp
         z_array = jnp.full_like(M, z) if jnp.ndim(z) == 0 else z
         points = jnp.stack([M, z_array], axis=-1)
     
         sigma_M = sigma_interp(points)
-        delta_mean = self.emulator.get_delta_mean_from_delta_crit_at_z(self.Delta, 1, params_values_dict=self.params)
+        delta_mean = self.emulator.get_delta_mean_from_delta_crit_at_z(delta, 1, params_values_dict=self.params)
             
         return self.bias_model(sigma_M, z, delta_mean)
 
@@ -245,8 +238,8 @@ class HaloModel:
         # Function to integrate a single ell slice
         def integrate_single_ell(integrand_slice):
             # integrate over m first, then over z
-            partial_m = trapezoid(integrand_slice, x=logm_grid, dx=dx_m, axis=1)  # shape (n_z,)
-            return trapezoid(partial_m, x=z_grid, dx=dx_z, axis=0)                  # scalar
+            partial_m = jnp.trapezoid(integrand_slice, x=logm_grid, dx=dx_m, axis=1)  # shape (n_z,)
+            return jnp.trapezoid(partial_m, x=z_grid, dx=dx_z, axis=0)                  # scalar
     
         # Apply vectorized integration along ell axis (axis=2)
         C_yy = jax.vmap(integrate_single_ell, in_axes=2)(integrand)       
