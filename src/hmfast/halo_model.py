@@ -159,7 +159,7 @@ class HaloModel:
 
     
 
-    def get_ell_grid(self, lmin=2.0, lmax=1.0e4, dlogell=0.05):
+    def get_ell_grid(self, params = None):
         """
         Generate ell grid with specified parameters.
         
@@ -177,6 +177,10 @@ class HaloModel:
         jnp.ndarray
             Array of multipole values
         """
+
+        lmin, lmax = params.get('ell_min', 2.0), params.get('ell_max', 1.0e4)
+        dlogell =  params.get('dlogell', 0.05)
+        
         log10_lmin = jnp.log10(lmin)
         log10_lmax = jnp.log10(lmax)
         num_points = int((log10_lmax - log10_lmin) / dlogell) + 1
@@ -191,10 +195,10 @@ class HaloModel:
         # Compute grids
         z_grid = jnp.geomspace(params['z_min'], params['z_max'], params['z_npoints'])
         m_grid = jnp.geomspace(params['M_min'], params['M_max'], params['M_npoints'])
-        ell_grid = self.get_ell_grid()
+        ell_grid = self.get_ell_grid(params = params)
 
         # Vectorize u_ell interpolation and mass function over z, and also compute dVdzdOmega
-        u_ell_grid = jax.vmap(lambda zp: interpolate_tracer(zp, m_grid, tracer, ell_grid)[1])(z_grid)
+        u_ell_squared_grid = jax.vmap(lambda zp: interpolate_tracer(zp, m_grid, tracer, ell_grid, power=2, params=params)[1])(z_grid)
         dndlnm_grid = jax.vmap(lambda zp: self.mass_function(zp, m_grid, params=params))(z_grid)
         comov_vol = self.cosmo_emulator.get_dVdzdOmega_at_z(z_grid, params=params)
 
@@ -203,7 +207,7 @@ class HaloModel:
         comov_vol_expanded = comov_vol[:, None, None]  # Shape becomes (100, 1, 1)
     
         # Perform element-wise multiplication
-        integrand = u_ell_grid**2 * dndlnm_grid_expanded * comov_vol_expanded  # Shape becomes (dim_z, dim_m, dim_ell)
+        integrand = u_ell_squared_grid * dndlnm_grid_expanded * comov_vol_expanded  # Shape becomes (dim_z, dim_m, dim_ell)
         
         logm_grid = jnp.log(m_grid)
     
@@ -224,7 +228,6 @@ class HaloModel:
 
 
 
-
         
     def get_C_ell_2h(self, tracer, params=None):
         """
@@ -233,12 +236,12 @@ class HaloModel:
         h = params["H0"] / 100
         z_grid = jnp.geomspace(params['z_min'], params['z_max'], params['z_npoints'])
         m_grid = jnp.geomspace(params['M_min'], params['M_max'], params['M_npoints'])
-        ell_grid = self.get_ell_grid()
+        ell_grid = self.get_ell_grid(params = params)
     
         # Compute mass function and bias
         dndlnm_grid = jax.vmap(lambda z: self.mass_function(z, m_grid, params=params))(z_grid)
         bias_grid = jax.vmap(lambda z: self.bias_function(z, m_grid, params=params))(z_grid)
-        u_ell_grid = jax.vmap(lambda z: interpolate_tracer(z, m_grid, tracer, ell_grid)[1])(z_grid)
+        u_ell_grid = jax.vmap(lambda z: interpolate_tracer(z, m_grid, tracer, ell_grid, power=1, params=params)[1])(z_grid)
         
         # Integrate over mass for each z and ell
         logm_grid = jnp.log(m_grid)

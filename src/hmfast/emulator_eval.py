@@ -245,7 +245,7 @@ class CosmoEmulator(BaseEmulator):
         Returns
         -------
         jnp.ndarray
-            Hubble parameter(s) in km/s/Mpc
+            Hubble parameter(s) in Mpc^(-1)
         """
         merged_params = self._merge_with_defaults(params)
         
