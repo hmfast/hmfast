@@ -10,12 +10,18 @@ from functools import partial
 jax.config.update("jax_enable_x64", True)
 
 
-def interpolate_tracer(z, m, tracer, ell_eval):
+def interpolate_tracer(z, m, tracer, ell_eval, power=1, params = None):
     """
     Interpolate u_ell values onto a uniform ell grid for multiple m values. 
     """
 
-    ells, u_ells = tracer.compute_u_ell(z, m) 
+    #ells, u_ells = tracer.compute_u_ell(z, m, params=params) 
+
+    ells, u_ells = jax.lax.cond(power == 2,
+        lambda _: tracer.compute_u_ell_squared(z, m, params=params),
+        lambda _: tracer.compute_u_ell(z, m, params=params),
+        operand=None,
+    )
 
     # Interpolator function for a single m
     def interpolate_single(ell, u_ell):

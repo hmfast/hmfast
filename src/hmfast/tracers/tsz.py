@@ -3,7 +3,7 @@ import jax.numpy as jnp
 from hmfast.halo_model import HaloModel
 from hmfast.emulator_eval import CosmoEmulator
 from functools import partial
-from hmfast.base_tracer import BaseTracer
+from hmfast.base_tracer import BaseTracer, HankelTransform
 
 
 #@jax.jit
@@ -32,7 +32,11 @@ class TSZTracer(BaseTracer):
     Fully continuous tracer: local_contribution = 0, profile_contribution = 1
     """
     def __init__(self, emulator, params):
-        super().__init__(params)
+        self.params = params
+        x_min, x_max, x_npoints = params['x_min'], params['x_max'], params['x_npoints']
+        self.x_grid = jnp.logspace(jnp.log10(x_min), jnp.log10(x_max), x_npoints)
+        self.hankel = HankelTransform(x_min=x_min, x_max=x_max, x_npoints=x_npoints, nu=0.5)
+
         self.emulator = emulator
 
     def _compute_r_and_ell(self, z, m):
@@ -45,15 +49,6 @@ class TSZTracer(BaseTracer):
         ell_delta = d_A / r_delta
         return r_delta, ell_delta
 
-
-    def get_contributions(self, z, m):
-        """
-        tSZ is a continuous tracer: local_contribution = 0, profile_contribution = 1
-        """
-        N = jnp.atleast_1d(m)
-        local_contribution = jnp.zeros_like(N)
-        profile_contribution = jnp.ones_like(N)
-        return local_contribution, profile_contribution
 
     def get_prefactor(self, z, m):
         """
@@ -75,3 +70,26 @@ class TSZTracer(BaseTracer):
             return x**0.5 * Pe * W_x
 
         return jax.vmap(single_m)(m)
+
+
+    def compute_u_ell(self, z, m, params=None):
+        """
+        Compute u_ell(M,z) using the general decomposition:
+            u_ell = prefactor * [local_contribution + profile_contribution * u_k]
+        """
+
+        hankel_integrand = self.get_hankel_integrand(self.x_grid, z, m)
+        k, u_k = self.hankel.transform(hankel_integrand)     # applies Hankel transform
+        u_k *=  jnp.sqrt(jnp.pi / (2 * k[None, :]))
+
+        
+        prefactor, scale_factor = self.get_prefactor(z, m)          # get prefactor
+        ell = k[None, :] * scale_factor[:, None] 
+        u_ell = prefactor[:, None] *  u_k
+        
+        return ell, u_ell
+
+    def compute_u_ell_squared(self, z, m, params=None): 
+        """ For tSZ, 〈|u_ell(M, z)|^2〉= u_ell^2(M, z) """
+        ell, u_ell = self.compute_u_ell(z, m, params=None)
+        return ell, u_ell**2

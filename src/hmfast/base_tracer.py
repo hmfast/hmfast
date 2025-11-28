@@ -32,47 +32,20 @@ class BaseTracer(ABC):
         """
         Initialize the radial grid and Hankel transform.
         """
-        self.params = params
-        x_min, x_max, x_npoints = params['x_min'], params['x_max'], params['x_npoints']
-        self.x_grid = jnp.logspace(jnp.log10(x_min), jnp.log10(x_max), x_npoints)
-        self.hankel = HankelTransform(x_min=x_min, x_max=x_max, x_npoints=x_npoints, nu=0.5)
+   
+    @abstractmethod
+    def compute_u_ell(self, z, m, power=1, params=None):
+        """
+        Compute u_ell(M,z). All child classes must have a version of this function implemented.
+        """
+        pass 
 
     @abstractmethod
-    def get_prefactor(self, z, m):
-        """Return tracer-specific prefactor(M,z)"""
-        pass
-
-    @abstractmethod
-    def get_contributions(self, z, m):
+    def compute_u_ell_squared(self, z, m, params=None):
         """
-        Return (local_contribution, profile_contribution) arrays for each halo.
-        - local_contribution: delta-function / pointlike part (typically 0 for continuous tracers)
-        - profile_contribution: profile-weighted / extended part (typically 1 for continuous tracers)
+        Compute u_ell^2(M,z). All child classes must have a version of this function implemented.
+        Note that for many tracers, we cannot simply take u_ell^2, 
+        but rather we require its second moment 〈|u_ell(M, z)|^2〉.
         """
         pass
-
-    @abstractmethod
-    def get_hankel_integrand(self, x, z, m):
-        """
-        Return the radial profile (integrand for Hankel transform) evaluated on self.x_grid.
-        Shape: (N_m, N_r)
-        """
-        pass
-
-    def compute_u_ell(self, z, m):
-        """
-        Compute u_ell(M,z) using the general decomposition:
-            u_ell = prefactor * [local_contribution + profile_contribution * u_k]
-        """
-
-        hankel_integrand = self.get_hankel_integrand(self.x_grid, z, m)
-        k, u_k = self.hankel.transform(hankel_integrand)     # applies Hankel transform
-        u_k *=  jnp.sqrt(jnp.pi / (2 * k[None, :]))
-
-        
-        local, profile = self.get_contributions(z, m)               # get contributions
-        prefactor, scale_factor = self.get_prefactor(z, m)          # get prefactor
-        ell = k[None, :] * scale_factor[:, None] 
-        u_ell = prefactor[:, None] * (local[:, None] + profile[:, None] * u_k)
-        
-        return ell, u_ell
+  

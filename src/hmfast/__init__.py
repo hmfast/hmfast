@@ -11,8 +11,10 @@ __email__ = "pj407@cam.ac.uk"
 
 from .halo_model import HaloModel
 from .utils import interpolate_tracer
-from .tracers.tsz import gnfw_pressure_profile, TSZTracer
 from .emulator_load import EmulatorLoader, EmulatorLoaderPCA
 from .emulator_eval import CosmoEmulator, PkEmulator
+from .tracers.tsz import gnfw_pressure_profile, TSZTracer
+from .tracers.galaxy_hod import GalaxyHODTracer
 
-__all__ = ["HaloModel", "EDEEmulator", "TSZTracer"]
+
+__all__ = ["HaloModel", "EDEEmulator", "TSZTracer", "GalaxyHODTracer"]
