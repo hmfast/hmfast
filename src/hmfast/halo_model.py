@@ -21,7 +21,7 @@ class HaloModel:
     with automatic differentiation capabilities.
     """
     
-    def __init__(self, cosmo_emulator, pk_emulator, params, mass_model = MF_T08, bias_model = BF_T10):
+    def __init__(self, emulator, params, mass_model = MF_T08, bias_model = BF_T10):
         """
         Initialize the halo model.
         
@@ -36,13 +36,14 @@ class HaloModel:
         """
         
 
-        self.cosmo_emulator = cosmo_emulator
-        self.pk_emulator = pk_emulator
+        self.emulator = emulator
+        self.cosmo_emulator = emulator.cosmo_emulator
+        self.pk_emulator = emulator.pk_emulator
         self.mass_model = mass_model
         self.bias_model = bias_model
 
         # Create TophatVar instance once
-        _, dummy_k = pk_emulator.get_pk_at_z(1., params=params, linear=True)
+        _, dummy_k = self.pk_emulator.get_pk_at_z(1., params=params, linear=True)
         self._tophat_instance = partial(TophatVar(dummy_k, lowring=True, backend='jax'), extrap=True)
         self._tophat_instance_dvar = partial(TophatVar(dummy_k, lowring=True, backend='jax', deriv=1))
         
@@ -56,8 +57,8 @@ class HaloModel:
         """
 
         z_grid = self.cosmo_emulator.z_grid()
-        rparams = self.cosmo_emulator.get_all_relevant_params(params)   # Merge with defaults using get_all_relevant_params()
-        h = rparams["h"]
+        cparams = self.cosmo_emulator.get_all_cosmo_params(params)   # Merge with defaults using get_all_cosmo_params()
+        h = cparams["h"]
         
         # Power spectra for all redshifts
         P = jax.vmap(lambda zp: self.pk_emulator.get_pk_at_z(zp, params=params, linear=True)[0].flatten())(z_grid).T
@@ -67,7 +68,7 @@ class HaloModel:
         sigma_grid = jnp.sqrt(var)
 
          # Mass grid
-        rho_crit_0 = rparams["Rho_crit_0"] / h**2
+        rho_crit_0 = cparams["Rho_crit_0"] / h**2
         omega0_cb = (params['omega_cdm'] + params['omega_b']) / h**2
         M_grid = 4.0 * jnp.pi / 3.0 * omega0_cb * rho_crit_0 * (R_grid**3) * h**3
 
