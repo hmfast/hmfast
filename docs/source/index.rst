@@ -26,7 +26,8 @@ Key features include:
    :caption: Contents:
 
    installation
-   usage
+   emulator
+   c_ell
 
 
 Questions & Feedback
