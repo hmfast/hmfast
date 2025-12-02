@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 from hmfast.halo_model import HaloModel
-from hmfast.emulator_eval import CosmoEmulator
+from hmfast.emulator_eval import Emulator
 from functools import partial
 from hmfast.base_tracer import BaseTracer, HankelTransform
 
@@ -14,7 +14,7 @@ class TSZTracer(BaseTracer):
     def __init__(self, emulator, x_grid=jnp.logspace(jnp.log10(1e-4), jnp.log10(20.0), 512), params=None):
         self.x_grid = x_grid
         self.hankel = HankelTransform(x_grid, nu=0.5)
-        self.emulator = emulator
+        self.emulator = emulator.cosmo_emulator
 
     def gnfw_pressure_profile(self, z, m, params = None):
         """

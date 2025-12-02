@@ -1,12 +1,13 @@
 Usage
 =====
 
+
 Computing angular power spectra
 -------------
 
 Once you have successfully installed the package and relevant files such as emulators, you are ready to begin using the code. 
 
-First, begin by setting your input parameters. A list of current hmfast parameters can be found below. 
+First, begin by setting your input parameters. A list of current `hmfast` parameters can be found below. 
 
 
 .. code-block:: python
@@ -61,20 +62,19 @@ We will include an example for the tSZ power spectrum and galaxy HOD.
 .. code-block:: python
 
     # Load emulators from your data file
-    cosmo_emulator = hmfast.emulator_eval.CosmoEmulator("path/to/hmfast_data/ede")
-    pk_emulator = hmfast.emulator_eval.PkEmulator("path/to/hmfast_data/ede")
-
+    emulator_path = "your/path/to/hmfast_data"
+    emulator = hmfast.emulator_eval.Emulator(emulator_path, cosmo_model=0)
+    
     # Define your halo model, which depends on your emulators and parameters
-    halo_model = hmfast.halo_model.HaloModel(cosmo_emulator, pk_emulator, params=params_hmfast)
-
+    halo_model = hmfast.halo_model.HaloModel(emulator, params=params_hmfast)
+    
     # Define your tracers. These tracers evaluate the profile over a dimensionless radial grid x = r / r_scale (e.g. r500 or r_s)
     # You may either pass a custom x_grid, or you may omit the x_grid argument which will fall back to defaults. 
     x_grid_tsz = jnp.logspace(jnp.log10(1e-4), jnp.log10(20.0), 512)
     x_grid_hod = jnp.logspace(jnp.log10(1e-5), jnp.log10(50.0), 512)
-    tsz_tracer = hmfast.tracers.tsz.TSZTracer(cosmo_emulator, x_grid=x_grid_tsz, params=params_hmfast)
-    galaxy_hod_tracer = hmfast.tracers.galaxy_hod.GalaxyHODTracer(cosmo_emulator, halo_model, x_grid=x_grid_hod, params=params_hmfast)
+    tsz_tracer = hmfast.tracers.tsz.TSZTracer(emulator, x_grid=x_grid_tsz, params=params_hmfast)
+    galaxy_hod_tracer = hmfast.tracers.galaxy_hod.GalaxyHODTracer(emulator, halo_model, x_grid=x_grid_hod, params=params_hmfast)
 
-    
 
 
 Now, you're ready to compute the angular power spectrum. Let's begin with tSZ.
@@ -90,19 +90,21 @@ Now, you're ready to compute the angular power spectrum. Let's begin with tSZ.
     
     D_ell_yy_1h = ell_grid_tsz*(ell_grid_tsz+1)*C_ell_yy_1h/(2*jnp.pi)*1e12
     D_ell_yy_2h = ell_grid_tsz*(ell_grid_tsz+1)*C_ell_yy_2h/(2*jnp.pi)*1e12
-    
+     
     label_size = 17
     title_size = 18
     legend_size = 13
     handle_length = 1.5
-    plt.loglog(ell_grid, D_ell_yy_1h, lw=2, label='1-halo term')
-    plt.loglog(ell_grid, D_ell_yy_2h, lw=2, label='2-halo term')
+    plt.loglog(ell_grid_tsz, D_ell_yy_1h, lw=2, label='1-halo term')
+    plt.loglog(ell_grid_tsz, D_ell_yy_2h, lw=2, label='2-halo term')
     plt.grid(which='both', linestyle='--', alpha=0.5)
     plt.minorticks_on()
     plt.legend(fontsize=11,ncol=1,frameon=False)
     plt.xlabel(r"$\ell$ ",size=title_size)
     plt.ylabel(r"$10^{12} D_\ell$ ",size=title_size)
     plt.show()
+
+
 
 .. image:: _static/C_ell_yy.png
    :width: 75%
@@ -125,14 +127,15 @@ Let's now also plot angular power spectrum for the galaxy HOD tracer.
     title_size = 18
     legend_size = 13
     handle_length = 1.5
-    plt.loglog(ell_grid, C_ell_gg_1h, lw=2, label='1-halo term')
-    plt.loglog(ell_grid, C_ell_gg_2h, lw=2, label='2-halo term')
+    plt.loglog(ell_grid_hod, C_ell_gg_1h, lw=2, label='1-halo term')
+    plt.loglog(ell_grid_hod, C_ell_gg_2h, lw=2, label='2-halo term')
     plt.grid(which='both', linestyle='--', alpha=0.5)
     plt.minorticks_on()
     plt.legend(fontsize=11,ncol=1,frameon=False)
     plt.xlabel(r"$\ell$ ",size=title_size)
     plt.ylabel(r"$C_\ell$ ",size=title_size)
     plt.show()
+
 
 
 .. image:: _static/C_ell_gg.png

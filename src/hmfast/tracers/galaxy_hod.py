@@ -9,6 +9,7 @@ import numpy as np
 _eps = 1e-30
 
 jax.config.update("jax_enable_x64", True)
+
 try:
     dndz_data = jnp.array(np.loadtxt("../../data/hmfast_data/normalised_dndz_cosmos_0.txt"))
 except: 
@@ -38,7 +39,7 @@ class GalaxyHODTracer(BaseTracer):
        
         self.hankel = HankelTransform(x_grid, nu=0.5)
         self.r_grid = x_grid
-        self.emulator = emulator # cosmology emulator
+        self.emulator = emulator.cosmo_emulator # cosmology emulator
         self.halo_model = halo_model
         
 

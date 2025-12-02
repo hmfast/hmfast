@@ -1,10 +1,3 @@
-"""
-EDE-v2 cosmological emulator for hmfast.
-
-This module provides fast JAX-compatible emulated cosmological calculations
-specifically for the EDE-v2 (Early Dark Energy version 2) model.
-"""
-
 import os
 import jax
 import jax.numpy as jnp
@@ -12,18 +5,79 @@ from typing import Dict, Any, Optional, Union
 from functools import partial
 from .emulator_load import EmulatorLoader, EmulatorLoaderPCA 
 
-ede_version = "v1" # hard coded for now but should become a free parameter in future versions
-
 # Enable 64-bit precision
 jax.config.update("jax_enable_x64", True)
 
+_COSMO_MODEL_SUFFIX_MAP = {
+        0: "v1",            # lcdm
+        1: "mnu_v1",        # mnu
+        2: "neff_v1",       # neff
+        3: "w_v1",          # wcdm
+        4: "v1",            # ede-v1
+        5: "v1",            # mnu-3states 
+        6: "v2",            # ede-v2
+    }
 
-class BaseEmulator:
-    """ 
-    A parent emulator class which contains the general functions that are needed across all emulator types. 
-    This class will have children (e.g. growth-and-distances, PK, derived-parameters, TTTEEE, PP) that will inherit its general functionality.
+_COSMO_MODEL_SUBDIR_MAP = {
+        0: "lcdm",          # lcdm
+        1: "mnu",           # mnu
+        2: "neff",          # neff
+        3: "wcdm",          # wcdm
+        4: "ede",           # ede-v1
+        5: "mnu-3states",   # mnu-3states 
+        6: "ede",           # ede-v2
+    }
+
+
+
+
+class Emulator:
     """
-    
+    Container for all emulator types for a given cosmology.
+    Lazily loads individual emulators (Cosmo, Pk, etc.) on demand.
+    """
+
+    def __init__(self, data_path: str, cosmo_model: int = 0):
+        self.data_path = data_path
+        self.cosmo_model = cosmo_model
+
+        # Map cosmo_model_idx → suffix
+        self.cosmo_model_suffix = (_COSMO_MODEL_SUFFIX_MAP.get(cosmo_model))
+
+        # Lazy-loaded emulator instances
+        self._cosmo_emulator = None
+        self._pk_emulator = None
+        # Future: self._ttteee_emulator = None, etc.
+
+    def _load_emulators(self, subfolder: str, emulator_dict: Dict[str, str]):
+        if not os.path.exists(self.emulator_path):
+            raise FileNotFoundError(f"Emulator directory not found: {self.emulator_path}")
+        
+        self._emulators = {}
+        for key, filename in emulator_dict.items():
+            path = os.path.join(self.emulator_path, subfolder, filename)
+            self._emulators[key] = EmulatorLoader(path)
+        
+        print(f"✓ Successfully loaded {len(self._emulators)} emulators from {self.emulator_path}")
+
+    @property
+    def cosmo_emulator(self):
+        if self._cosmo_emulator is None:
+            self._cosmo_emulator = CosmoEmulator(
+                data_path=self.data_path,
+                cosmo_model=self.cosmo_model
+            )
+        return self._cosmo_emulator
+
+    @property
+    def pk_emulator(self):
+        if self._pk_emulator is None:
+            self._pk_emulator = PkEmulator(
+                data_path=self.data_path,
+                cosmo_model=self.cosmo_model
+            )
+        return self._pk_emulator
+
     @staticmethod
     def get_default_params():
         default_params = {
@@ -41,26 +95,12 @@ class BaseEmulator:
             'N_ncdm': 1,
             'deg_ncdm': 3,
             'm_ncdm': 0.02,
-            'T_cmb': 2.7255
+            'T_cmb': 2.7255,
+            'w0_fld': -0.95,  
+            
         }
 
         return default_params
-
-   
-    def __init__(self, params=None):
-        self.params = self._merge_with_defaults(params)
-        
-
-    def _load_emulators(self, subfolder: str, emulator_dict: Dict[str, str]):
-        if not os.path.exists(self.emulator_path):
-            raise FileNotFoundError(f"Emulator directory not found: {self.emulator_path}")
-        
-        self._emulators = {}
-        for key, filename in emulator_dict.items():
-            path = os.path.join(self.emulator_path, subfolder, filename)
-            self._emulators[key] = EmulatorLoader(path)
-        
-        print(f"✓ Successfully loaded {len(self._emulators)} emulators from {self.emulator_path}")
 
     def _merge_with_defaults(self, params):
         merged = self.get_default_params().copy()
@@ -68,87 +108,8 @@ class BaseEmulator:
             merged.update(params)
         return merged
 
-    def get_all_relevant_params(self, params: Dict[str, Union[float, jnp.ndarray]] = None) -> Dict[str, float]:
-        """
-        Get all relevant cosmological parameters.
-                
-        Parameters
-        ----------
-        params : dict, optional
-            Input cosmological parameters
-            
-        Returns
-        -------
-        dict
-            Dictionary with all derived cosmological parameters
-        """
-        if params is None:
-            params = {}
-        
-        p = self._merge_with_defaults(params)
-        
-        # Derive additional parameters following classy_szfast.py:308-320
-        p['h'] = p['H0'] / 100.0
-        p['Omega_b'] = p['omega_b'] / p['h']**2
-        p['Omega_cdm'] = p['omega_cdm'] / p['h']**2
-        
-        # Radiation density (following classy_szfast calculation)
-        sigma_B = 5.6704004737209545e-08  # Stefan-Boltzmann constant
-        p['Omega0_g'] = (4.0 * sigma_B / 2.99792458e10 * (p['T_cmb']**4)) / (3.0 * 2.99792458e10**2 * 1.0e10 * p['h']**2 / 8.262056120185e-10 / 8.0 / jnp.pi / 6.67430e-11)
-        p['Omega0_ur'] = p['N_ur'] * 7.0/8.0 * (4.0/11.0)**(4.0/3.0) * p['Omega0_g']
-        p['Omega0_ncdm'] = p['deg_ncdm'] * p['m_ncdm'] / (93.14 * p['h']**2)
-        p['Omega_Lambda'] = 1.0 - p['Omega0_g'] - p['Omega_b'] - p['Omega_cdm'] - p['Omega0_ncdm'] - p['Omega0_ur']
-        p['Omega0_m'] = p['Omega_cdm'] + p['Omega_b'] + p['Omega0_ncdm']
-        p['Omega0_r'] = p['Omega0_ur'] + p['Omega0_g']
-        p['Omega0_m_nonu'] = p['Omega0_m'] - p['Omega0_ncdm']
-        p['Omega0_cb'] = p['Omega0_m_nonu']
-        
-        # Critical density (corrected to match standard cosmological value)
-        # Using standard value: ρ_crit = 2.78e11 h^2 Msun/h per (Mpc/h)^3
-        p['Rho_crit_0'] = 2.77528234822e11 * p['h']**2  
-        
-        return p
 
-    def validate_parameters(self, params_dict: Dict[str, Union[float, jnp.ndarray]]) -> bool:
-        """
-        Validate that parameters are within emulator training ranges.
-        
-        Parameters
-        ----------
-        params_dict : dict
-            Parameters to validate
-            
-        Returns
-        -------
-        bool
-            True if parameters are valid
-        """
-        # Define valid ranges for EDE-v2 parameters
-        valid_ranges = {
-            'fEDE': (0.0, 0.15),
-            'H0': (50.0, 90.0),
-            'omega_b': (0.015, 0.035),
-            'omega_cdm': (0.08, 0.2),
-            'ln10^{10}A_s': (2.5, 3.5),
-            'n_s': (0.85, 1.15),
-            'tau_reio': (0.02, 0.15),
-            'log10z_c': (3.0, 4.5),
-            'thetai_scf': (1.0, 5.0),
-        }
-        
-        for param, value in params_dict.items():
-            if param in valid_ranges:
-                min_val, max_val = valid_ranges[param]
-                val = float(value)
-                if not (min_val <= val <= max_val):
-                    return False
-        
-        return True
-    
-        
-   
-
-class CosmoEmulator(BaseEmulator):
+class CosmoEmulator(Emulator):
     """
     Cosmological emulator with JAX compatibility.
 
@@ -157,7 +118,7 @@ class CosmoEmulator(BaseEmulator):
     """
     
     
-    def __init__(self, data_path: Optional[str] = None):
+    def __init__(self, data_path: Optional[str] = None, cosmo_model=0):
         """
         Initialize the cosmology emulator.
         
@@ -168,10 +129,14 @@ class CosmoEmulator(BaseEmulator):
         """
 
         # Emulator metadata
-        EMULATOR_DICT = {'DAZ': f'DAZ_{ede_version}', 'HZ': f'HZ_{ede_version}', 'S8Z': f'S8Z_{ede_version}'}
+        self.cosmo_model = cosmo_model
+        cosmo_model_suffix = _COSMO_MODEL_SUFFIX_MAP[cosmo_model]
+        cosmo_model_subdir = _COSMO_MODEL_SUBDIR_MAP[cosmo_model]
+        
+        EMULATOR_DICT = {'DAZ': f'DAZ_{cosmo_model_suffix}', 'HZ': f'HZ_{cosmo_model_suffix}', 'S8Z': f'S8Z_{cosmo_model_suffix}'}
    
         # Get data path using same logic as classy_szfast
-        self.emulator_path = data_path
+        self.emulator_path = os.path.join(data_path, cosmo_model_subdir)
         
         # Initialize emulator storage
         self._emulators = {}
@@ -226,6 +191,48 @@ class CosmoEmulator(BaseEmulator):
         if jnp.ndim(z_requested) == 0:
             return result[0]
         return result
+
+    def get_all_cosmo_params(self, params: Dict[str, Union[float, jnp.ndarray]] = None) -> Dict[str, float]:
+        """
+        Get all relevant cosmological parameters.
+                
+        Parameters
+        ----------
+        params : dict, optional
+            Input cosmological parameters
+            
+        Returns
+        -------
+        dict
+            Dictionary with all derived cosmological parameters
+        """
+        if params is None:
+            params = {}
+        
+        p = self._merge_with_defaults(params)
+        
+        # Derive additional parameters following classy_szfast.py:308-320
+        p['h'] = p['H0'] / 100.0
+        p['Omega_b'] = p['omega_b'] / p['h']**2
+        p['Omega_cdm'] = p['omega_cdm'] / p['h']**2
+        
+        # Radiation density (following classy_szfast calculation)
+        sigma_B = 5.6704004737209545e-08  # Stefan-Boltzmann constant
+        p['Omega0_g'] = (4.0 * sigma_B / 2.99792458e10 * (p['T_cmb']**4)) / (3.0 * 2.99792458e10**2 * 1.0e10 * p['h']**2 / 8.262056120185e-10 / 8.0 / jnp.pi / 6.67430e-11)
+        p['Omega0_ur'] = p['N_ur'] * 7.0/8.0 * (4.0/11.0)**(4.0/3.0) * p['Omega0_g']
+        p['Omega0_ncdm'] = p['deg_ncdm'] * p['m_ncdm'] / (93.14 * p['h']**2)
+        p['Omega_Lambda'] = 1.0 - p['Omega0_g'] - p['Omega_b'] - p['Omega_cdm'] - p['Omega0_ncdm'] - p['Omega0_ur']
+        p['Omega0_m'] = p['Omega_cdm'] + p['Omega_b'] + p['Omega0_ncdm']
+        p['Omega0_r'] = p['Omega0_ur'] + p['Omega0_g']
+        p['Omega0_m_nonu'] = p['Omega0_m'] - p['Omega0_ncdm']
+        p['Omega0_cb'] = p['Omega0_m_nonu']
+        
+        # Critical density (corrected to match standard cosmological value)
+        # Using standard value: ρ_crit = 2.78e11 h^2 Msun/h per (Mpc/h)^3
+        p['Rho_crit_0'] = 2.77528234822e11 * p['h']**2  
+        
+        return p
+
         
     
     def get_hubble_at_z(self, 
@@ -279,7 +286,7 @@ class CosmoEmulator(BaseEmulator):
         da_predictions = self._emulators['DAZ'].predictions(merged_params)
 
         # If we're dealing with EDE-v2, we need to convert from log and add an extra element to the array due to size differences in the emulators
-        if ede_version == "v2":
+        if self.cosmo_model == 6:
             da_predictions = 10.0**da_predictions  
             da_predictions = jnp.insert(da_predictions, 0, 0.0)
         
@@ -350,7 +357,7 @@ class CosmoEmulator(BaseEmulator):
         
         For Δ_crit = 200, we typically get Δ_mean ≈ 200 * Ω_m(z) / Ω_m(0)
         """
-        params = self.get_all_relevant_params(params)
+        params = self.get_all_cosmo_params(params)
                 
         om0, om0_nonu, or0, ol0 = params['Omega0_m'], params['Omega0_m_nonu'], params['Omega0_r'], params['Omega_Lambda']
         Omega_m_z = om0_nonu * (1. + z)**3. / (om0 * (1. + z)**3. + ol0 + or0 * (1. + z)**4.) # omega_matter without neutrinos
@@ -399,8 +406,8 @@ class CosmoEmulator(BaseEmulator):
         float
             dV / dz / dOmega in (Mpc/h)^3 / sr
         """
-        rparams = self.get_all_relevant_params(params)
-        h = rparams["h"]
+        cparams = self.get_all_cosmo_params(params)
+        h = cparams["h"]
         dAz = self.get_angular_distance_at_z(z, params=params) * h
         Hz = self.get_hubble_at_z(z, params=params) / h  # in Mpc^(-1) h
 
@@ -420,7 +427,7 @@ class CosmoEmulator(BaseEmulator):
    
 
 
-class PkEmulator(BaseEmulator):
+class PkEmulator(Emulator):
     """
     Cosmological emulator with JAX compatibility.
     
@@ -429,7 +436,7 @@ class PkEmulator(BaseEmulator):
     """
      
     
-    def __init__(self, data_path: Optional[str] = None):
+    def __init__(self, data_path: Optional[str] = None, cosmo_model=0):
         """
         Initialize the P(k) emulator.
         
@@ -438,12 +445,20 @@ class PkEmulator(BaseEmulator):
         data_path : str, optional
             Path to emulator data directory. If None, uses environment variable.
         """
+
         # Emulator metadata
-        EMULATOR_DICT = {'PKNL': f'PKNL_{ede_version}', 'PKL': f'PKL_{ede_version}'}
+        self.cosmo_model = cosmo_model
+        cosmo_model_suffix = _COSMO_MODEL_SUFFIX_MAP[cosmo_model]
+        cosmo_model_subdir = _COSMO_MODEL_SUBDIR_MAP[cosmo_model]
         
-        # Get data path 
-        self.emulator_path = data_path
+        EMULATOR_DICT = {'DAZ': f'DAZ_{cosmo_model_suffix}', 'HZ': f'HZ_{cosmo_model_suffix}', 'S8Z': f'S8Z_{cosmo_model_suffix}'}
+   
+        # Get data path using same logic as classy_szfast
+        self.emulator_path = os.path.join(data_path, cosmo_model_subdir)
         
+        # Emulator metadata
+        EMULATOR_DICT = {'PKNL': f'PKNL_{cosmo_model_suffix}', 'PKL': f'PKL_{cosmo_model_suffix}'}
+                
         # Initialize emulator storage
         self._emulators = {}
         self._load_emulators("PK", EMULATOR_DICT)
@@ -455,19 +470,19 @@ class PkEmulator(BaseEmulator):
 
     def _setup_interpolation_grids_post_load(self):
 
-        is_v2 = (ede_version == "v2")
+        is_ede_v2 = (self.cosmo_model == 6)
 
-        self.cp_ndspl_k = 1 if is_v2 else 10
-        self.cp_nk      = 1000 if is_v2 else 5000
+        self.cp_ndspl_k = 1 if is_ede_v2 else 10
+        self.cp_nk      = 1000 if is_ede_v2 else 5000
        
         # Original modes are just indices, need to construct actual k values
         n_k = len(self._emulators['PKL'].modes)  # Get number of k points from emulator
-        k_min = 5e-4 if is_v2 else 1e-4
-        k_max = 10.0 if is_v2 else 50.0       
+        k_min = 5e-4 if is_ede_v2 else 1e-4
+        k_max = 10.0 if is_ede_v2 else 50.0       
         self.k_grid = jnp.geomspace(k_min, k_max, n_k, dtype=jnp.float64)
         
         # P(k) scaling factor 
-        if is_v2:
+        if is_ede_v2:
             self.pk_power_fac = self.k_grid**(-3)  # k^(-_interpolate_z_dependent3) factor
         else:
             ls = jnp.arange(2,self.cp_nk+2)[::self.cp_ndspl_k] # jan 10 ndspl
