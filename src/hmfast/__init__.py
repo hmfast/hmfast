@@ -12,8 +12,8 @@ __email__ = "pj407@cam.ac.uk"
 from .halo_model import HaloModel
 from .emulator_load import EmulatorLoader, EmulatorLoaderPCA
 from .emulator_eval import CosmoEmulator, PkEmulator
-from .tracers.tsz import gnfw_pressure_profile, TSZTracer
+from .hmfast_frontend import HMFast
+from .tracers.tsz import TSZTracer
 from .tracers.galaxy_hod import GalaxyHODTracer
-
 
 __all__ = ["HaloModel", "CosmoEmulator", "PkEmulator", "TSZTracer", "GalaxyHODTracer"]

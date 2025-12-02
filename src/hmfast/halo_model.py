@@ -40,15 +40,12 @@ class HaloModel:
         self.pk_emulator = pk_emulator
         self.mass_model = mass_model
         self.bias_model = bias_model
-        self.params = params 
-        self._cache_params = None
 
         # Create TophatVar instance once
         _, dummy_k = pk_emulator.get_pk_at_z(1., params=params, linear=True)
         self._tophat_instance = partial(TophatVar(dummy_k, lowring=True, backend='jax'), extrap=True)
         self._tophat_instance_dvar = partial(TophatVar(dummy_k, lowring=True, backend='jax', deriv=1))
-        self.z_grid = self.cosmo_emulator.z_grid()
-    
+        
     
     def _compute_sigma_grid(self, params = None):
         """
@@ -105,8 +102,9 @@ class HaloModel:
         
         return dndlnm_grid
         
+        
     @partial(jax.jit, static_argnums=(0,))
-    def mass_function(self, z: float, M: float, params = None) -> jnp.ndarray:
+    def get_hmf(self, z: float, M: float, params = None) -> jnp.ndarray:
         """
         Compute the halo mass function.
         
@@ -128,7 +126,7 @@ class HaloModel:
         return hmf
     
     @partial(jax.jit, static_argnums=(0,))
-    def bias_function(self, z: float, M: float, params = None) -> jnp.ndarray:
+    def get_hbf(self, z: float, M: float, params = None) -> jnp.ndarray:
         """
         Compute the halo bias function.
         
@@ -156,13 +154,12 @@ class HaloModel:
         return self.bias_model(sigma_M, z, delta_mean)
 
 
-    
-    def interpolate_tracer(self, z, m, tracer, ell_eval, moment=1, params = None):
+    def interpolate_tracer(self, tracer, z, m, ell_eval, moment=1, params = None):
         """
         Interpolate u_ell values onto a uniform ell grid for multiple m values. 
         """
     
-        ells, u_ells = tracer.compute_u_ell(z, m, moment=moment, params=params)
+        ells, u_ells = tracer.get_u_ell(z, m, moment=moment, params=params)
             
         # Interpolator function for a single m
         def interpolate_single(ell, u_ell):
@@ -175,34 +172,16 @@ class HaloModel:
         return ell_eval, u_ell_eval
 
 
-    def get_ell_grid(self, params = None):
-        """
-        Generate ell grid with specified parameters.
-        """
-
-        lmin, lmax = params.get('ell_min', 2.0), params.get('ell_max', 1.0e4)
-        dlogell =  params.get('dlogell', 0.05)
-        
-        log10_lmin = jnp.log10(lmin)
-        log10_lmax = jnp.log10(lmax)
-        num_points = int((log10_lmax - log10_lmin) / dlogell) + 1
-        return jnp.logspace(log10_lmin, log10_lmax, num=num_points)
-
-    #@partial(jax.jit, static_argnums=(0, 1))
-    def get_C_ell_1h(self, tracer, params = None):
+    @partial(jax.jit, static_argnums=(0, 1))
+    def get_C_ell_1h(self, tracer, z, m, ell, params = None):
         """
         Compute the 1-halo term for C_ell.
         """
-        
-        # Compute grids
-        z_grid = jnp.geomspace(params['z_min'], params['z_max'], params['z_npoints'])
-        m_grid = jnp.geomspace(params['M_min'], params['M_max'], params['M_npoints'])
-        ell_grid = self.get_ell_grid(params = params)
-
+               
         # Vectorize u_ell interpolation and mass function over z, and also compute dVdzdOmega
-        u_ell_squared_grid = jax.vmap(lambda zp: self.interpolate_tracer(zp, m_grid, tracer, ell_grid, moment=2, params=params)[1])(z_grid)
-        dndlnm_grid = jax.vmap(lambda zp: self.mass_function(zp, m_grid, params=params))(z_grid)
-        comov_vol = self.cosmo_emulator.get_dVdzdOmega_at_z(z_grid, params=params)
+        u_ell_squared_grid = jax.vmap(lambda zp: self.interpolate_tracer(tracer, zp, m, ell, moment=2, params=params)[1])(z)
+        dndlnm_grid = jax.vmap(lambda zp: self.get_hmf(zp, m, params=params))(z)
+        comov_vol = self.cosmo_emulator.get_dVdzdOmega_at_z(z, params=params)
 
         # Expand grids to align with the shape of `result`
         dndlnm_grid_expanded = dndlnm_grid[:, :, None]  # Shape becomes (100, 100, 1)
@@ -211,40 +190,37 @@ class HaloModel:
         # Perform element-wise multiplication
         integrand = u_ell_squared_grid * dndlnm_grid_expanded * comov_vol_expanded  # Shape becomes (dim_z, dim_m, dim_ell)
         
-        logm_grid = jnp.log(m_grid)
+        logm_grid = jnp.log(m)
     
         # Calculate uniform spacings
         dx_m = logm_grid[1] - logm_grid[0]
-        dx_z = z_grid[1] - z_grid[0]
+        dx_z = z[1] - z[0]
     
         # Function to integrate a single ell slice
         def integrate_single_ell(integrand_slice):
             # integrate over m first, then over z
             partial_m = jnp.trapezoid(integrand_slice, x=logm_grid, dx=dx_m, axis=1)  # shape (n_z,)
-            return jnp.trapezoid(partial_m, x=z_grid, dx=dx_z, axis=0)                  # scalar
+            return jnp.trapezoid(partial_m, x=z, dx=dx_z, axis=0)                  # scalar
     
         # Apply vectorized integration along ell axis (axis=2)
-        C_yy = jax.vmap(integrate_single_ell, in_axes=2)(integrand)       
+        C_ell_1h = jax.vmap(integrate_single_ell, in_axes=2)(integrand)       
                 
-        return C_yy  
+        return C_ell_1h  
 
-        
-    def get_C_ell_2h(self, tracer, params=None):
+    @partial(jax.jit, static_argnums=(0, 1))
+    def get_C_ell_2h(self, tracer, z, m, ell, params=None):
         """
         Compute the 2-halo term for C_ell.
         """
         h = params["H0"] / 100
-        z_grid = jnp.geomspace(params['z_min'], params['z_max'], params['z_npoints'])
-        m_grid = jnp.geomspace(params['M_min'], params['M_max'], params['M_npoints'])
-        ell_grid = self.get_ell_grid(params = params)
     
         # Compute mass function and bias
-        dndlnm_grid = jax.vmap(lambda z: self.mass_function(z, m_grid, params=params))(z_grid)
-        bias_grid = jax.vmap(lambda z: self.bias_function(z, m_grid, params=params))(z_grid)
-        u_ell_grid = jax.vmap(lambda z: self.interpolate_tracer(z, m_grid, tracer, ell_grid, moment=1, params=params)[1])(z_grid)
+        dndlnm_grid = jax.vmap(lambda z: self.get_hmf(z, m, params=params))(z)
+        bias_grid = jax.vmap(lambda z: self.get_hbf(z, m, params=params))(z)
+        u_ell_grid = jax.vmap(lambda z: self.interpolate_tracer(tracer, z, m, ell, moment=1, params=params)[1])(z)
         
         # Integrate over mass for each z and ell
-        logm_grid = jnp.log(m_grid)
+        logm_grid = jnp.log(m)
         dx_m = logm_grid[1] - logm_grid[0]
     
         # Function to integrate mass for a single z slice
@@ -252,33 +228,33 @@ class HaloModel:
             integrand = dndlnm_grid[z_idx][:, None] * bias_grid[z_idx][:, None] * u_ell_grid[z_idx]  # shape: (n_m, n_ell)
             return jnp.trapezoid(integrand, x=logm_grid, axis=0)  # shape: (n_ell,)
     
-        integrals_z = jax.vmap(mass_integral)(jnp.arange(len(z_grid)))  # shape: (n_z, n_ell)
+        integrals_z = jax.vmap(mass_integral)(jnp.arange(len(z)))  # shape: (n_z, n_ell)
     
         # Square the mass integral
         mass_integral_sq = integrals_z**2  # shape: (n_z, n_ell)
     
         # Linear power spectrum at k = ell / chi(z)
-        chi_z = jax.vmap(lambda z: self.cosmo_emulator.get_angular_distance_at_z(z, params=params))(z_grid) * (1 + z_grid)
-        k_grid = (ell_grid[None, :] + 0.5) / chi_z[:, None]  # shape: (n_z, n_ell)
+        chi_z = jax.vmap(lambda z: self.cosmo_emulator.get_angular_distance_at_z(z, params=params))(z) * (1 + z)
+        k_grid = (ell[None, :] + 0.5) / chi_z[:, None]  # shape: (n_z, n_ell)
 
         
         def P_at_k_for_z(z_idx):
-            P_z, ks = self.pk_emulator.get_pk_at_z(z_grid[z_idx], params=params, linear=True)
+            P_z, ks = self.pk_emulator.get_pk_at_z(z[z_idx], params=params, linear=True)
             # P_z and ks are 1D arrays (length n_k). Interpolate P_z at query points k_grid[z_idx].
             # jnp.interp does 1D linear interpolation; out-of-bounds values take edge values.
             return jnp.interp(k_grid[z_idx], ks, P_z)
     
         # Vectorize over z indices -> produces (n_z, n_ell)and convert Pk_lin to comoving
-        P_lin_at_k = jax.vmap(P_at_k_for_z)(jnp.arange(z_grid.shape[0])) * h**3  
+        P_lin_at_k = jax.vmap(P_at_k_for_z)(jnp.arange(z.shape[0])) * h**3  
     
         # --- comoving volume factor (n_z,) already computed ---
-        dVdz = self.cosmo_emulator.get_dVdzdOmega_at_z(z_grid, params=params)  # shape (n_z,)
+        dVdz = self.cosmo_emulator.get_dVdzdOmega_at_z(z, params=params)  # shape (n_z,)
     
         # Multiply: all shapes now match (n_z, n_ell)
         integrand_z = mass_integral_sq * P_lin_at_k * dVdz[:, None]  # (n_z, n_ell)
     
         # Integrate over z -> result shape (n_ell,)
-        C_ell_2h = jnp.trapezoid(integrand_z, x=z_grid, axis=0)
+        C_ell_2h = jnp.trapezoid(integrand_z, x=z, axis=0)
     
         return C_ell_2h
 
