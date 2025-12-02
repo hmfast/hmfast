@@ -1,4 +1,4 @@
-Usage
+Computing angular power spectra
 =====
 
 

@@ -1,4 +1,4 @@
-Emulator API
+Computing cosmological functions from emulators
 ============
 
 This page documents the primary public functions provided by the emulators used throughout `hmfast`. It covers the following functions.
