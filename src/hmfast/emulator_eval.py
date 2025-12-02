@@ -171,8 +171,7 @@ class CosmoEmulator(BaseEmulator):
         EMULATOR_DICT = {'DAZ': f'DAZ_{ede_version}', 'HZ': f'HZ_{ede_version}', 'S8Z': f'S8Z_{ede_version}'}
    
         # Get data path using same logic as classy_szfast
-        self.data_path = data_path
-        self.emulator_path = os.path.join(self.data_path, f'ede_{ede_version}_numpy')
+        self.emulator_path = data_path
         
         # Initialize emulator storage
         self._emulators = {}
@@ -443,8 +442,7 @@ class PkEmulator(BaseEmulator):
         EMULATOR_DICT = {'PKNL': f'PKNL_{ede_version}', 'PKL': f'PKL_{ede_version}'}
         
         # Get data path 
-        self.data_path = data_path
-        self.emulator_path = os.path.join(self.data_path, f'ede_{ede_version}_numpy')
+        self.emulator_path = data_path
         
         # Initialize emulator storage
         self._emulators = {}

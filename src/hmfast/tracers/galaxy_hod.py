@@ -9,7 +9,10 @@ import numpy as np
 _eps = 1e-30
 
 jax.config.update("jax_enable_x64", True)
-dndz_data = jnp.array(np.loadtxt("../../data/hmfast_data/normalised_dndz_cosmos_0.txt"))
+try:
+    dndz_data = jnp.array(np.loadtxt("../../data/hmfast_data/normalised_dndz_cosmos_0.txt"))
+except: 
+    pass
 
 
 
@@ -30,20 +33,21 @@ class GalaxyHODTracer(BaseTracer):
           - M_min_HOD, sigma_log10M_HOD, M0_HOD, M1_prime_HOD, alpha_s_HOD
     """
 
-    def __init__(self, emulator, halo_model, params):        
-        self.params = params
-        x_min, x_max, x_npoints = params['x_min'], params['x_max'], params['x_npoints']
-        self.x_grid = jnp.logspace(jnp.log10(x_min), jnp.log10(x_max), x_npoints)
-        self.hankel = HankelTransform(x_min=x_min, x_max=x_max, x_npoints=x_npoints, nu=0.5)
-        self.r_grid = jnp.logspace(jnp.log10(x_min), jnp.log10(x_max), x_npoints)
+    def __init__(self, emulator, halo_model, x_grid=jnp.logspace(jnp.log10(1e-5), jnp.log10(50.0), 512), params=None):        
+        
+       
+        self.hankel = HankelTransform(x_grid, nu=0.5)
+        self.r_grid = x_grid
         self.emulator = emulator # cosmology emulator
         self.halo_model = halo_model
-
+        
 
     def get_N_centrals(self, m, params = None):
         """Mean central occupation: shape = M.shape"""
         M_min = params["M_min_HOD"]
         sigma = params["sigma_log10M_HOD"]
+
+        # Set up the input x of the error function and evaluate it
         x = (jnp.log10(m) - jnp.log10(M_min)) / sigma
         return 0.5 * (1.0 + erf(x))
 
@@ -60,73 +64,29 @@ class GalaxyHODTracer(BaseTracer):
         return  N_c * pow_term
         
 
-    def get_ng_bar_at_z(self, z, params = None):
+    def get_ng_bar_at_z(self, z, m, params = None):
         """
         Compute comoving galaxy number density ng(z) = ∫ dlnM [dn/dlnM] [Nc+Ns].
         halo_model: HaloModel instance
         tracer: GalaxyHODTracer instance (provides HOD via helper funcs)
         z: scalar redshift
-        params: parameter dict (used to construct the m_grid etc.)
+        params: parameter dict 
         """
-        # mass grid (same convention used in HaloModel.get_C_ell_*)
-        m_grid = jnp.geomspace(params['M_min'], params['M_max'], params['M_npoints'])
-        logm = jnp.log(m_grid)
+        
+        logm = jnp.log(m)
         z = jnp.atleast_1d(z)
 
-        Nc = self.get_N_centrals(m_grid, params=params)
-        Ns = self.get_N_satellites(m_grid, params=params)
+        Nc = self.get_N_centrals(m, params=params)
+        Ns = self.get_N_satellites(m, params=params)
         Ntot = Nc + Ns
     
         def ng_bar_single(z_single):
-            dndlnm = self.halo_model.mass_function(z_single, m_grid, params=params)  # shape (n_m,)
+            dndlnm = self.halo_model.get_hmf(z_single, m, params=params)  # shape (n_m,)
             integrand = dndlnm * Ntot
             return jnp.trapezoid(integrand, x=logm)
     
         # vectorize over z
         return jax.vmap(ng_bar_single)(z)
-
-
-    def get_wg_at_z_alt(self, z, params=None):
-        """
-        Compute Wg(z) = [H(z) / c] * [phi'_g(z) / chi(z)^2] following Eq. (13)
-        of the paper https://arxiv.org/pdf/2203.12583, 
-        where phi'_g(z) = (1 / N_tot) * dN_g/dz and
-        dN_g/dz = ng(z) * dV/dz/dOmega.
-
-        """
-
-        z_grid = jnp.geomspace(params['z_min'], params['z_max'], params['z_npoints'])
-
-        # Compute ng(z) on the grid using the existing get_ng_bar_at_z
-        ng_grid = self.get_ng_bar_at_z(z_grid, params=params)  # shape (n_z,)
-
-        # Compute dNdz given that dN/dz/dOmega = ng(z) * dV/dz/dOmega
-        dVdz_grid = self.emulator.get_dVdzdOmega_at_z(z_grid, params=params)  # shape (n_z,)
-        dNdz = ng_grid * dVdz_grid
-
-        # Total number N_tot = ∫ dN/dz dz (per steradian)
-        N_tot = jnp.trapezoid(dNdz, x=z_grid)
-        N_tot_safe = jnp.maximum(N_tot, _eps)
-
-        # Normalized galaxy distribution phi'_g(z) = dN/dz / N_tot
-        phi_prime = dNdz / N_tot_safe
-
-        # Get H(z) and chi(z). No need to divide H by c since the emulator outputs 1/Mpc
-        H_grid = self.emulator.get_hubble_at_z(z_grid, params=params)  # 1/Mpc
-        chi_grid = self.emulator.get_angular_distance_at_z(z_grid, params=params) * (1.0 + z_grid)  # Mpc comov
-
-        # Assemble Wg on the grid
-        chi2_safe = jnp.maximum(chi_grid ** 2, _eps)
-        Wg_grid = H_grid * (phi_prime / chi2_safe)
-
-        # Interpolate Wg_grid to requested z
-        zq = jnp.atleast_1d(jnp.array(z, dtype=jnp.float64))
-        Wg_q = jnp.interp(zq, z_grid, Wg_grid, left=0.0, right=0.0)
-
-        z = dndz_data[:, 0]          # first column: redshifts
-        phi_prime = dndz_data[:, 1]  # second column: phi_prime
-
-        return Wg_q
         
 
     def get_wg_at_z(self, z, params=None):
@@ -159,7 +119,7 @@ class GalaxyHODTracer(BaseTracer):
         return A * (m / M_pivot)**B * (1 + z)**C
 
      
-    def compute_u_m_ell_alt(self, z, m, params = None):
+    def compute_u_m_ell_alt(self, z, m, ell, params = None):
         """
         This function calculates u_ell^m(z, M) via the analytic method described in Kusiak et al (2023).
         As of November 2025, the jax.scipy.special.sici functions are not well behaved for large inputs.
@@ -168,19 +128,16 @@ class GalaxyHODTracer(BaseTracer):
 
         m = jnp.atleast_1d(m) 
 
-        ell_min = params.get("ell_min", 1e2)
-        ell_max = params.get("ell_max", 3.5e3) 
-
         c_200c = self.c_Duffy2008(z, m)
         r_200c = self.emulator.get_r_delta_of_m_delta_at_z(200, m, z, params=params) 
         lambda_val = params.get("lambda_HOD", 1.0) 
 
         
         chi = self.emulator.get_angular_distance_at_z(z, params=params) * (1.0 + z) 
-        ell_row = jnp.logspace(jnp.log10(ell_min), jnp.log10(ell_max), 100)
+        k = (ell + 0.5) / chi   # physical k
 
-        ell = jnp.broadcast_to(ell_row[None, :], (m.shape[0], 100))           # (N_m, N_k)
-        k = (ell_row + 0.5) / chi   # physical k
+        ell = jnp.broadcast_to(ell[None, :], (m.shape[0], 100))           # (N_m, N_k)
+        
   
         k_mat = k[None, :]                            # (1, N_k)
         r_mat = r_200c[:, None]                       # (N_m, 1)
@@ -205,8 +162,8 @@ class GalaxyHODTracer(BaseTracer):
 
 
 
-
-    def compute_u_ell(self, z, m, moment=1, params=None):
+     
+    def get_u_ell(self, z, m, moment=1, params=None):
         """ 
         Compute either the first or second moment of the galaxy HOD tracer u_ell.
         For galaxy HOD:, 
@@ -214,11 +171,12 @@ class GalaxyHODTracer(BaseTracer):
             Second moment:    W_g^2 / ng_bar^2 * [Ns^2 * u_ell_m^2 + 2 * Ns * u_ell_m]
         You cannot simply take u_ell_g**2.
         """
+        
         Ns = self.get_N_satellites(m, params=params)
         Nc = self.get_N_centrals(m, params=params)
-        ng = self.get_ng_bar_at_z(z, params=params) * (params["H0"]/100)**3
+        ng = self.get_ng_bar_at_z(z, m, params=params) * (params["H0"]/100)**3
         W  = self.get_wg_at_z(z, params=params)
-        ell, u_m = self.compute_u_m_ell(z, m, params=params)
+        ell, u_m = self.get_u_m_ell(z, m, params=params)
     
         moment_funcs = [
             lambda _: (W/ng)[:, None] * (Nc[:, None] + Ns[:, None] * u_m),
@@ -240,7 +198,7 @@ class GalaxyHODTracer(BaseTracer):
     def _rho_s_from_M(self, M, r_s, c):
         return M / (4.0 * jnp.pi * r_s**3 * (jnp.log1p(c) - c / (1 + c)) + 1e-30)
 
-    def compute_u_m_ell(self, z, m_array, lambda_val=1.0, params=None):
+    def get_u_m_ell(self, z, m_array, lambda_val=1.0, params=None):
         m_array = jnp.atleast_1d(m_array)
     
         # compute halo quantities
@@ -271,6 +229,7 @@ class GalaxyHODTracer(BaseTracer):
     
         # scale to ell
         chi = self.emulator.get_angular_distance_at_z(z, params=params) * (1+z) * params["H0"]/100
+        chi = jnp.atleast_1d(chi)
         ell = k[None, :] * chi
         N_m = m_array.shape[0]
         ell = jnp.broadcast_to(ell, (N_m, k.shape[0]))

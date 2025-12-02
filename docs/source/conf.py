@@ -7,8 +7,8 @@
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = 'hmfast'
-copyright = '2025, Patrick Janulewicz'
-author = 'Patrick Janulewicz'
+copyright = '2025, The hmfast developers'
+author = 'Patrick Janulewicz, Licong Xu, Boris Bolliet'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
