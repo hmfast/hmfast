@@ -1,7 +1,7 @@
 The HaloModel class
 =====
 
-This page documents the primary public functions provided by the `HaloModel` class in `hmfast`. It covers the following functions.
+This page documents the primary public functions provided by the ``HaloModel`` class in ``hmfast``. It covers the following functions.
 
 - ``get_hmf(z, m, params)`` — Return the halo mass function :math:`\mathrm{d}n/\mathrm{d}\ln M` evaluated at redshift ``z`` and halo mass array ``m``.  
 - ``get_hbf(z, m, params)`` — Return the halo bias function :math:`b(m)` evaluated at redshift ``z`` and mass array ``m``.  
@@ -13,7 +13,7 @@ Setting up your halo model
 -------------
 
 To use the HaloModel class, you must first instantiate your parameters, emulators, and, in some cases, tracers. 
-First, begin by setting your input parameters. A list of current `hmfast` parameters can be found below. 
+First, begin by setting your input parameters. A list of current ``hmfast`` parameters can be found below. 
 
 
 .. code-block:: python
@@ -152,7 +152,7 @@ Each Tracer object is defined by the following properties:
 2. **The HaloModel object on which you will evaluate this tracer.** Much like the emulator, this can only be changed by defining a new Tracer object.
    This is not required for all tracers.
 
-3. ** A dimensionless radial grid x = r / r_scale (e.g. r500 or r_s) over which the profile will be evaluated. 
+3. **A dimensionless radial grid x = r / r_scale (e.g. r500 or r_s) over which the profile will be evaluated.**
    Again, just like the emulator, this can only be changed by defining a new Tracer object.
 
 4. **The `params` dictionary containing all relevant free parameters.** This may be changed freely.

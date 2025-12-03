@@ -1,7 +1,7 @@
 The Emulator class
 ============
 
-This page documents the primary public functions provided by the emulators used throughout `hmfast`. It covers the following functions.
+This page documents the primary public functions provided by the emulators used throughout ``hmfast``. It covers the following functions.
 
 - ``get_hubble_at_z(z, params)`` — Evaluate the hubble parameter H(z).
 - ``get_angular_distance_at_z(z, params)`` — Evaluate the angular diameter distance d_A(z).
@@ -9,8 +9,9 @@ This page documents the primary public functions provided by the emulators used 
 - ``get_pk_at_z(z, params, linear=True)`` — Return the matter power spectrum :math:`P_{\ell}(k)` if ``linear=True``, and :math:`P_{\rm nl}(k)` if ``linear=False``.
 
 
-Basic usage
+Setting up your emulator
 -----------
+
 
 Below are short examples showing how to call each function and plot the results.
 
@@ -52,8 +53,8 @@ Below are short examples showing how to call each function and plot the results.
 
 
 
-Plotting H(z)
-~~~~~~~~~~~~
+Hubble parameter H(z)
+-----------
 
 This example evaluates the Hubble parameter on a redshift grid and plots it.
 Adjust plotting styles to match the usage guide.
@@ -81,8 +82,9 @@ Adjust plotting styles to match the usage guide.
    :align: center
    :alt: Hubble parameter
 
-Evaluating angular diameter distance d_A(z)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Angular diameter distance d_A(z)
+-----------
+
 
 Compute and plot the angular diameter distance for the same redshift range.
 
@@ -105,7 +107,7 @@ Compute and plot the angular diameter distance for the same redshift range.
    :alt: Angular distance
 
 Critical density ρ_crit(z)
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+-----------
 
 Example showing how to query ρ_crit(z) and plot it. The returned units are
 (approx.) (Msun/h) / (Mpc/h)^3 as used across the codebase.
@@ -129,8 +131,9 @@ Example showing how to query ρ_crit(z) and plot it. The returned units are
    :alt: Critical density
 
 
-Matter power spectrum P(k) at a given redshift
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Matter power spectrum P(k) 
+-----------
+
 
 Use the PkEmulator to request the linear or nonlinear matter power spectrum at a given
 redshift. ``get_pk_at_z`` returns (P_k, k_grid). Plot P(k) on a log-log scale.
