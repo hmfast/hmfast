@@ -14,37 +14,33 @@ The recommended way to get started is as follows:
 
 2. **Download emulator data files:**
 
-   The fastest and easiest way is via Python. The following example will download the recommended emulator models (ede-v2) to your computer:
+   The easiest way to get started is via Python.
 
-   .. code-block:: python
+    To download the recommended emulator models (ede-v2) to the default location (``~/hmfast_data``):
+    
+    .. code-block:: python
+    
+       import hmfast
+       hmfast.download_emulators()
+    
+    To use a different directory for storing emulator data files, use the ``target_dir`` argument:
+    
+    .. code-block:: python
+    
+       hmfast.download_emulators(target_dir="/custom/path/for/hmfast_data")
+    
+    To download multiple or all emulator models, use the ``models`` argument:
+    
+    .. code-block:: python
+    
+       # Download several specific models
+       hmfast.download_emulators(models=["ede-v2", "lcdm", "wcdm"])
+       
+       # Download all available models
+       hmfast.download_emulators(models="all")
+    
+    You may pass a single model name, a list of model names, or ``"all"`` to download all models. 
 
-      import hmfast
-      hmfast.download_emulators()
 
-   By default, emulator files are saved to ``~/hmfast_data``.  
-   If you want to change the location, pass a different path:
-
-   .. code-block:: python
-
-      hmfast.download.download_emulators(target_dir="/custom/path/for/hmfast_data")
-
-   Or, set the environment variable ``HMFAST_EMULATOR_PATH`` before running Python:
-
-   .. code-block:: bash
-
-      export HMFAST_EMULATOR_PATH=/custom/path/for/hmfast_data
-
-   To download *all* available emulator models, use:
-
-   .. code-block:: python
-
-      hmfast.download.download_emulators(models="all")
-
-   You may also pass a list of model names, for example:
-
-   .. code-block:: python
-
-      hmfast.download.download_emulators(models=["ede-v2", "lcdm"])
-
-After these steps, you are ready to use ``hmfast``.
+After these steps, you should be all set to start using ``hmfast``.
 
