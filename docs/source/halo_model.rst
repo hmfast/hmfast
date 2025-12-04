@@ -1,4 +1,4 @@
-The Halo Model Module
+The halo model module
 =====================
 
 This page documents the primary public functions provided by the ``HaloModel`` class in ``hmfast``. It covers the following functions:
@@ -8,7 +8,7 @@ This page documents the primary public functions provided by the ``HaloModel`` c
 - ``get_C_ell_1h(tracer, z, m, ell, params)`` — Computes the 1-halo contribution to the angular power spectrum :math:`C_\ell` for a given tracer.  
 - ``get_C_ell_2h(tracer, z, m, ell, params)`` — Computes the 2-halo contribution to the angular power spectrum :math:`C_\ell` for a given tracer.  
 
----
+
 
 Setting up your halo model
 --------------------------
@@ -69,13 +69,13 @@ To use the ``HaloModel`` class, you must first instantiate your cosmological par
     emulator = hmfast.emulator_eval.Emulator(emulator_path, cosmo_model=0)
 
     # Define the halo model
-    halo_model = hmfast.halo_model.HaloModel(emulator, params=params_hmfast)
+    halo_model = hmfast.halo_model.HaloModel(emulator)
 
     # Mass and redshift grids
     z_grid = jnp.geomspace(0.005, 3.0, 100)
     m_grid = jnp.geomspace(5e10, 3.5e15, 100)
 
----
+
 
 Halo mass and bias functions
 ----------------------------
@@ -125,7 +125,6 @@ With our halo model defined, we can now compute halo mass and bias functions.
    :align: center
    :alt: Halo mass and bias functions
 
----
 
 Adding tracers
 ---------------
@@ -136,8 +135,12 @@ Once you are ready to compute angular power spectra, you can create tracer objec
 
     x = \frac{r}{r_{\rm scale}}
 
-(e.g., ``r500`` or ``r_s``). This ``x_grid`` is a defining property of the tracer that cannot be changed after creation.
+For tSZ tracers, the scale is the radius ``r500`` (the radius enclosing 500 times the critical density).  
+For galaxy HOD tracers, the scale is the halo scale radius ``r_s`` from the NFW profile.  
+
+This ``x_grid`` is a defining property of the tracer that cannot be changed after creation.  
 If you wish to use a different radial grid, simply create a new tracer with a new ``x_grid``.
+
 
 .. code-block:: python
 
@@ -146,10 +149,10 @@ If you wish to use a different radial grid, simply create a new tracer with a ne
     x_grid_hod = jnp.logspace(jnp.log10(1e-5), jnp.log10(50.0), 512)
     
     # Add tracers
-    tsz_tracer = halo_model.add_tracer(TSZTracer, x_grid_tsz)
-    galaxy_hod_tracer = halo_model.add_tracer(GalaxyHODTracer, x_grid_hod)
+    tsz_tracer = halo_model.create_tracer(TSZTracer, x_grid_tsz)
+    galaxy_hod_tracer = halo_model.create_tracer(GalaxyHODTracer, x_grid_hod)
 
----
+
 
 Angular power spectra
 ---------------------

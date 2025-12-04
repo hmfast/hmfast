@@ -21,7 +21,7 @@ class HaloModel:
     with automatic differentiation capabilities.
     """
     
-    def __init__(self, emulator, params, mass_model = MF_T08, bias_model = BF_T10):
+    def __init__(self, emulator, mass_model = MF_T08, bias_model = BF_T10):
         """
         Initialize the halo model.
         
@@ -47,7 +47,7 @@ class HaloModel:
         self._tophat_instance = partial(TophatVar(dummy_k, lowring=True, backend='jax'), extrap=True)
         self._tophat_instance_dvar = partial(TophatVar(dummy_k, lowring=True, backend='jax', deriv=1))
 
-    def add_tracer(self, tracer, x_grid):
+    def create_tracer(self, tracer, x_grid=None):
         """
         Allows the user to create a tracer for this halo model.
         This forces the cosmology to map that of this object

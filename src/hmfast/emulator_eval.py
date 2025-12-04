@@ -41,7 +41,7 @@ class Emulator:
     Lazily loads individual emulators (Cosmo, Pk, etc.) on demand.
     """
 
-    def __init__(self, data_path: str, cosmo_model: int = 0):
+    def __init__(self, data_path, cosmo_model = 0):
         self.data_path = data_path
         self.cosmo_model = cosmo_model
 
