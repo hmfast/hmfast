@@ -1,18 +1,50 @@
 Installation
 ============
 
-This document explains how to install the emulators auxiliary files required by ``hmfast``.  
+
+To use ``hmfast``, you'll need the source code and the auxiliary emulator files.  
+The recommended way to get started is as follows:
+
+1. **Clone the repository:**
+
+   .. code-block:: bash
+
+      git clone https://github.com/hmfast/hmfast.git
 
 
-Installation Steps
-------------------
+2. **Download emulator data files:**
 
-``hmfast`` requires emulators to perform its calculations. 
-Before we begin using the code, we must ensure that these emulators have been downloaded.
-The repository has a helper script `install_emulators.sh` which will automatically download all compatible emulator models.
-Simply run the following in your command line.
+   The fastest and easiest way is via Python. The following example will download the recommended emulator models (ede-v2) to your computer:
 
-.. code-block:: bash
+   .. code-block:: python
 
-       bash /path/to/hmfast/tools/install_emulators.sh /path/where/emulators/will/be/installed
+      import hmfast
+      hmfast.download_emulators()
+
+   By default, emulator files are saved to ``~/hmfast_data``.  
+   If you want to change the location, pass a different path:
+
+   .. code-block:: python
+
+      hmfast.download.download_emulators(target_dir="/custom/path/for/hmfast_data")
+
+   Or, set the environment variable ``HMFAST_EMULATOR_PATH`` before running Python:
+
+   .. code-block:: bash
+
+      export HMFAST_EMULATOR_PATH=/custom/path/for/hmfast_data
+
+   To download *all* available emulator models, use:
+
+   .. code-block:: python
+
+      hmfast.download.download_emulators(models="all")
+
+   You may also pass a list of model names, for example:
+
+   .. code-block:: python
+
+      hmfast.download.download_emulators(models=["ede-v2", "lcdm"])
+
+After these steps, you are ready to use ``hmfast``.
 
