@@ -11,7 +11,7 @@ class TSZTracer(BaseTracer):
     """
     tSZ tracer using GNFW profile.
     """
-    def __init__(self, emulator, halo_model=None, x_grid=None, params=None):
+    def __init__(self, emulator, halo_model=None, x_grid=None):
         
         if x_grid is None:
             x_grid = jnp.logspace(jnp.log10(1e-4), jnp.log10(20.0), 512)
