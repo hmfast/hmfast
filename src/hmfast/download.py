@@ -55,22 +55,30 @@ COSMOPOWER_MODELS = {
     ],
 }
 
+AUX_FILES = [
+    {
+        "url": "https://github.com/CLASS-SZ/class_sz/blob/master/class-sz/class_sz_auxiliary_files/includes/normalised_dndz_cosmos_0.txt",
+        "subdir": "auxiliary_files",
+        "filename": "normalised_dndz_cosmos_0.txt"
+    }
+]
+
+
+
 
 def get_default_data_path():
     return os.environ.get("HMFAST_EMULATOR_PATH", os.path.join(os.path.expanduser("~"), "hmfast_data"))
 
-
-def download_emulators(target_dir=None, models="ede-v2", skip_existing=True):
+def download_emulators(target_dir=None, models="ede-v2", skip_existing=True, download_auxiliary=True):
     """
     Download emulator .npz files for specified cosmopower models into target_dir.
+    Also downloads auxiliary files if download_auxiliary is True.
 
     - models: list of model names (e.g. ["ede-v1", "lcdm", ...]), or "all" to download every known model.
     - By default, only ede-v2 is downloaded.
-
-    Other logic as previously described.
     """
     if target_dir is None:
-        target_dir = os.path.join(os.path.expanduser("~"), "hmfast_data")
+        target_dir = get_default_data_path()
     os.makedirs(target_dir, exist_ok=True)
 
     valid_models = list(COSMOPOWER_MODELS.keys())
@@ -108,4 +116,21 @@ def download_emulators(target_dir=None, models="ede-v2", skip_existing=True):
                     out_file.write(resp.read())
             except Exception as e:
                 print(f"  *** Error downloading {rel_path}: {e}")
+
+    if download_auxiliary:
+        print(f"Downloading auxiliary files to: {target_dir}/hmfast_auxiliary_files")
+        for aux in AUX_FILES:
+            aux_dir = os.path.join(target_dir, aux["subdir"])
+            aux_path = os.path.join(aux_dir, aux["filename"])
+            os.makedirs(aux_dir, exist_ok=True)
+            if skip_existing and os.path.exists(aux_path):
+                print(f"  Already exists: {aux_path} (skipped)")
+                continue
+            print(f"  Fetching {aux['filename']} ...")
+            try:
+                with urlopen(aux["url"]) as resp, open(aux_path, "wb") as out_file:
+                    out_file.write(resp.read())
+            except Exception as e:
+                print(f"  *** Error downloading {aux['filename']}: {e}")
+
     print("Download complete.")
