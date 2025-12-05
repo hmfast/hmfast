@@ -17,4 +17,9 @@ from .tracers.galaxy_hod import GalaxyHODTracer
 from .download import download_emulators
 
 
+
+download_emulators(models="all", skip_existing=True)
+
+
+
 __all__ = ["HaloModel", "Emulator", "TSZTracer", "GalaxyHODTracer"]

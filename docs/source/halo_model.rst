@@ -26,39 +26,12 @@ To use the ``HaloModel`` class, you must first instantiate your cosmological par
     
     
     params_hmfast = {
-    
-        # Emulator parameters. See https://github.com/cosmopower-organization for more details.
-        'fEDE': 0.1,
-        'log10z_c': 3.5,
-        'thetai_scf': jnp.pi/2,
-        'ln10^{10}A_s': 3.047, 
-        'n_s': 0.965,
-        'H0': 67.5,
         'omega_b': 0.02,
-        'omega_cdm': 0.15,
-        'r': 0.0,
-        'm_ncdm': 0.06,
-        'N_ur': 2.0308,
-    
-        # Other cosmological parameters
-        'T_cmb': 2.7255,
-        'deg_ncdm': 1,
-        'B': 1.4,
-        'delta': 200,      
-    
-        # tSZ power spectrum tracer-specific params using the gNFW pressure profile.
-        'P0GNFW': 8.130,
-        'gammaGNFW': 0.3292,
-        'alphaGNFW': 1.0620,
-        'betaGNFW': 5.4807,
-        'c500': 1.156,
-        
-        # Galaxy HOD tracer-specific params. See https://arxiv.org/pdf/2203.12583 for more details.
-        'sigma_log10M_HOD': 0.68,
-        'alpha_s_HOD':    1.30,
-        'M1_prime_HOD': 10**12.7, # msun/h
-        'M_min_HOD': 10**11.8, # msun/h
-        'M0_HOD' :0,
+        'omega_cdm':  0.12,
+        'H0': 67.5, 
+        'tau_reio': 0.0561,
+        'ln10^{10}A_s': 3.047,
+        'n_s': 0.9665
     }
 
 
