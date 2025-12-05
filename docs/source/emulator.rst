@@ -41,28 +41,23 @@ Below are short examples showing how to call each function and plot the results.
 Hubble parameter H(z)
 -----------
 
-This example evaluates the Hubble parameter on a redshift grid and plots it.
-Adjust plotting styles to match the usage guide.
+Below is an example showing how to compute and plot the Hubble parameter for a redshift array.
 
 .. code-block:: python
 
-    H_grid = emulator.get_hubble_at_z(z=z_grid, params=params_hmfast) * 299792.458
+   H_grid = emulator.get_hubble_at_z(z_grid, params=params_hmfast) * 299792.458
 
-    label_size = 12
-    title_size = 14
-    legend_size = 10
-    
-    plt.figure(figsize=(7,4))
-    plt.semilogy(z_grid, H_grid, lw=2, label=r"$H(z)$")
-    plt.grid(alpha=0.4, linestyle='--')
-    plt.xlabel("z", size=title_size)
-    plt.ylabel("H(z) [km/s/Mpc]", size=title_size)
-    plt.legend(fontsize=legend_size, frameon=False)
-    plt.minorticks_on()
-    plt.show()
+   plt.figure(figsize=(7,4))
+   plt.semilogy(z_grid, H_grid, lw=2, label=r"$H(z)$")
+   plt.grid(alpha=0.4, linestyle='--')
+   plt.xlabel("z", size=title_size)
+   plt.ylabel("H(z) [km/s/Mpc]", size=title_size)
+   plt.legend(fontsize=legend_size, frameon=False)
+   plt.minorticks_on()
+   plt.show()
 
 .. image:: _static/Hz.png
-   :width: 75%
+   :width: 90%
    :align: center
    :alt: Hubble parameter
 
@@ -86,15 +81,15 @@ Compute and plot the angular diameter distance for the same redshift range.
     plt.show()
 
 .. image:: _static/d_A.png
-   :width: 75%
+   :width: 90%
    :align: center
    :alt: Angular distance
 
 Critical density ρ_crit(z)
 -----------
 
-Example showing how to query ρ_crit(z) and plot it. The returned units are
-(approx.) (Msun/h) / (Mpc/h)^3 as used across the codebase.
+Compute and plot the angular diameter distance for the same redshift range.
+
 
 .. code-block:: python
 
@@ -110,7 +105,7 @@ Example showing how to query ρ_crit(z) and plot it. The returned units are
     plt.show()
 
 .. image:: _static/rho_crit.png
-   :width: 75%
+   :width: 90%
    :align: center
    :alt: Critical density
 
@@ -118,9 +113,7 @@ Example showing how to query ρ_crit(z) and plot it. The returned units are
 Matter power spectrum P(k) 
 -----------
 
-
-Use the PkEmulator to request the linear or nonlinear matter power spectrum at a given
-redshift. ``get_pk_at_z`` returns (P_k, k_grid). Plot P(k) on a log-log scale.
+Below is an example showing how to compute and plot the linear and non-linear matter power spectrum at a given redshift
 
 .. code-block:: python
 
@@ -144,6 +137,6 @@ redshift. ``get_pk_at_z`` returns (P_k, k_grid). Plot P(k) on a log-log scale.
     plt.show()
 
 .. image:: _static/pk.png
-   :width: 75%
+   :width: 90%
    :align: center
    :alt: Matter power spectrum

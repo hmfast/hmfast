@@ -57,44 +57,47 @@ With our halo model defined, we can now compute halo mass and bias functions.
 
 .. code-block:: python
 
-    # Discrete redshifts
-    z_values = [0.0, 1.0, 2.0]
-    
-    # Plot styling
-    label_size = 17
-    title_size = 18
-    legend_size = 13
-    
-    # Colors and linestyles
-    cmap = plt.get_cmap("viridis")
-    colors = cmap(jnp.linspace(0.2, 0.8, len(z_values)))
-    linestyles = ['-', '--', '-.']
-    
-    fig, axes = plt.subplots(2, 1, figsize=(8,10), sharex=True)
-    
-    # Top: Halo Mass Function
-    for color, ls, z in zip(colors, linestyles, z_values):
-        dn_dlnm = halo_model.get_hmf(z, m_grid, params=params_hmfast)
-        axes[0].loglog(m_grid, dn_dlnm, lw=2, color=color, linestyle=ls, label=rf"$z={z}$")
-    axes[0].grid(which='both', linestyle='--', alpha=0.5)
-    axes[0].set_ylim(1e-6, 1e-1)
-    axes[0].legend(fontsize=legend_size, frameon=False)
-    axes[0].set_ylabel(r"$\mathrm{d}n/\mathrm{d}\ln M\ [(h^3\,\mathrm{Mpc}^{-3})]$", size=title_size)
-    
-    # Bottom: Halo Bias Function
-    for color, ls, z in zip(colors, linestyles, z_values):
-        b_m = halo_model.get_hbf(z, m_grid, params=params_hmfast)
-        axes[1].loglog(m_grid, b_m, lw=2, color=color, linestyle=ls, label=rf"$z={z}$")
-    axes[1].grid(which='both', linestyle='--', alpha=0.5)
-    axes[1].legend(fontsize=legend_size, frameon=False)
-    axes[1].set_xlabel(r"$M\ [M_\odot/h]$", size=title_size)
-    axes[1].set_ylabel(r"$b(m)$", size=title_size)
-    
-    plt.tight_layout()
-    plt.show()
+   # Redshifts and mass grid
+   z0, z1, z2 = 0.0, 1.0, 2.0
+
+   # --- Compute halo mass function ---
+   hmf_z0 = halo_model.get_hmf(z0, m_grid, params=params_hmfast)
+   hmf_z1 = halo_model.get_hmf(z1, m_grid, params=params_hmfast)
+   hmf_z2 = halo_model.get_hmf(z2, m_grid, params=params_hmfast)
+
+   # --- Compute halo bias function ---
+   hbf_z0 = halo_model.get_hbf(z0, m_grid, params=params_hmfast)
+   hbf_z1 = halo_model.get_hbf(z1, m_grid, params=params_hmfast)
+   hbf_z2 = halo_model.get_hbf(z2, m_grid, params=params_hmfast)
+
+   # --- Plot the results ---
+   z_values = [z0, z1, z2]
+   hmf_results = [hmf_z0, hmf_z1, hmf_z2]
+   hbf_results = [hbf_z0, hbf_z1, hbf_z2]
+
+   base_color, linestyles, alphas = "C0", ["-", "--", "-."], [1.0, 0.75, 0.55]
+   fig, axes = plt.subplots(2, 1, figsize=(7, 8), sharex=True)
+
+   # Plot halo mass function
+   for z, hmf, ls, a in zip(z_values, hmf_results, linestyles, alphas):
+       axes[0].loglog(m_grid, hmf, linestyle=ls, color=base_color, alpha=a, label=f"z = {z}")
+   axes[0].set_ylabel(r"$\mathrm{d}n/\mathrm{d}\ln M$")
+   axes[0].set_ylim(1e-6, 1e-1)   # ← the single added line
+   axes[0].legend()
+
+   # Plot halo bias function
+   for z, hbf, ls, a in zip(z_values, hbf_results, linestyles, alphas):
+       axes[1].loglog(m_grid, hbf, linestyle=ls, color=base_color, alpha=a, label=f"z = {z}")
+   axes[1].set_xlabel(r"$M\ [M_\odot/h]$")
+   axes[1].set_ylabel(r"$b(M)$")
+   axes[1].legend()
+
+   plt.tight_layout()
+   plt.show()
+
 
 .. image:: _static/hmf_hbf.png
-   :width: 75%
+   :width: 90%
    :align: center
    :alt: Halo mass and bias functions
 
@@ -135,30 +138,28 @@ You may now easily compute the 1-halo and 2-halo of your tSZ tracer:
 
 .. code-block:: python
 
-    # tSZ tracer
-    ell_grid_tsz = jnp.geomspace(2, 8e3, 50)
-    
-    D_terms = [
-        ('1-halo term', halo_model.get_C_ell_1h(tsz_tracer, z_grid, m_grid, ell_grid_tsz, params=params_hmfast), 0.25, '-'),
-        ('2-halo term', halo_model.get_C_ell_2h(tsz_tracer, z_grid, m_grid, ell_grid_tsz, params=params_hmfast), 0.75, '-.')
-    ]
-    
-    plt.figure(figsize=(8,5))
-    cmap = plt.get_cmap("viridis")
-    for label, C_ell, color_pos, ls in D_terms:
-        D_ell = ell_grid_tsz*(ell_grid_tsz+1)*C_ell/(2*jnp.pi)*1e12
-        plt.loglog(ell_grid_tsz, D_ell, lw=2, color=cmap(color_pos), linestyle=ls, label=label)
-    
-    plt.grid(which='both', linestyle='--', alpha=0.5)
-    plt.minorticks_on()
-    plt.legend(fontsize=13, frameon=False)
-    plt.xlabel(r"$\ell$", size=18)
-    plt.ylabel(r"$10^{12} D_\ell$", size=18)
-    plt.tight_layout()
-    plt.show()
+   # --- Define ell grid and compute 1 halo and 2 halo angular power spectrum  ---
+   ell_grid_tsz = jnp.geomspace(2, 8e3, 50)
+   C_ell_yy_1h = halo_model.get_C_ell_1h(tsz_tracer, z_grid, m_grid, ell_grid_tsz, params=params_hmfast)
+   C_ell_yy_2h = halo_model.get_C_ell_2h(tsz_tracer, z_grid, m_grid, ell_grid_tsz, params=params_hmfast)
+
+   # --- Convert to D_ell ---
+   D_ell_yy_1h = ell_grid_tsz * (ell_grid_tsz + 1) * C_ell_yy_1h / (2 * jnp.pi) * 1e12
+   D_ell_yy_2h = ell_grid_tsz * (ell_grid_tsz + 1) * C_ell_yy_2h / (2 * jnp.pi) * 1e12
+
+   # --- Plot the results ---
+   plt.figure()
+   plt.loglog(ell_grid_tsz, D_ell_yy_1h, label="1-halo term")
+   plt.loglog(ell_grid_tsz, D_ell_yy_2h, label="2-halo term")
+   plt.xlabel(r"$\ell$")
+   plt.ylabel(r"$10^{12} D_\ell$")
+   plt.legend()
+   plt.grid(True, which="both", linestyle="--", alpha=0.5)
+   plt.show()
+
 
 .. image:: _static/C_ell_yy.png
-   :width: 75%
+   :width: 90%
    :align: center
    :alt: tSZ angular power spectrum
 
@@ -168,28 +169,23 @@ And similarly for your galaxy HOD tracer:
 
 .. code-block:: python
 
-    # Galaxy HOD tracer
-    ell_grid_hod = jnp.geomspace(1e2, 3.5e3, 50)
-    
-    C_terms = [
-        ('1-halo term', halo_model.get_C_ell_1h(galaxy_hod_tracer, z_grid, m_grid, ell_grid_hod, params=params_hmfast), 0.25, '-'),
-        ('2-halo term', halo_model.get_C_ell_2h(galaxy_hod_tracer, z_grid, m_grid, ell_grid_hod, params=params_hmfast), 0.75, '-.')
-    ]
-    
-    plt.figure(figsize=(8,5))
-    cmap = plt.get_cmap("viridis")
-    for label, C_ell, color_pos, ls in C_terms:
-        plt.loglog(ell_grid_hod, C_ell, lw=2, color=cmap(color_pos), linestyle=ls, label=label)
-    
-    plt.grid(which='both', linestyle='--', alpha=0.5)
-    plt.minorticks_on()
-    plt.legend(fontsize=11, frameon=False)
-    plt.xlabel(r"$\ell$", size=18)
-    plt.ylabel(r"$C_\ell$", size=18)
-    plt.tight_layout()
-    plt.show()
+    # --- Define ell grid and compute 1 halo and 2 halo angular power spectrum  ---
+   ell_grid_hod = jnp.geomspace(1e2, 3.5e3, 50)
+   C_ell_gg_1h = halo_model.get_C_ell_1h(galaxy_hod_tracer, z_grid, m_grid, ell_grid_hod, params=params_hmfast)
+   C_ell_gg_2h = halo_model.get_C_ell_2h(galaxy_hod_tracer, z_grid, m_grid, ell_grid_hod, params=params_hmfast)
+
+
+   # --- Plot the results ---
+   plt.figure()
+   plt.loglog(ell_grid_tsz, C_ell_gg_1h, label="1-halo term")
+   plt.loglog(ell_grid_tsz, C_ell_gg_2h, label="2-halo term")
+   plt.xlabel(r"$\ell$")
+   plt.ylabel(r"$10^{12} D_\ell$")
+   plt.legend()
+   plt.grid(True, which="both", linestyle="--", alpha=0.5)
+   plt.show()
 
 .. image:: _static/C_ell_gg.png
-   :width: 75%
+   :width: 90%
    :align: center
    :alt: Galaxy HOD angular power spectrum

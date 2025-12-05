@@ -23,10 +23,11 @@ The recommended way to get started is as follows:
    You may now import the package. 
    Since the emulators are large, ``hmfast`` will download them at import if it they do not already exist.
    By default, they will be downloaded to ~/hmfast_data. 
-   If you wish to change this, simply uncomment the first line below and set your desired path.
+   If you wish to change this, simply uncomment the first two lines below and set your desired path.
 
    .. code-block:: python
 
+      # import os
       # os.environ["HMFAST_DATA_PATH"] = "path/to/hmfast_data"
       import hmfast
       
