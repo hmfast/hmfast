@@ -123,7 +123,7 @@ Below is an example showing how to compute and plot the linear and non-linear ma
     # Linear power spectrum
     Pk_lin, k_lin = emulator.get_pk_at_z(z_pk, params=params_hmfast, linear=True)
     
-    # Non-linear power spectrum (if available in your emulator files)
+    # Non-linear power spectrum 
     Pk_nl, k_nl = emulator.get_pk_at_z(z_pk, params=params_hmfast, linear=False)
     
     plt.figure(figsize=(7,4))

@@ -23,7 +23,7 @@ class HaloModel:
     with automatic differentiation capabilities.
     """
     
-    def __init__(self, emulator, mass_model = MF_T08, bias_model = BF_T10):
+    def __init__(self, cosmo_model, mass_model = MF_T08, bias_model = BF_T10):
         """
         Initialize the halo model.
         
@@ -38,7 +38,7 @@ class HaloModel:
         """
         
 
-        self.emulator = emulator
+        self.emulator = Emulator(cosmo_model=cosmo_model)
         self.mass_model = mass_model
         self.bias_model = bias_model
 

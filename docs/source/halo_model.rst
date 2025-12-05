@@ -37,12 +37,9 @@ To use the ``HaloModel`` class, you must first instantiate your cosmological par
 
 .. code-block:: python
 
-    # Load emulators
     
-    emulator = hmfast.emulator_eval.Emulator(cosmo_model=0)
-
     # Define the halo model
-    halo_model = hmfast.halo_model.HaloModel(emulator)
+    halo_model = hmfast.halo_model.HaloModel(cosmo_model=0)
 
     # Mass and redshift grids
     z_grid = jnp.geomspace(0.005, 3.0, 100)
