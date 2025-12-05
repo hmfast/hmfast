@@ -18,37 +18,18 @@ The recommended way to get started is as follows:
       pip install /your/path/to/hmfast
 
 
-2. **Download emulator data files:**
+2. **Import the package and begin:**
 
-   The easiest way to get started is via Python.
-
-   To download the recommended emulator models (ede-v2) to the default location (``~/hmfast_data``):
+   You may now import the package. 
+   Since the emulators are large, ``hmfast`` will download them at import if it they do not already exist.
+   By default, they will be downloaded to ~/hmfast_data. 
+   If you wish to change this, simply uncomment the first line below and set your desired path.
 
    .. code-block:: python
 
+      # os.environ["HMFAST_DATA_PATH"] = "path/to/hmfast_data"
       import hmfast
-      hmfast.download_emulators()
-
-   If you wish to store the data elsewhere, simply set the environment variable to a new location:
-
-   .. code-block:: python
-
-      import hmfast, os
-      os.environ["HMFAST_DATA_PATH"] = "path/to/hmfast_data"
-      hmfast.download_emulators()
-
-   To download all or multiple emulator models at once, use the ``models`` argument:
-
-   .. code-block:: python
-
-      # Download all available models
-      hmfast.download_emulators(models="all")
-
-      # Download select models. Can be any of ["lcdm", "mnu", "neff", "wcdm", "ede-v1", "mnu-3states", "ede-v2"]
-      hmfast.download_emulators(models=["lcdm", "ede-v2"])
-
-   You may pass a single model name, a list of model names, or ``"all"`` to download all models.
-
+      
 
 After these steps, you should be all set to start using ``hmfast``.
 
