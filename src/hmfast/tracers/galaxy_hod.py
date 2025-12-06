@@ -3,6 +3,8 @@ import jax.numpy as jnp
 import jax.scipy as jscipy
 from jax.scipy.special import sici, erf 
 from hmfast.base_tracer import BaseTracer, HankelTransform
+from hmfast.emulator_eval import Emulator
+from hmfast.halo_model import HaloModel
 from hmfast.defaults import merge_with_defaults
 from hmfast.download import get_default_data_path
 import os
@@ -11,7 +13,6 @@ import numpy as np # it may be a good idea to eventually remove numpy dependence
 _eps = 1e-30
 
 jax.config.update("jax_enable_x64", True)
-
 
 
 
@@ -31,15 +32,15 @@ class GalaxyHODTracer(BaseTracer):
           - M_min_HOD, sigma_log10M_HOD, M0_HOD, M1_prime_HOD, alpha_s_HOD
     """
 
-    def __init__(self, emulator, halo_model, x_grid=None):        
+    def __init__(self, cosmo_model=0, x=None):        
         
-        if x_grid is None:
-            x_grid = jnp.logspace(jnp.log10(1e-4), jnp.log10(20.0), 512)
+        if x is None:
+            x = jnp.logspace(jnp.log10(1e-4), jnp.log10(20.0), 512)
             
-        self.hankel = HankelTransform(x_grid, nu=0.5)
-        self.r_grid = x_grid
-        self.emulator = emulator.cosmo_emulator # cosmology emulator
-        self.halo_model = halo_model
+        self.hankel = HankelTransform(x, nu=0.5)
+        self.r_grid = x
+        self.emulator = Emulator(cosmo_model=cosmo_model)
+        self.halo_model = HaloModel(cosmo_model=cosmo_model)  # Eventually want to allow the user to pass hmf prescription (e.g. T08)
 
     def load_dndz_data(self):
         dndz_path = os.path.join(get_default_data_path(), "auxiliary_files", "normalised_dndz_cosmos_0.txt")

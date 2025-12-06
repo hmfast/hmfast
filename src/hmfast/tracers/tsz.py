@@ -12,20 +12,20 @@ class TSZTracer(BaseTracer):
     """
     tSZ tracer using GNFW profile.
     """
-    def __init__(self, emulator, halo_model=None, x_grid=None):
+    def __init__(self, cosmo_model=0, x=None):
         
-        if x_grid is None:
-            x_grid = jnp.logspace(jnp.log10(1e-4), jnp.log10(20.0), 512)
-        self.x_grid = x_grid
-        self.hankel = HankelTransform(x_grid, nu=0.5)
-        self.emulator = emulator
+        if x is None:
+            x = jnp.logspace(jnp.log10(1e-4), jnp.log10(20.0), 512)
+        self.x = x
+        self.hankel = HankelTransform(x, nu=0.5)
+        self.emulator = Emulator(cosmo_model=0)
 
     def gnfw_pressure_profile(self, z, m, params = None):
         """
         GNFW pressure profile as a function of dimensionless scaled radius x = r/r500.
         """ 
         params = merge_with_defaults(params)
-        x = self.x_grid
+        x = self.x
     
         # Pull needed parameters
         H0, P0, c500, alpha, beta, gamma, B = (params[k] for k in ("H0", "P0GNFW", "c500", "alphaGNFW", "betaGNFW", "gammaGNFW", "B")) 
@@ -67,8 +67,8 @@ class TSZTracer(BaseTracer):
 
     def get_hankel_integrand(self, z, m, params=None):
         params = merge_with_defaults(params)
-        x = self.x_grid
-        x_min, x_max = self.x_grid[0], self.x_grid[-1] # First element in x_grid is the smallest, last is the biggest
+        x = self.x
+        x_min, x_max = x[0], x[-1] # First element in x grid is the smallest, last is the biggest
         W_x = jnp.where((x >= x_min) & (x <= x_max), 1.0, 0.0)
 
         def single_m(m_val):
