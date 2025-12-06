@@ -25,9 +25,14 @@ The recommended way to get started is as follows:
 2. **Import the package and begin:**
 
    You may now import the package. 
-   Since the emulators are large, ``hmfast`` will download them at import if they do not already exist.
-   By default, they will be downloaded to ~/hmfast_data. 
-   If you wish to change this, simply uncomment the first two lines below and set your desired path.
+   ``hmfast`` relies on pre-trained cosmological emulators to quickly compute halo model quantities.  
+
+   Because these emulator files are too large to include in the package distribution, 
+   they will be automatically downloaded the first time you import ``hmfast`` if they are not already present. 
+
+   By default, they are stored in ``~/hmfast_data``.  
+
+   If you want to use a different location for these files, simply uncomment the first two lines below and set your preferred path.
 
    .. code-block:: python
 

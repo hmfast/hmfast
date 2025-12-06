@@ -34,7 +34,6 @@ Below are short examples showing how to call each function and plot the results.
     
     # Create emulator container and redshift array
     emulator = hmfast.emulator_eval.Emulator(cosmo_model=0)
-    z_grid = jnp.linspace(0.05, 20.0, 200)
 
 
 
@@ -45,8 +44,9 @@ Below is an example showing how to compute and plot the Hubble parameter for a r
 
 .. code-block:: python
 
-   H_grid = emulator.get_hubble_at_z(z_grid, params=params_hmfast) * 299792.458
+   H_grid = emulator.get_hubble_at_z(z=jnp.linspace(0.05, 20.0, 200), params=params_hmfast) * 299792.458
 
+    # ------ Plot the results ------
    plt.figure(figsize=(7,4))
    plt.semilogy(z_grid, H_grid, lw=2, label=r"$H(z)$")
    plt.grid(alpha=0.4, linestyle='--')
@@ -69,8 +69,9 @@ Compute and plot the angular diameter distance for the same redshift range.
 
 .. code-block:: python
 
-    dA_grid = emulator.get_angular_distance_at_z(z=z_grid, params=params_hmfast)
+    dA_grid = emulator.get_angular_distance_at_z(z=jnp.linspace(0.05, 20.0, 200), params=params_hmfast)
 
+    # ------ Plot the results ------
     plt.figure(figsize=(7,4))
     plt.plot(z_grid, dA_grid, lw=2, color='C1', label=r"$d_A(z)$")
     plt.grid(alpha=0.4, linestyle='--')
@@ -93,8 +94,9 @@ Compute and plot the angular diameter distance for the same redshift range.
 
 .. code-block:: python
 
-    rho_crit_grid = emulator.get_rho_crit_at_z(z=z_grid, params=params_hmfast)
+    rho_crit_grid = emulator.get_rho_crit_at_z(z=jnp.linspace(0.05, 20.0, 200), params=params_hmfast)
 
+    # ------ Plot the results ------
     plt.figure(figsize=(7,4))
     plt.semilogy(z_grid, rho_crit_grid, lw=2, color='C2', label=r"$\rho_{\rm crit}(z)$")
     plt.grid(alpha=0.4, linestyle='--', which='both')
@@ -116,16 +118,12 @@ Matter power spectrum P(k)
 Below is an example showing how to compute and plot the linear and non-linear matter power spectrum at a given redshift
 
 .. code-block:: python
+    
+    # Linear and non-linear power spectrum at z = 0.5
+    Pk_lin, k_lin = emulator.get_pk_at_z(z=0.5, params=params_hmfast, linear=True)
+    Pk_nl, k_nl = emulator.get_pk_at_z(z=0.5, params=params_hmfast, linear=False)
 
-    # Choose redshift
-    z_pk = 0.5
-    
-    # Linear power spectrum
-    Pk_lin, k_lin = emulator.get_pk_at_z(z_pk, params=params_hmfast, linear=True)
-    
-    # Non-linear power spectrum 
-    Pk_nl, k_nl = emulator.get_pk_at_z(z_pk, params=params_hmfast, linear=False)
-    
+    # ------ Plot the results ------
     plt.figure(figsize=(7,4))
     plt.loglog(k_lin, Pk_lin, lw=2, c="skyblue", label="P_lin(k) at z=0.5")
     plt.loglog(k_nl, Pk_nl, lw=2, c="black", ls=':', label="P_nl(k) at z=0.5")

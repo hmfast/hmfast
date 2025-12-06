@@ -65,7 +65,7 @@ With our halo model defined, we can now compute halo mass and bias functions.
    hbf_z1 = halo_model.get_hbf(z1, m_grid, params=params_hmfast)
    hbf_z2 = halo_model.get_hbf(z2, m_grid, params=params_hmfast)
 
-   # --- Plot the results ---
+   # ------ Plot the results ------
    z_values = [z0, z1, z2]
    hmf_results = [hmf_z0, hmf_z1, hmf_z2]
    hbf_results = [hbf_z0, hbf_z1, hbf_z2]
@@ -138,11 +138,11 @@ You may now easily compute the 1-halo and 2-halo of your tSZ tracer:
    C_ell_yy_1h = halo_model.get_C_ell_1h(tsz_tracer, z_grid, m_grid, ell_grid_tsz, params=params_hmfast)
    C_ell_yy_2h = halo_model.get_C_ell_2h(tsz_tracer, z_grid, m_grid, ell_grid_tsz, params=params_hmfast)
 
-   # --- Convert to D_ell ---
+   # ------ Convert to D_ell ------
    D_ell_yy_1h = ell_grid_tsz * (ell_grid_tsz + 1) * C_ell_yy_1h / (2 * jnp.pi) * 1e12
    D_ell_yy_2h = ell_grid_tsz * (ell_grid_tsz + 1) * C_ell_yy_2h / (2 * jnp.pi) * 1e12
 
-   # --- Plot the results ---
+   # ------ Plot the results ------
    plt.figure()
    plt.loglog(ell_grid_tsz, D_ell_yy_1h, label="1-halo term")
    plt.loglog(ell_grid_tsz, D_ell_yy_2h, label="2-halo term")
@@ -170,7 +170,7 @@ And similarly for your galaxy HOD tracer:
    C_ell_gg_2h = halo_model.get_C_ell_2h(galaxy_hod_tracer, z_grid, m_grid, ell_grid_hod, params=params_hmfast)
 
 
-   # --- Plot the results ---
+   # ------ Plot the results ------
    plt.figure()
    plt.loglog(ell_grid_tsz, C_ell_gg_1h, label="1-halo term")
    plt.loglog(ell_grid_tsz, C_ell_gg_2h, label="2-halo term")
