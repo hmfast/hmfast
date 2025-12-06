@@ -10,6 +10,8 @@ from functools import partial
 from hmfast.halo_fits import MF_T08, BF_T10
 from hmfast.emulator_eval import Emulator
 from hmfast.defaults import merge_with_defaults
+import hmfast.tracers as tracers
+
 
 from mcfit import TophatVar
 jax.config.update("jax_enable_x64", True)
@@ -23,7 +25,7 @@ class HaloModel:
     with automatic differentiation capabilities.
     """
     
-    def __init__(self, cosmo_model, mass_model = MF_T08, bias_model = BF_T10):
+    def __init__(self, cosmo_model=0, mass_model = MF_T08, bias_model = BF_T10):
         """
         Initialize the halo model.
         
@@ -39,6 +41,7 @@ class HaloModel:
         
 
         self.emulator = Emulator(cosmo_model=cosmo_model)
+        self.cosmo_model = cosmo_model
         self.mass_model = mass_model
         self.bias_model = bias_model
 
@@ -47,13 +50,19 @@ class HaloModel:
         self._tophat_instance = partial(TophatVar(dummy_k, lowring=True, backend='jax'), extrap=True)
         self._tophat_instance_dvar = partial(TophatVar(dummy_k, lowring=True, backend='jax', deriv=1))
 
-    def create_tracer(self, tracer, x_grid=None):
+    
+    def create_tracer(self, tracer: str, x=None):
         """
-        Allows the user to create a tracer for this halo model.
-        This forces the cosmology to map that of this object
+        Create a tracer for this HaloModel using a short string name.
+        Supported: "y" (tSZ), "g" (galaxies/HOD)
         """
-        return tracer(emulator=self.emulator, halo_model=self, x_grid=x_grid)
-        
+        if tracer == "y":
+            return tracers.tsz.TSZTracer(cosmo_model=self.cosmo_model, x=x)
+        elif tracer == "g":
+            return tracers.galaxy_hod.GalaxyHODTracer(cosmo_model=self.cosmo_model, x=x)
+        else:
+            raise ValueError(f"Unknown tracer '{tracer}'. Only 'y' (tSZ) and 'g' (galaxies/HOD) are supported.")
+           
     
     def _compute_sigma_grid(self, params = None):
         """
@@ -183,7 +192,11 @@ class HaloModel:
 
 
     @partial(jax.jit, static_argnums=(0, 1))
-    def get_C_ell_1h(self, tracer, z = jnp.geomspace(5e10, 3.5e15, 100), m = jnp.geomspace(0.005, 3.0, 100), ell= jnp.geomspace(1e2, 3.5e3, 50), params = None):
+    def get_C_ell_1h(self, tracer, 
+                           z = jnp.geomspace(5e10, 3.5e15, 100), 
+                           m = jnp.geomspace(0.005, 3.0, 100), 
+                           ell= jnp.geomspace(1e2, 3.5e3, 50),  
+                           params = None):
         """
         Compute the 1-halo term for C_ell.
         """
@@ -219,7 +232,11 @@ class HaloModel:
         return C_ell_1h  
 
     @partial(jax.jit, static_argnums=(0, 1))
-    def get_C_ell_2h(self, tracer, z = jnp.geomspace(5e10, 3.5e15, 100), m = jnp.geomspace(0.005, 3.0, 100), ell= jnp.geomspace(1e2, 3.5e3, 50), params=None):
+    def get_C_ell_2h(self, tracer, 
+                           z = jnp.geomspace(5e10, 3.5e15, 100), 
+                           m = jnp.geomspace(0.005, 3.0, 100), 
+                           ell= jnp.geomspace(1e2, 3.5e3, 50), 
+                           params=None):
         """
         Compute the 2-halo term for C_ell.
         """

@@ -21,8 +21,6 @@ To use the ``HaloModel`` class, you must first instantiate your cosmological par
     import jax
     import jax.numpy as jnp
     import matplotlib.pyplot as plt
-    from hmfast.tracers.galaxy_hod import GalaxyHODTracer
-    from hmfast.tracers.tsz import TSZTracer
     
     
     params_hmfast = {
@@ -122,8 +120,8 @@ If you wish to use a different radial grid, simply create a new tracer with a ne
     x_grid_hod = jnp.logspace(jnp.log10(1e-5), jnp.log10(50.0), 512)
     
     # Add tracers
-    tsz_tracer = halo_model.create_tracer(TSZTracer, x_grid_tsz)
-    galaxy_hod_tracer = halo_model.create_tracer(GalaxyHODTracer, x_grid_hod)
+    tsz_tracer = halo_model.create_tracer("y", x=x_grid_tsz)
+    galaxy_hod_tracer = halo_model.create_tracer("g", x=x_grid_hod)
 
 
 
