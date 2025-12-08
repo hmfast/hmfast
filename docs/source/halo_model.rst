@@ -118,8 +118,9 @@ You may now easily compute the 1-halo and 2-halo of your tSZ tracer:
    C_ell_yy_1h = halo_model.get_C_ell_2h(tsz_tracer, z=jnp.linspace(0.05, 3.0, 100), m=jnp.geomspace(5e10, 3.5e15, 100), ell=jnp.geomspace(2, 8e3, 50), params=params_hmfast)
 
    # ------ Convert to D_ell ------
-   D_ell_yy_1h = ell_grid_tsz * (ell_grid_tsz + 1) * C_ell_yy_1h / (2 * jnp.pi) * 1e12
-   D_ell_yy_2h = ell_grid_tsz * (ell_grid_tsz + 1) * C_ell_yy_2h / (2 * jnp.pi) * 1e12
+   ell = jnp.geomspace(2, 8e3, 50)
+   D_ell_yy_1h = ell * (ell + 1) * C_ell_yy_1h / (2 * jnp.pi) * 1e12
+   D_ell_yy_2h = ell * (ell + 1) * C_ell_yy_2h / (2 * jnp.pi) * 1e12
 
    # ------ Plot the results ------
    plt.figure()
