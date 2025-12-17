@@ -40,6 +40,8 @@ class GalaxyHODTracer(BaseTracer):
         self.hankel = HankelTransform(x, nu=0.5)
         self.r_grid = x
         self.emulator = Emulator(cosmo_model=cosmo_model)
+        self.emulator._load_emulator("DAZ")
+        self.emulator._load_emulator("HZ")
         self.halo_model = HaloModel(cosmo_model=cosmo_model)  # Eventually want to allow the user to pass hmf prescription (e.g. T08)
 
     def load_dndz_data(self):

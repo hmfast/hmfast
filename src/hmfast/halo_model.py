@@ -39,9 +39,13 @@ class HaloModel:
             Bias function to use.
         """
         
-
+        # Load emulator and make sure the required files are loaded outside of jitted functions
         self.emulator = Emulator(cosmo_model=cosmo_model)
         self.cosmo_model = cosmo_model
+        self.emulator._load_emulator("DAZ")
+        self.emulator._load_emulator("HZ")
+        self.emulator._load_emulator("PKL")
+        
         self.mass_model = mass_model
         self.bias_model = bias_model
 
@@ -232,10 +236,10 @@ class HaloModel:
         return C_ell_1h  
 
     @partial(jax.jit, static_argnums=(0, 1))
-    def get_C_ell_2h(self, tracer, 
+    def get_C_ell_2h(self, tracer,
                            z = jnp.geomspace(5e10, 3.5e15, 100), 
                            m = jnp.geomspace(0.005, 3.0, 100), 
-                           ell= jnp.geomspace(1e2, 3.5e3, 50), 
+                           ell = jnp.geomspace(1e2, 3.5e3, 50), 
                            params=None):
         """
         Compute the 2-halo term for C_ell.
@@ -285,5 +289,122 @@ class HaloModel:
         # Integrate over z -> result shape (n_ell,)
         C_ell_2h = jnp.trapezoid(integrand_z, x=z, axis=0)
     
+        return C_ell_2h
+
+
+
+    @partial(jax.jit, static_argnums=(0, 1, 2))
+    def get_C_ell_1h_cross(self, tracer, tracer2=None,
+                           z = jnp.geomspace(5e10, 3.5e15, 100), 
+                           m = jnp.geomspace(0.005, 3.0, 100), 
+                           ell= jnp.geomspace(1e2, 3.5e3, 50),  
+                           params = None):
+        """
+        Compute the 1-halo term for C_ell.
+        If tracer2 is provided, compute cross-spectrum 1-halo using u_ell^A * u_ell^B.
+        If tracer2 is None, behavior is identical to before (uses moment=2 from tracer).
+        """
+        params = merge_with_defaults(params)
+        
+        # Decide whether we're computing a cross-spectrum
+        is_cross = tracer2 is not None
+
+        if is_cross:
+            # get u_ell for both tracers with moment=1 and multiply
+            u_ell_grid_1 = jax.vmap(lambda zp: self.interpolate_tracer(tracer, zp, m, ell, moment=1, params=params)[1])(z)
+            u_ell_grid_2 = jax.vmap(lambda zp: self.interpolate_tracer(tracer2, zp, m, ell, moment=1, params=params)[1])(z)
+            u1u2_grid = u_ell_grid_1 * u_ell_grid_2
+        else:
+            # same as original auto case: use moment=2 to get u^2 directly
+            u1u2_grid = jax.vmap(lambda zp: self.interpolate_tracer(tracer, zp, m, ell, moment=2, params=params)[1])(z)
+
+        dndlnm_grid = jax.vmap(lambda zp: self.get_hmf(zp, m, params=params))(z)
+        comov_vol = self.emulator.get_dVdzdOmega_at_z(z, params=params)
+
+        # Expand grids to align with the shape of `result`
+        dndlnm_grid_expanded = dndlnm_grid[:, :, None]  # Shape becomes (n_z, n_m, 1)
+        comov_vol_expanded = comov_vol[:, None, None]  # Shape becomes (n_z, 1, 1)
+    
+        # integrand shape: (n_z, n_m, n_ell)
+        integrand = u1u2_grid * dndlnm_grid_expanded * comov_vol_expanded
+        
+        logm_grid = jnp.log(m)
+    
+        # Calculate uniform spacings
+        dx_m = logm_grid[1] - logm_grid[0]
+        dx_z = z[1] - z[0]
+    
+        # Function to integrate a single ell slice
+        def integrate_single_ell(integrand_slice):
+            # integrate over m first, then over z
+            partial_m = jnp.trapezoid(integrand_slice, x=logm_grid, dx=dx_m, axis=1)  # shape (n_z,)
+            return jnp.trapezoid(partial_m, x=z, dx=dx_z, axis=0)                  # scalar
+    
+        # Apply vectorized integration along ell axis (axis=2)
+        C_ell_1h = jax.vmap(integrate_single_ell, in_axes=2)(integrand)       
+                
+        return C_ell_1h  
+
+
+    @partial(jax.jit, static_argnums=(0, 1, 2))
+    def get_C_ell_2h_cross(self, tracer, tracer2=None,
+                            z=jnp.geomspace(5e10, 3.5e15, 100),
+                            m=jnp.geomspace(0.005, 3.0, 100),
+                            ell=jnp.geomspace(1e2, 3.5e3, 50),
+                            params=None):
+        """
+        Compute the 2-halo term for C_ell cross-correlation.
+        If tracer2 is provided, compute cross-spectrum 2-halo using
+        (integral dndm b u_A) * (integral dndm b u_B) * P_lin.
+        If tracer2 is None, same as before (auto-spectrum).
+        """
+        params = merge_with_defaults(params)
+        h = params["H0"] / 100
+
+        # Compute mass function and bias
+        dndlnm_grid = jax.vmap(lambda z_: self.get_hmf(z_, m, params=params))(z)  # (n_z, n_m)
+        bias_grid = jax.vmap(lambda z_: self.get_hbf(z_, m, params=params))(z)     # (n_z, n_m)
+
+        # Interpolate u_ell for tracers
+        u_ell_grid_1 = jax.vmap(lambda z_: self.interpolate_tracer(tracer, z_, m, ell, moment=1, params=params)[1])(z)  # (n_z, n_m, n_ell)
+        if tracer2 is None:
+            u_ell_grid_2 = u_ell_grid_1
+        else:
+            u_ell_grid_2 = jax.vmap(lambda z_: self.interpolate_tracer(tracer2, z_, m, ell, moment=1, params=params)[1])(z)
+
+        logm_grid = jnp.log(m)
+
+        # Mass integral for a single z slice
+        def mass_integral_for_z(dndlnm_z, bias_z, u_ell_z):
+            # dndlnm_z: (n_m,), bias_z: (n_m,), u_ell_z: (n_m, n_ell)
+            integrand = dndlnm_z[:, None] * bias_z[:, None] * u_ell_z  # (n_m, n_ell)
+            return jnp.trapezoid(integrand, x=logm_grid, axis=0)       # (n_ell,)
+
+        # Vectorized mass integrals over all z
+        integrals_tr1 = jax.vmap(mass_integral_for_z)(dndlnm_grid, bias_grid, u_ell_grid_1)  # (n_z, n_ell)
+        integrals_tr2 = jax.vmap(mass_integral_for_z)(dndlnm_grid, bias_grid, u_ell_grid_2)  # (n_z, n_ell)
+
+        # Multiply the two mass integrals (auto: squares; cross: product)
+        mass_integral_prod = integrals_tr1 * integrals_tr2  # (n_z, n_ell)
+
+        # Linear power spectrum at k = ell / chi(z)
+        chi_z = jax.vmap(lambda z_: self.emulator.get_angular_distance_at_z(z_, params=params))(z) * (1 + z)
+        k_grid = (ell[None, :] + 0.5) / chi_z[:, None]  # (n_z, n_ell)
+
+        def P_at_k_for_z(z_idx):
+            P_z, ks = self.emulator.get_pk_at_z(z[z_idx], params=params, linear=True)
+            return jnp.interp(k_grid[z_idx], ks, P_z)
+
+        P_lin_at_k = jax.vmap(P_at_k_for_z)(jnp.arange(z.shape[0])) * h**3  # (n_z, n_ell)
+
+        # Comoving volume factor
+        dVdz = self.emulator.get_dVdzdOmega_at_z(z, params=params)  # (n_z,)
+
+        # Multiply all factors
+        integrand_z = mass_integral_prod * P_lin_at_k * dVdz[:, None]  # (n_z, n_ell)
+
+        # Integrate over z
+        C_ell_2h = jnp.trapezoid(integrand_z, x=z, axis=0)  # (n_ell,)
+
         return C_ell_2h
 

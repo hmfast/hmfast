@@ -13,32 +13,29 @@ The recommended way to get started is as follows:
 
       pip install hmfast
 
-   To install the developer version, clone the repository as follows and pip install it locally.
-
-   .. code-block:: bash
-
-      git clone https://github.com/hmfast/hmfast.git
-      pip install /your/path/to/hmfast
+   If you wish to install the developer version, clone the main repo (``https://github.com/hmfast/hmfast``) and pip install it locally.
 
   
 
 2. **Import the package and begin:**
 
    You may now import the package. 
-   ``hmfast`` relies on pre-trained cosmological emulators to quickly compute halo model quantities. 
-   Because these emulator files are too large to include in the package distribution, 
-   they will be automatically downloaded the first time you import ``hmfast`` if they are not already present. 
-
+   ``hmfast`` relies on pre-trained cosmological emulators perform quick calculations.
+   These files are quite large, so ``hmfast`` will automatically download a subset of them at import if they are not already present.
+   
    By default, they are stored in ``~/hmfast_data``.  
 
    If you want to use a different location for these files, simply uncomment the first two lines below and set your preferred path.
+
+   If you want to download all emulators (~1 GB), simply uncomment the last line below.
 
    .. code-block:: python
 
       # import os
       # os.environ["HMFAST_DATA_PATH"] = "path/to/hmfast_data"
       import hmfast
-      
+      # hmfast.download_emulators(models="all")
 
+   
 After these steps, you should be all set to start using ``hmfast``.
 

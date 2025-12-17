@@ -13,12 +13,14 @@ from .halo_model import HaloModel
 from .emulator_load import EmulatorLoader, EmulatorLoaderPCA
 from .emulator_eval import Emulator
 from .tracers.tsz import TSZTracer
+from .tracers.ksz import KSZTracer
+from .tracers.lensing import LensingTracer
 from .tracers.galaxy_hod import GalaxyHODTracer
 from .download import download_emulators
 
 
 
-download_emulators(models="all", skip_existing=True)
+download_emulators(models=["lcdm", "ede-v2"], skip_existing=True)
 
 
 
