@@ -105,24 +105,21 @@ Once you're ready to compute the angular power spectra, you must first instantia
 
 .. code-block:: python
 
-    # Add tracers for some x grid
-    tsz_tracer = halo_model.create_tracer("y", x=jnp.logspace(jnp.log10(1e-4), jnp.log10(20.0), 512))
+    tsz_tracer = halo_model.create_tracer("y")
 
 You may now easily compute the 1-halo and 2-halo of your tSZ tracer:
 
 
 .. code-block:: python
 
-   # --- Define ell grid and compute 1 halo and 2 halo angular power spectrum  ---
    C_ell_yy_1h = halo_model.get_C_ell_1h(tsz_tracer, z=jnp.linspace(0.05, 3.0, 100), m=jnp.geomspace(5e10, 3.5e15, 100), ell=jnp.geomspace(2, 8e3, 50), params=params_hmfast)
-   C_ell_yy_1h = halo_model.get_C_ell_2h(tsz_tracer, z=jnp.linspace(0.05, 3.0, 100), m=jnp.geomspace(5e10, 3.5e15, 100), ell=jnp.geomspace(2, 8e3, 50), params=params_hmfast)
+   C_ell_yy_2h = halo_model.get_C_ell_2h(tsz_tracer, z=jnp.linspace(0.05, 3.0, 100), m=jnp.geomspace(5e10, 3.5e15, 100), ell=jnp.geomspace(2, 8e3, 50), params=params_hmfast)
 
-   # ------ Convert to D_ell ------
+   # ------ Convert to D_ell and plot the results ------
    ell = jnp.geomspace(2, 8e3, 50)
    D_ell_yy_1h = ell * (ell + 1) * C_ell_yy_1h / (2 * jnp.pi) * 1e12
    D_ell_yy_2h = ell * (ell + 1) * C_ell_yy_2h / (2 * jnp.pi) * 1e12
 
-   # ------ Plot the results ------
    plt.figure()
    plt.loglog(ell_grid_tsz, D_ell_yy_1h, label="1-halo term")
    plt.loglog(ell_grid_tsz, D_ell_yy_2h, label="2-halo term")

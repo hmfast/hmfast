@@ -1,12 +1,11 @@
 import os
 import jax
 import jax.numpy as jnp
-from typing import Dict, Any, Optional, Union
-from functools import partial
-from hmfast.emulator_load import EmulatorLoader, EmulatorLoaderPCA 
+from typing import Dict, Union
+from hmfast.emulator_load import EmulatorLoader, EmulatorLoaderPCA
 from hmfast.defaults import merge_with_defaults
 from hmfast.download import get_default_data_path
-# Enable 64-bit precision
+
 jax.config.update("jax_enable_x64", True)
 
 
@@ -21,165 +20,105 @@ _COSMO_MODELS = {
 }
 
 
-
 class Emulator:
     """
-    Container for all emulator types for a given cosmology.
-    Lazily loads individual emulators (Cosmo, Pk, etc.) on demand.
+    Unified, JAX-native, lazily-loaded emulator interface.
     """
 
-    def __init__(self, cosmo_model = 0):
-        
-        self.data_path = get_default_data_path()
+    # ------------------------------------------------------------------
+    # init
+    # ------------------------------------------------------------------
+
+    def __init__(self, cosmo_model: int = 0):
         self.cosmo_model = cosmo_model
+        self._model_info = _COSMO_MODELS[cosmo_model]
 
-        # Lazy-loaded emulator instances. Can add more emulators in the future
-        self._cosmo_emulator = None
-        self._pk_emulator = None
-        
+        self._base_path = os.path.join(
+            get_default_data_path(),
+            self._model_info["subdir"],
+        )
+
+        # atomic emulator cache
+        self._emu = {}
+        # cached grids / derived constants
+        self._z_interp = None
+        self._k_grid = None
+        self._pk_power_fac = None
+
+    # ------------------------------------------------------------------
+    # atomic lazy loader (Python-side only)
+    # ------------------------------------------------------------------
+
+    def _load_emulator(self, key: str):
+        if key in self._emu:
+            return self._emu[key]
     
-    def _lazy_load_emulator(self, attr_name: str, cls):
-        emulator = getattr(self, attr_name)
-        if emulator is None:
-            emulator = cls(cosmo_model=self.cosmo_model)
-            setattr(self, attr_name, emulator)
-        return emulator
-
-    @property
-    def cosmo_emulator(self):
-        return self._lazy_load_emulator("_cosmo_emulator", CosmoEmulator)
-    
-    @property
-    def pk_emulator(self):
-        return self._lazy_load_emulator("_pk_emulator", PkEmulator)
-
-    
-    def __getattr__(self, name):
-        """Delegate attribute access to cosmo_emulator or pk_emulator."""
-        for emulator in (self.cosmo_emulator, self.pk_emulator):
-            if hasattr(emulator, name):
-                return getattr(emulator, name)
-        raise AttributeError(f"'Emulator' object has no attribute '{name}'")
-
-    
-
-
-class CosmoEmulator:
-    """
-    Cosmological emulator with JAX compatibility.
-
-    This class inherits all of BaseEmulator's functionality but is specialised for cosmological calculations,
-    such as H(z), d_A(z), sigma8(z), and other quantities derived from them.
-    """
-    
-    def __init__(self, cosmo_model=0):
-        self.cosmo_model = cosmo_model
-        model_info = _COSMO_MODELS[cosmo_model]
-        self.emulator_path = os.path.join(get_default_data_path(), model_info["subdir"])
-        
-        emulator_dict = {
-            'DAZ': f'DAZ_{model_info["suffix"]}',
-            'HZ': f'HZ_{model_info["suffix"]}',
-            'S8Z': f'S8Z_{model_info["suffix"]}'
+        key_map = {
+            "DAZ":  ("growth-and-distances", EmulatorLoader),
+            "HZ":   ("growth-and-distances", EmulatorLoader),
+            "S8Z":  ("growth-and-distances", EmulatorLoader),
+            "PKL":  ("PK", EmulatorLoader),
+            "PKNL": ("PK", EmulatorLoader),
+            "TT":   ("TTTEEE", EmulatorLoader),
+            "EE":   ("TTTEEE", EmulatorLoader),
+            "TE":   ("TTTEEE", EmulatorLoaderPCA),
+            "PP":   ("PP", EmulatorLoader),
+            "DER":  ("derived-parameters", EmulatorLoader),
         }
-
-        if not os.path.exists(self.emulator_path):
-            raise FileNotFoundError(f"Emulator directory not found: {self.emulator_path}")
-
-        # One-liner dictionary comprehension to load emulators
-        self._emulators = {k: EmulatorLoader(os.path.join(self.emulator_path, "growth-and-distances", v))
-                           for k, v in emulator_dict.items()}
-
-        self._setup_interpolation_grids_post_load()
-        
     
-        
-    def _setup_interpolation_grids_post_load(self):
-        """Set up interpolation grids after emulators are loaded."""
-        
-        # Get z-grid from DAZ emulator (z=1 to z=4999), HZ emulator, and S8Z emulator
-        self.daz_z_grid = jnp.array(self._emulators['DAZ'].modes, dtype=jnp.float64)
-        self.hz_z_grid = jnp.array(self._emulators['HZ'].modes, dtype=jnp.float64) 
-        self.s8z_z_grid = jnp.array(self._emulators['S8Z'].modes, dtype=jnp.float64)
-
-        # Get z-grid from DAZ emulator following classy_szfast.py:271-272
-        self.cp_z_interp_zmax = 20.0
-        self.cp_z_interp = jnp.linspace(0.0, self.cp_z_interp_zmax, 5000, dtype=jnp.float64)
-
+        try:
+            subdir, loader_cls = key_map[key]
+        except KeyError:
+            raise KeyError(f"Unknown emulator key: {key}")
     
-    def _interpolate_z_dependent(self, 
-                                z_requested: Union[float, jnp.ndarray], 
-                                predictions: jnp.ndarray, 
-                                z_grid: jnp.ndarray) -> jnp.ndarray:
-        """
-        Interpolate z-dependent quantities to requested redshifts.
-        
-        Parameters
-        ----------
-        z_requested : float or jnp.ndarray
-            Requested redshift(s)
-        predictions : jnp.ndarray
-            Emulator predictions on z_grid
-        z_grid : jnp.ndarray
-            Redshift grid used for predictions
-            
-        Returns
-        -------
-        jnp.ndarray
-            Interpolated values
-        """
-        # Ensure z_requested is an array and then linearly interpolate
-        z_req = jnp.atleast_1d(z_requested)
-        result = jnp.interp(z_req, z_grid, predictions, left=jnp.nan, right=jnp.nan)
-        
-        # Return scalar if input was scalar
-        if jnp.ndim(z_requested) == 0:
-            return result[0]
-        return result
+        self._emu[key] = loader_cls(os.path.join(self._base_path, subdir, f"{key}_{self._model_info['suffix']}"))
+        return self._emu[key]
 
-    def get_all_cosmo_params(self, params: Dict[str, Union[float, jnp.ndarray]] = None) -> Dict[str, float]:
-        """
-        Get all relevant cosmological parameters.
-                
-        Parameters
-        ----------
-        params : dict, optional
-            Input cosmological parameters
-            
-        Returns
-        -------
-        dict
-            Dictionary with all derived cosmological parameters
-        """
-        if params is None:
-            params = {}
-        
-        p = merge_with_defaults(params)
-        
-        # Derive additional parameters following classy_szfast.py:308-320
-        p['h'] = p['H0'] / 100.0
-        p['Omega_b'] = p['omega_b'] / p['h']**2
-        p['Omega_cdm'] = p['omega_cdm'] / p['h']**2
-        
-        # Radiation density (following classy_szfast calculation)
-        sigma_B = 5.6704004737209545e-08  # Stefan-Boltzmann constant
-        p['Omega0_g'] = (4.0 * sigma_B / 2.99792458e10 * (p['T_cmb']**4)) / (3.0 * 2.99792458e10**2 * 1.0e10 * p['h']**2 / 8.262056120185e-10 / 8.0 / jnp.pi / 6.67430e-11)
-        p['Omega0_ur'] = p['N_ur'] * 7.0/8.0 * (4.0/11.0)**(4.0/3.0) * p['Omega0_g']
-        p['Omega0_ncdm'] = p['deg_ncdm'] * p['m_ncdm'] / (93.14 * p['h']**2)
-        p['Omega_Lambda'] = 1.0 - p['Omega0_g'] - p['Omega_b'] - p['Omega_cdm'] - p['Omega0_ncdm'] - p['Omega0_ur']
-        p['Omega0_m'] = p['Omega_cdm'] + p['Omega_b'] + p['Omega0_ncdm']
-        p['Omega0_r'] = p['Omega0_ur'] + p['Omega0_g']
-        p['Omega0_m_nonu'] = p['Omega0_m'] - p['Omega0_ncdm']
-        p['Omega0_cb'] = p['Omega0_m_nonu']
-        
-        # Critical density (corrected to match standard cosmological value)
-        # Using standard value: ρ_crit = 2.78e11 h^2 Msun/h per (Mpc/h)^3
-        p['Rho_crit_0'] = 2.77528234822e11 * p['h']**2  
-        
-        return p
+    # ------------------------------------------------------------------
+    # shared grids (lazy, cached)
+    # ------------------------------------------------------------------
 
-        
-    
+    def _get_z_interp(self):
+        return jnp.linspace(0.0, 20.0, 5000, dtype=jnp.float64)
+
+    def _setup_pk_grid(self):
+        if self._k_grid is not None:
+            return
+
+        is_ede_v2 = (self.cosmo_model == 6)
+
+        self.cp_ndspl_k = 1 if is_ede_v2 else 10
+        self.cp_nk      = 1000 if is_ede_v2 else 5000
+
+        emu = self._load_emulator("PKL")
+        n_k = len(emu.modes)
+
+        k_min = 5e-4 if is_ede_v2 else 1e-4
+        k_max = 10.0 if is_ede_v2 else 50.0
+
+        self._k_grid = jnp.geomspace(k_min, k_max, n_k, dtype=jnp.float64)
+
+        if is_ede_v2:
+            self._pk_power_fac = self._k_grid ** (-3)
+        else:
+            ls = jnp.arange(2,self.cp_nk+2)[::self.cp_ndspl_k] # jan 10 ndspl
+            self._pk_power_fac= (ls*(ls+1.)/2./jnp.pi)**-1
+
+    # ------------------------------------------------------------------
+    # JAX-safe helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _interp_z(z, z_grid, values):
+        z = jnp.atleast_1d(z)
+        out = jnp.interp(z, z_grid, values, left=jnp.nan, right=jnp.nan)
+        return out[0] if out.shape[0] == 1 else out
+
+
+    # ------------------------------------------------------------------
+    # Cosmology
+    # ------------------------------------------------------------------
+
     def get_hubble_at_z(self, z, params=None):
         """
         Get Hubble parameter at redshift z.
@@ -197,13 +136,10 @@ class CosmoEmulator:
             Hubble parameter(s) in Mpc^(-1)
         """
         
-        # Merge parameters with defaults and get predictions on full grid. 
-        merged_params = merge_with_defaults(params)
-        hz_predictions = 10**self._emulators['HZ'].predictions(merged_params)
-        
-        # Interpolate to requested redshifts
-        return self._interpolate_z_dependent(z, hz_predictions, self.cp_z_interp)
-        
+        params = merge_with_defaults(params)
+        emu = self._load_emulator("HZ")
+        preds = 10.0 ** emu.predictions(params)
+        return self._interp_z(z, self._get_z_interp(), preds)
 
     def get_angular_distance_at_z(self, z, params=None):
         """
@@ -221,19 +157,16 @@ class CosmoEmulator:
         jnp.ndarray
             Angular diameter distance(s) in Mpc
         """
-
-        # Merge parameters with defaults and get predictions on full grid. 
-        merged_params = merge_with_defaults(params)
-        da_predictions = self._emulators['DAZ'].predictions(merged_params)
-
-        # If we're dealing with EDE-v2, we need to convert from log and add an extra element to the array due to size differences in the emulators
-        if self.cosmo_model == 6:
-            da_predictions = 10.0**da_predictions  
-            da_predictions = jnp.insert(da_predictions, 0, 0.0)
         
-        # Interpolate to requested redshifts
-        return self._interpolate_z_dependent(z, da_predictions, self.cp_z_interp)
+        params = merge_with_defaults(params)
+        emu = self._load_emulator("DAZ")
+        preds = emu.predictions(params)
 
+        if self.cosmo_model == 6:
+            preds = 10.0 ** preds
+            preds = jnp.insert(preds, 0, 0.0)
+
+        return self._interp_z(z, self._get_z_interp(), preds)
 
     def get_sigma8_at_z(self, z, params=None):
         """
@@ -251,13 +184,50 @@ class CosmoEmulator:
         jnp.ndarray
             sigma8 value(s)
         """
+        params = merge_with_defaults(params)
+        emu = self._load_emulator("S8Z")
+        preds = emu.predictions(params)
+        return self._interp_z(z, self._get_z_interp(), preds)
 
-        # Merge parameters with defaults and get predictions on full grid. 
-        merged_params = merge_with_defaults(params)        
-        s8_predictions = self._emulators['S8Z'].predictions(merged_params)
+
+    def get_all_cosmo_params(self, params = None):
+        """
+        Get all relevant cosmological parameters.
+                
+        Parameters
+        ----------
+        params : dict, optional
+            Input cosmological parameters
+            
+        Returns
+        -------
+        dict
+            Dictionary with all derived cosmological parameters
+        """
+    
+        p = merge_with_defaults(params)
         
-        # Interpolate to requested redshifts
-        return self._interpolate_z_dependent(z, s8_predictions, self.cp_z_interp)
+        # Derive additional parameters following classy_szfast.py:308-320
+        p['h'] = p['H0'] / 100.0
+        p['Omega_b'] = p['omega_b'] / p['h']**2
+        p['Omega_cdm'] = p['omega_cdm'] / p['h']**2
+        
+        # Radiation density 
+        sigma_B = 5.6704004737209545e-08  # Stefan-Boltzmann constant
+        p['Omega0_g'] = (4.0 * sigma_B / 2.99792458e10 * (p['T_cmb']**4)) / (3.0 * 2.99792458e10**2 * 1.0e10 * p['h']**2 / 8.262056120185e-10 / 8.0 / jnp.pi / 6.67430e-11)
+        p['Omega0_ur'] = p['N_ur'] * 7.0/8.0 * (4.0/11.0)**(4.0/3.0) * p['Omega0_g']
+        p['Omega0_ncdm'] = p['deg_ncdm'] * p['m_ncdm'] / (93.14 * p['h']**2)
+        p['Omega_Lambda'] = 1.0 - p['Omega0_g'] - p['Omega_b'] - p['Omega_cdm'] - p['Omega0_ncdm'] - p['Omega0_ur']
+        p['Omega0_m'] = p['Omega_cdm'] + p['Omega_b'] + p['Omega0_ncdm']
+        p['Omega0_r'] = p['Omega0_ur'] + p['Omega0_g']
+        p['Omega0_m_nonu'] = p['Omega0_m'] - p['Omega0_ncdm']
+        p['Omega0_cb'] = p['Omega0_m_nonu']
+        
+        # Critical density (corrected to match standard cosmological value)
+        # Using standard value: ρ_crit = 2.78e11 h^2 Msun/h per (Mpc/h)^3
+        p['Rho_crit_0'] = 2.77528234822e11 * p['h']**2  
+        
+        return p
 
 
     def get_rho_crit_at_z(self, z, params=None):
@@ -276,8 +246,9 @@ class CosmoEmulator:
         jnp.ndarray
             Critical density(s) in (Msun/h) / (Mpc/h)^3
         """
-        # Get Hubble parameter
         
+        params = merge_with_defaults(params)
+        # Get Hubble parameter    
         H_z = self.get_hubble_at_z(z, params)
         h = (params["H0"]/100)
         
@@ -294,6 +265,7 @@ class CosmoEmulator:
         
         For Δ_crit = 200, we typically get Δ_mean ≈ 200 * Ω_m(z) / Ω_m(0)
         """
+        
         params = self.get_all_cosmo_params(params)
                 
         om0, om0_nonu, or0, ol0 = params['Omega0_m'], params['Omega0_m_nonu'], params['Omega0_r'], params['Omega_Lambda']
@@ -322,7 +294,6 @@ class CosmoEmulator:
         float
             Radius r_delta (e.g., R_200) within which the average density equals delta * rho_crit(z).
         """
-        
         rho_crit = self.get_rho_crit_at_z(z,params=params)
         return (3.0 * m_delta / (4.0 * jnp.pi * delta * rho_crit))**(1./3.)
 
@@ -352,71 +323,12 @@ class CosmoEmulator:
    
 
     def z_grid(self) -> jnp.ndarray:
-        """
-        Return the redshift grid used by emulators (following classy_sz interface).
-        
-        Returns
-        -------
-        jnp.ndarray
-            Redshift grid from 0 to 20
-        """
-        return self.cp_z_interp
+        return self._get_z_interp()
    
 
-
-class PkEmulator:
-    """
-    Cosmological emulator with JAX compatibility.
-    
-    Provides fast emulated predictions for matter power spectra P(k)
-    using the CosmoPower emulators.
-    """
-     
-    
-    def __init__(self, cosmo_model=0):
-        self.cosmo_model = cosmo_model
-        model_info = _COSMO_MODELS[cosmo_model]
-        self.emulator_path = os.path.join(get_default_data_path(), model_info["subdir"])
-
-        emulator_dict = {
-            'PKNL': f'PKNL_{model_info["suffix"]}',
-            'PKL': f'PKL_{model_info["suffix"]}'
-        }
-
-        if not os.path.exists(self.emulator_path):
-            raise FileNotFoundError(f"Emulator directory not found: {self.emulator_path}")
-
-        self._emulators = {k: EmulatorLoader(os.path.join(self.emulator_path, "PK", v))
-                           for k, v in emulator_dict.items()}
-
-        self._setup_interpolation_grids_post_load()
-
-        
-   
-
-    def _setup_interpolation_grids_post_load(self):
-
-        is_ede_v2 = (self.cosmo_model == 6)
-
-        self.cp_ndspl_k = 1 if is_ede_v2 else 10
-        self.cp_nk      = 1000 if is_ede_v2 else 5000
-       
-        # Original modes are just indices, need to construct actual k values
-        n_k = len(self._emulators['PKL'].modes)  # Get number of k points from emulator
-        k_min = 5e-4 if is_ede_v2 else 1e-4
-        k_max = 10.0 if is_ede_v2 else 50.0       
-        self.k_grid = jnp.geomspace(k_min, k_max, n_k, dtype=jnp.float64)
-        
-        # P(k) scaling factor 
-        if is_ede_v2:
-            self.pk_power_fac = self.k_grid**(-3)  # k^(-_interpolate_z_dependent3) factor
-        else:
-            ls = jnp.arange(2,self.cp_nk+2)[::self.cp_ndspl_k] # jan 10 ndspl
-            self.pk_power_fac= (ls*(ls+1.)/2./jnp.pi)**-1
-        
-        # Maximum redshift for power spectrum grid
-        self.pk_grid_zmax = 4999.0
-
+    # ------------------------------------------------------------------
+    # Matter power spectra
+    # ------------------------------------------------------------------
 
     def get_pk_at_z(self, z, params=None, linear=True):
         """
@@ -437,23 +349,60 @@ class PkEmulator:
             Power spectrum and k array
         """
         
-        merged_params = merge_with_defaults(params)
-        
-        # Add redshift to parameters for prediction
-        z_val = jnp.atleast_1d(z)[0] if hasattr(z, '__len__') else z
-        merged_params['z_pk_save_nonclass'] = z_val  # Remove float() conversion for JAX compatibility
+        params = merge_with_defaults(params)
+        params["z_pk_save_nonclass"] = jnp.atleast_1d(z)[0]
 
-        #if z_val > self.pk_grid_zmax:   # this leads to a boolean tracer error, so we'll need to find a different way to enforce this
-        #    raise ValueError(f"Redshift z={z_val:.3f} exceeds maximum training redshift z_max={self.pk_grid_zmax:.1f}")
-     
-        # Direct prediction returns log10(P(k))
-        key = 'PKL' if linear else 'PKNL'
-        pk_log = self._emulators[key].predictions(merged_params)
-       
-        # Convert to linear scale and apply scaling factor 
-        pk = 10.0**pk_log * self.pk_power_fac
+        key = "PKL" if linear else "PKNL"
+        emu = self._load_emulator(key)
+
+        self._setup_pk_grid()
+
+        pk_log = emu.predictions(params)
+        pk = 10.0 ** pk_log * self._pk_power_fac
+
+        return pk, self._k_grid
+
+    # ------------------------------------------------------------------
+    # CMB
+    # ------------------------------------------------------------------
+
+    def get_cmb_dls(self, params=None, lmax=10000):
+        params = merge_with_defaults(params)
+
+        tt = self._load_emulator("TT").ten_to_predictions(params)
+        ee = self._load_emulator("EE").ten_to_predictions(params)
+        te = self._load_emulator("TE").predictions(params)
+        pp = self._load_emulator("PP").ten_to_predictions(params)
+
+        n = min(len(tt), len(ee), len(te), len(pp), lmax - 1)
+        ell = jnp.arange(2, n + 2)
+
+        return {
+            "ell": ell,
+            "tt": tt[:n],
+            "ee": ee[:n],
+            "te": te[:n],
+            "pp": pp[:n] / (2 * jnp.pi),
+        }
+
         
-        return pk, self.k_grid
-    
-   
-    
+    # ------------------------------------------------------------------
+    # Derived parameters
+    # ------------------------------------------------------------------
+
+    def get_derived_parameters(self, params=None):
+        params = merge_with_defaults(params)
+        emu = self._load_emulator("DER")
+        preds = emu.predictions(params)
+
+        names = [
+            "100*theta_s", "sigma8", "YHe", "z_reio", "Neff",
+            "tau_rec", "z_rec", "rs_rec", "ra_rec",
+            "tau_star", "z_star", "rs_star", "ra_star", "rs_drag",
+        ]
+
+        out = {n: preds[i] for i, n in enumerate(names) if i < len(preds)}
+        out["h"] = params["H0"] / 100.0
+        out["Omega_m"] = (params["omega_b"] + params["omega_cdm"]) / out["h"]**2
+
+        return out

@@ -18,7 +18,11 @@ class TSZTracer(BaseTracer):
             x = jnp.logspace(jnp.log10(1e-4), jnp.log10(20.0), 512)
         self.x = x
         self.hankel = HankelTransform(x, nu=0.5)
+
+        # Load emulator and make sure the required files are loaded outside of jitted functions
         self.emulator = Emulator(cosmo_model=0)
+        self.emulator._load_emulator("DAZ")
+        self.emulator._load_emulator("HZ")
 
     def gnfw_pressure_profile(self, z, m, params = None):
         """
