@@ -13,8 +13,8 @@ from .halo_model import HaloModel
 from .emulator_load import EmulatorLoader, EmulatorLoaderPCA
 from .emulator_eval import Emulator
 from .tracers.tsz import TSZTracer
-from .tracers.ksz import KSZTracer
-from .tracers.lensing import LensingTracer
+from .tracers.cmb_lensing import CMBLensingTracer
+from .tracers.galaxy_lensing import GalaxyLensingTracer
 from .tracers.galaxy_hod import GalaxyHODTracer
 from .download import download_emulators
 

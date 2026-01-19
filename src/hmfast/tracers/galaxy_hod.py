@@ -19,17 +19,15 @@ jax.config.update("jax_enable_x64", True)
 class GalaxyHODTracer(BaseTracer):
     """
     Galaxy HOD tracer implementing central + satellite occupation and
-    NFW satellites. Implements the formalism described in Kusiak et al (2003)
+    NFW satellites. Implements the formalism described in Kusiak et al (2023)
     Link to paper: https://arxiv.org/pdf/2203.12583
 
     Parameters
     ----------
     emulator : 
         Cosmological emulator used to compute cosmological quantities
-    params : dict
-        Dictionary of parameters. 
-        Relevant keys:
-          - M_min_HOD, sigma_log10M_HOD, M0_HOD, M1_prime_HOD, alpha_s_HOD
+    x : array
+        The x array used to define the radial profile over which the tracer will be evaluated
     """
 
     def __init__(self, cosmo_model=0, x=None):        
@@ -141,13 +139,12 @@ class GalaxyHODTracer(BaseTracer):
     def get_u_m_ell(self, z, m, params = None):
         """
         This function calculates u_ell^m(z, M) via the analytic method described in Kusiak et al (2023).
-        As of November 2025, the jax.scipy.special.sici functions are not well behaved for large inputs.
-        As a result, we will shelve this method for now until the next stable JAX release.
+        Due to a bug in the initial implementation of SiCi, this will only work for JAX v0.8.2 and above.
         """
         params = merge_with_defaults(params)
         m = jnp.atleast_1d(m) 
 
-        x_min = 1e-4
+        x_min = 1e-8
         x = jnp.clip(self.x, a_min=x_min)
 
         c_200c = self.c_Duffy2008(z, m)
@@ -216,55 +213,3 @@ class GalaxyHODTracer(BaseTracer):
         return ell, u_ell
   
         
-
-    # This code is for the Hankel transform. We may be able to remove it once JAX resolved the bugs in SiCi  
-    #def _nfw_profile(self, r, r_s, rho_s, r_out):
-    #    x = r / r_s
-    #    rho = rho_s / (x * (1 + x)**2)
-    #    return jnp.where(r <= r_out, rho, 0.0)
-
-    #def _rho_s_from_M(self, M, r_s, c):
-    #    return M / (4.0 * jnp.pi * r_s**3 * (jnp.log1p(c) - c / (1 + c)) + 1e-30)
-
-    #def get_u_m_ell_alt(self, z, m_array, lambda_val=1.0, params=None):
-    #    params = merge_with_defaults(params)
-    #    m_array = jnp.atleast_1d(m_array)
-    
-        # compute halo quantities
-    #    r200c = self.emulator.get_r_delta_of_m_delta_at_z(200, m_array, z, params=params)
-    #    c200c = self.c_Duffy2008(z, m_array)
-    #    r_s = r200c / c200c
-    #    r_out = lambda_val * r200c
-    
-        # avoid zero radius
-    #    x_min = 1e-4
-    #    x = jnp.clip(self.x, a_min=x_min)
-    
-    #    rho_s = jax.vmap(self._rho_s_from_M)(m_array, r_s, jnp.full_like(m_array, c200c))
-    
-        # integrand for Hankel
-    #    def integrand_single(r_s_i, rho_s_i, r_out_i):
-    #        rho_r = self._nfw_profile(x, r_s_i, rho_s_i, r_out_i)
-    #        return 4 * jnp.pi * x**2 * rho_r
-    
-    #    integrand = jax.vmap(integrand_single)(r_s, rho_s, r_out)
-    
-        # Hankel transform
-    #    k, u_k = self.hankel.transform(integrand)
-    #    u_k *= jnp.sqrt(jnp.pi / (2 * k[None, :]))
-
-    #    jax.debug.print("hankel k[0:5]: {}", k[0:5])
-        
-        # normalize so u(k→0) = 1
-    #    u_k /= u_k[:, 0:1]
-    
-        # scale to ell
-    #    chi = self.emulator.get_angular_distance_at_z(z, params=params) * (1+z) * params["H0"]/100
-    #    chi = jnp.atleast_1d(chi)
-    #    ell = k[None, :] * chi
-    #    N_m = m_array.shape[0]
-    #    ell = jnp.broadcast_to(ell, (N_m, k.shape[0]))
-    
-    #    return ell, u_k 
-
-    
