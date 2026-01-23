@@ -67,8 +67,8 @@ class HaloModel:
         else:
             raise ValueError(f"Unknown tracer '{tracer}'. Only 'y' (tSZ) and 'g' (galaxies/HOD) are supported.")
            
-    
-    def _compute_sigma_grid(self, params = None):
+
+    def _compute_hmf_grid(self, params = None):
         """
         Compute σ(R, z) for use in halo mass function and bias.
         Returns:
@@ -76,56 +76,44 @@ class HaloModel:
             sigma : array_like, σ(R, z) values
         """
 
-        z_grid = self.emulator.z_grid()
+        z_grid = jnp.linspace(0.0, 8.0, 250) #self.emulator.z_grid() # May need to modify this
         cparams = self.emulator.get_all_cosmo_params(params)   # Merge with defaults using get_all_cosmo_params()
-        h = cparams["h"]
-        
+        h, delta = cparams["h"], params['delta'] 
+       
         # Power spectra for all redshifts
         P = jax.vmap(lambda zp: self.emulator.get_pk_at_z(zp, params=params, linear=True)[0].flatten())(z_grid).T
-    
-        # Compute σ²(R, z)
+        
+        # Compute σ²(R, z) and dσ²/dR using TophatVar
+        _, ks = self.emulator.get_pk_at_z(1.0, params=params, linear=True)
         R_grid, var = jax.vmap(self._tophat_instance, in_axes=1, out_axes=(None, 0))(P)
-        sigma_grid = jnp.sqrt(var)
+        dvar_grid = jax.vmap(lambda pks_col: self._tophat_instance_dvar(pks_col * ks, extrap=True)[1], in_axes=1)(P) 
 
+        # Take square root as the log for numerical stability, though we need sigma_grid for the hmf/hbf calcs
+        ln_sigma_grid = 0.5*jnp.log(var)    
+        sigma_grid = jnp.exp(ln_sigma_grid)
+        
          # Mass grid
         rho_crit_0 = cparams["Rho_crit_0"] / h**2
         omega0_cb = (params['omega_cdm'] + params['omega_b']) / h**2
         M_grid = 4.0 * jnp.pi / 3.0 * omega0_cb * rho_crit_0 * (R_grid**3) * h**3
-
-        self._sigma_interp = jscipy.interpolate.RegularGridInterpolator((jnp.log(1. + z_grid), jnp.log(M_grid)), jnp.log(sigma_grid))
-        return R_grid, sigma_grid, z_grid, M_grid
-
-
-    def _compute_hmf_grid(self, params = None):
-        """
-        Compute halo mass function grid dndlnm(R, z)
-        """
-        emulator = self.emulator 
-        h, delta = params['H0']/100, params['delta'] 
-    
-        # Get sigma(R, z) and radius grid
-        R_grid, sigma_grid, z_grid, M_grid = self._compute_sigma_grid(params=params)  # shape: (n_R,), (n_R, n_z)
-    
-        # Compute derivative dσ²/dR using TophatVar
-        _, ks = emulator.get_pk_at_z(1.0, params=params, linear=True)
-        P = jax.vmap(lambda zp: emulator.get_pk_at_z(zp, params=params, linear=True)[0].flatten())(z_grid).T
-        dvar_grid = jax.vmap(lambda pks_col: self._tophat_instance_dvar(pks_col * ks, extrap=True)[1], in_axes=1)(P) 
     
         # Compute overdensity threshold and then the HMF
         delta_mean = self.emulator.get_delta_mean_from_delta_crit_at_z(delta, z_grid, params=params)
         hmf_grid = self.mass_model(sigma_grid, z_grid, delta_mean)
-        
-        # Compute derivative dlnν/dlnR and convert to dndlnm
-        dlnnudlnR_grid = -dvar_grid * R_grid / sigma_grid**2
-        dndlnm_grid = dlnnudlnR_grid * hmf_grid / (4.0 * jnp.pi * R_grid**3 * h**3)
 
-        self._hmf_interp = jscipy.interpolate.RegularGridInterpolator((jnp.log(1. + z_grid), jnp.log(M_grid)), jnp.log(dndlnm_grid))
+        # Compute d n / d ln(M) using d ln(nu) / d ln(R) 
+        dlnnu_dlnR_grid = - dvar_grid * R_grid / jnp.exp(2. * ln_sigma_grid)
+        dn_dlnM_grid = dlnnu_dlnR_grid * hmf_grid  / (4.0 * jnp.pi * R_grid**3 * h**3)
+
+        # Also store the z and M grids to interpolate later on
+        ln_x = jnp.log(1. + z_grid)
+        ln_M = jnp.log(M_grid)
         
-        return dndlnm_grid
-        
-        
+        return ln_x, ln_M, dn_dlnM_grid, sigma_grid
+
+
     @partial(jax.jit, static_argnums=(0,))
-    def get_hmf(self, z = jnp.geomspace(5e10, 3.5e15, 100), m = jnp.geomspace(0.005, 3.0, 100), params = None) -> jnp.ndarray:
+    def get_hmf(self, z = jnp.geomspace(0.005, 3.0, 100), m = jnp.geomspace(5e10, 3.5e15, 100), params = None) -> jnp.ndarray:
         """
         Compute the halo mass function.
         
@@ -143,12 +131,15 @@ class HaloModel:
 
         # Compute the hmf values which sets up the interpolator
         params = merge_with_defaults(params)
-        self._compute_hmf_grid(params=params)
-        hmf = jnp.exp(self._hmf_interp((jnp.log(1.+z), jnp.log(m))))
+        ln_x, ln_M, dn_dlnM_grid, _ = self._compute_hmf_grid(params=params)
+
+        _hmf_interp = jscipy.interpolate.RegularGridInterpolator((ln_x, ln_M), dn_dlnM_grid)
+        hmf = _hmf_interp((jnp.log(1.+z), jnp.log(m)))
         return hmf
-    
+
+
     @partial(jax.jit, static_argnums=(0,))
-    def get_hbf(self, z = jnp.geomspace(5e10, 3.5e15, 100), m = jnp.geomspace(0.005, 3.0, 100), params = None) -> jnp.ndarray:
+    def get_hbf(self, z = jnp.geomspace(0.005, 3.0, 100), m = jnp.geomspace(5e10, 3.5e15, 100), params = None) -> jnp.ndarray:
         """
         Compute the halo bias function.
         
@@ -168,8 +159,10 @@ class HaloModel:
     
         # Compute the sigma values which sets up the interpolator
         params = merge_with_defaults(params)
-        self._compute_sigma_grid(params = params)
-        sigma_M = jnp.exp(self._sigma_interp((jnp.log(1.+z), jnp.log(m))))
+        ln_x, ln_M, _, sigma_grid = self._compute_hmf_grid(params=params)
+
+        _sigma_interp = jscipy.interpolate.RegularGridInterpolator((ln_x, ln_M), jnp.log(sigma_grid))
+        sigma_M = jnp.exp(_sigma_interp((jnp.log(1.+z), jnp.log(m))))
 
         # Get the delta_mean values and pass it to the bias model
         delta_mean = self.emulator.get_delta_mean_from_delta_crit_at_z(params["delta"], z, params=params)
@@ -197,9 +190,9 @@ class HaloModel:
 
     @partial(jax.jit, static_argnums=(0, 1))
     def get_C_ell_1h(self, tracer, 
-                           z = jnp.geomspace(5e10, 3.5e15, 100), 
-                           m = jnp.geomspace(0.005, 3.0, 100), 
-                           ell= jnp.geomspace(1e2, 3.5e3, 50),  
+                           z = jnp.geomspace(0.005, 3.0, 100), 
+                           m = jnp.geomspace(5e10, 3.5e15, 100), 
+                           ell = jnp.geomspace(1e2, 3.5e3, 50),  
                            params = None):
         """
         Compute the 1-halo term for C_ell.
@@ -237,8 +230,8 @@ class HaloModel:
 
     @partial(jax.jit, static_argnums=(0, 1))
     def get_C_ell_2h(self, tracer,
-                           z = jnp.geomspace(5e10, 3.5e15, 100), 
-                           m = jnp.geomspace(0.005, 3.0, 100), 
+                           z = jnp.geomspace(0.005, 3.0, 100), 
+                           m = jnp.geomspace(5e10, 3.5e15, 100), 
                            ell = jnp.geomspace(1e2, 3.5e3, 50), 
                            params=None):
         """
@@ -295,8 +288,8 @@ class HaloModel:
 
     @partial(jax.jit, static_argnums=(0, 1, 2))
     def get_C_ell_1h_cross(self, tracer, tracer2=None,
-                           z = jnp.geomspace(5e10, 3.5e15, 100), 
-                           m = jnp.geomspace(0.005, 3.0, 100), 
+                           z = jnp.geomspace(0.005, 3.0, 100), 
+                           m = jnp.geomspace(5e10, 3.5e15, 100), 
                            ell= jnp.geomspace(1e2, 3.5e3, 50),  
                            params = None):
         """
@@ -348,10 +341,10 @@ class HaloModel:
 
     @partial(jax.jit, static_argnums=(0, 1, 2))
     def get_C_ell_2h_cross(self, tracer, tracer2=None,
-                            z=jnp.geomspace(5e10, 3.5e15, 100),
-                            m=jnp.geomspace(0.005, 3.0, 100),
-                            ell=jnp.geomspace(1e2, 3.5e3, 50),
-                            params=None):
+                            z = jnp.geomspace(0.005, 3.0, 100), 
+                            m = jnp.geomspace(5e10, 3.5e15, 100), 
+                            ell = jnp.geomspace(1e2, 3.5e3, 50),
+                            params = None):
         """
         Compute the 2-halo term for C_ell cross-correlation.
         If tracer2 is provided, compute cross-spectrum 2-halo using
