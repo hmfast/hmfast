@@ -132,7 +132,7 @@ class GalaxyLensingTracer(BaseTracer):
             (H0/c_km_s)**2 / h**2 *
             (1 + z) / chi_z  *
             I_g 
-        )
+        ) 
 
     
         return W_kappa_g 
@@ -166,9 +166,10 @@ class GalaxyLensingTracer(BaseTracer):
         dummy_profile = jnp.ones_like(x)
         k, _ = self.hankel.transform(dummy_profile)
 
-        rho_crit_0 = cparams["Rho_crit_0"] 
+        Omega_m = cparams["Omega0_m"]
+        rho_mean_0 = cparams["Rho_crit_0"] * Omega_m / h**2    # Convert rho_crit in  M_sun/Mpc^3 to rho_mean in (M_sun/h)/(Mpc/h^3) 
 
-        m_over_rho_crit = jnp.broadcast_to((m / rho_crit_0)[:, None], (m.shape[0], k.shape[0])) 
+        m_over_rho_mean = jnp.broadcast_to((m / rho_mean_0)[:, None], (m.shape[0], k.shape[0])) 
         
         chi = self.emulator.get_angular_distance_at_z(z, params=params) * (1.0 + z) * h
         ell = k * chi - 0.5
@@ -192,7 +193,7 @@ class GalaxyLensingTracer(BaseTracer):
         
         u_ell_m =  (   jnp.cos(q) * (Ci_q_scaled - Ci_q) 
                     +  jnp.sin(q) * (Si_q_scaled - Si_q) 
-                    -  jnp.sin(lambda_val * c_mat * q) / q_scaled ) * f_nfw_val * m_over_rho_crit 
+                    -  jnp.sin(lambda_val * c_mat * q) / q_scaled ) * f_nfw_val * m_over_rho_mean 
         
 
         return ell, u_ell_m

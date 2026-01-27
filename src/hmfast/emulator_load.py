@@ -18,21 +18,21 @@ jax.config.update("jax_enable_x64", True)
 
 class EmulatorLoader:
     """
-    Pure JAX neural network restoration class.
+    Pure JAX neural network loader class.
     Loads cosmopower-style .npz files without any tensorflow dependencies.
     """
     
-    def __init__(self, restore_filename: str):
+    def __init__(self, filename: str):
         """
         Initialize neural network from saved .npz file.
         
         Parameters
         ----------
-        restore_filename : str
+        filename : str
             Path to the .npz file containing model weights
         """
-        self.restore_filename = restore_filename
-        self.restore(restore_filename)
+        self.filename = filename
+        self.load(filename)
         
         # Convert to JAX arrays for efficient computation
         self.parameters_mean = jnp.array(self.parameters_mean_, dtype=jnp.float64)
@@ -46,7 +46,7 @@ class EmulatorLoader:
         self.alphas_ = [jnp.array(alpha, dtype=jnp.float64) for alpha in self.alphas_]
         self.betas_ = [jnp.array(beta, dtype=jnp.float64) for beta in self.betas_]
     
-    def restore(self, filename: str) -> None:
+    def load(self, filename: str) -> None:
         """
         Load pre-trained model from .npz file.
         
@@ -57,7 +57,7 @@ class EmulatorLoader:
         """
         filename_npz = filename + ".npz"
         if not os.path.exists(filename_npz):
-            raise IOError(f"Failed to restore network from {filename}: does not exist.")
+            raise IOError(f"Failed to load network from {filename}: does not exist.")
         
         with open(filename_npz, "rb") as fp:
             fpz = np.load(fp, allow_pickle=True)["arr_0"].flatten()[0]
@@ -184,17 +184,17 @@ class EmulatorLoaderPCA:
     No tensorflow dependencies.
     """
     
-    def __init__(self, restore_filename: str):
+    def __init__(self, filename: str):
         """
         Initialize PCA+NN model from saved .npz file.
         
         Parameters
         ----------
-        restore_filename : str
+        filename : str
             Path to the .npz file containing model weights
         """
-        self.restore_filename = restore_filename
-        self.restore(restore_filename)
+        self.filename = filename
+        self.load(filename) 
         
         # Convert to JAX arrays
         self.parameters_mean = jnp.array(self.parameters_mean_, dtype=jnp.float64)
@@ -211,11 +211,11 @@ class EmulatorLoaderPCA:
         self.alphas_ = [jnp.array(alpha, dtype=jnp.float64) for alpha in self.alphas_]
         self.betas_ = [jnp.array(beta, dtype=jnp.float64) for beta in self.betas_]
     
-    def restore(self, filename: str) -> None:
+    def load(self, filename: str) -> None:
         """Load pre-trained PCA+NN model from .npz file."""
         filename_npz = filename + ".npz"
         if not os.path.exists(filename_npz):
-            raise IOError(f"Failed to restore network from {filename}: does not exist.")
+            raise IOError(f"Failed to load network from {filename}: does not exist.")
         
         with open(filename_npz, "rb") as fp:
             fpz = np.load(fp, allow_pickle=True)["arr_0"].flatten()[0]
