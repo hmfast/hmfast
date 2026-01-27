@@ -9,9 +9,6 @@ from hmfast.defaults import merge_with_defaults
 from hmfast.download import get_default_data_path
 import os
 
-import numpy as np # it may be a good idea to eventually remove numpy dependence altogether
-_eps = 1e-30
-
 jax.config.update("jax_enable_x64", True)
 
 
@@ -39,6 +36,7 @@ class CMBLensingTracer(BaseTracer):
         self.emulator = Emulator(cosmo_model=cosmo_model)
         self.emulator._load_emulator("DAZ")
         self.emulator._load_emulator("HZ")
+        self.emulator._load_emulator("DER")
         self.halo_model = HaloModel(cosmo_model=cosmo_model)  # Eventually want to allow the user to pass hmf prescription (e.g. T08)
 
 
@@ -50,30 +48,26 @@ class CMBLensingTracer(BaseTracer):
         params = merge_with_defaults(params)
         cparams = self.emulator.get_all_cosmo_params(params=params)
         zq = jnp.atleast_1d(jnp.array(z, dtype=jnp.float64))  # Ensure z is an array
-
-        c_km_s = 299792.458  # Speed of light in km/s
-        c_m_s = 299792458 
-
         
         # Cosmological constants
         H0 = params["H0"]  # Hubble constant in km/s/Mpc
         Omega_m = cparams["Omega0_m"]  # Matter density parameter
-        #print("Rho_crit_0", cparams["Rho_crit_0"])
+        c_km_s = 299792.458  # Speed of light in km/s        
         h = H0 / 100
         # Compute comoving distance and Hubble parameter
         chi_z = self.emulator.get_angular_distance_at_z(zq, params=params) * (1 + zq) * h # Comoving distance in Mpc/h
         H_z = self.emulator.get_hubble_at_z(zq, params=params)   # Hubble parameter in km/s/Mpc
-    
+        print("Hz", H_z * 299792.458)
         # Placeholder for chi(z*) (CMB distance)
-        chi_z_cmb = 13860.0 * h # Approximate comoving distance to the last scattering surface (z ~ 1090) in Mpc/h
-    
+        chi_z_cmb = self.emulator.get_derived_parameters(params=params)["chi_star"] * h #13860.0 * h # Comoving distance to the last scattering surface (z ~ 1090) in Mpc/h
+        #print(chi_z_cmb/h)
         # Compute the CMB lensing kernel
         W_kappa_cmb =  (
             (3.0 / 2.0) * Omega_m * 
             (H0/c_km_s)**2 / h**2 *
             (1 + z) / chi_z  *
             ((chi_z_cmb - chi_z) / chi_z_cmb)
-        )
+        )    
 
        
         return W_kappa_cmb 
@@ -107,9 +101,10 @@ class CMBLensingTracer(BaseTracer):
         dummy_profile = jnp.ones_like(x)
         k, _ = self.hankel.transform(dummy_profile)
 
-        rho_crit_0 = cparams["Rho_crit_0"] 
+        Omega_m = cparams["Omega0_m"]
+        rho_mean_0 = cparams["Rho_crit_0"] * Omega_m / h**2    # Convert rho_crit in  M_sun/Mpc^3 to rho_mean in (M_sun/h)/(Mpc/h^3) 
 
-        m_over_rho_crit = jnp.broadcast_to((m / rho_crit_0)[:, None], (m.shape[0], k.shape[0])) 
+        m_over_rho_mean = jnp.broadcast_to((m / rho_mean_0)[:, None], (m.shape[0], k.shape[0])) 
         
         chi = self.emulator.get_angular_distance_at_z(z, params=params) * (1.0 + z) * h
         ell = k * chi - 0.5
@@ -130,10 +125,13 @@ class CMBLensingTracer(BaseTracer):
         
         Si_q, Ci_q = sici(q)
         Si_q_scaled, Ci_q_scaled = sici(q_scaled)
+
+
+       
         
         u_ell_m =  (   jnp.cos(q) * (Ci_q_scaled - Ci_q) 
                     +  jnp.sin(q) * (Si_q_scaled - Si_q) 
-                    -  jnp.sin(lambda_val * c_mat * q) / q_scaled ) * f_nfw_val * m_over_rho_crit 
+                    -  jnp.sin(lambda_val * c_mat * q) / q_scaled ) * f_nfw_val * m_over_rho_mean
         
      
         return ell, u_ell_m
@@ -151,8 +149,6 @@ class CMBLensingTracer(BaseTracer):
         params = merge_with_defaults(params)
         W = self.get_W_kappa_cmb(z, params=params) 
         ell, u_m = self.get_u_m_ell(z, m, params=params)
-
-        h = params["H0"]/100
     
         moment_funcs = [
             lambda _:  W[:, None] * u_m ,

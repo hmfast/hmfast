@@ -393,16 +393,28 @@ class Emulator:
     def get_derived_parameters(self, params=None):
         params = merge_with_defaults(params)
         emu = self._load_emulator("DER")
-        preds = emu.predictions(params)
+        preds = emu.ten_to_predictions(params)
 
-        names = [
-            "100*theta_s", "sigma8", "YHe", "z_reio", "Neff",
-            "tau_rec", "z_rec", "rs_rec", "ra_rec",
-            "tau_star", "z_star", "rs_star", "ra_star", "rs_drag",
-        ]
+        names = [  '100*theta_s',
+                   'sigma8',
+                   'YHe',
+                   'z_reio',
+                   'Neff',
+                   'tau_rec',  # conformal time at which the visibility reaches its maximum (= recombination time)
+                   'z_rec', # z at which the visibility reaches its maximum (= recombination redshift)
+                   'rs_rec', # comoving sound horizon at recombination in Mpc
+                   'chi_rec', # comoving distance to recombination in Mpc
+                   'tau_star', # conformal time at which photon optical depth crosses one
+                   'z_star', # redshift at which photon optical depth crosses one, i.e., last scattering surface
+                   'rs_star', # comoving sound horizon at z_star in Mpc
+                   'chi_star', # comoving distance to the last scattering surface in Mpc
+                   'rs_drag'] # comoving sound horizon at baryon drag in Mpc
 
+        
         out = {n: preds[i] for i, n in enumerate(names) if i < len(preds)}
         out["h"] = params["H0"] / 100.0
         out["Omega_m"] = (params["omega_b"] + params["omega_cdm"]) / out["h"]**2
 
         return out
+
+
