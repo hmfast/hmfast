@@ -257,8 +257,51 @@ class Emulator:
         rho_crit_factor = (3./ (8. * jnp.pi * (6.67430e-11) * 1.98847e30)) * 3.0856775814913673e22 * (299792458.0)**2 
         
         return rho_crit_factor * (H_z/h)**2 
+
+
+    def get_vrms2_at_z(self, z, params=None):
+        """
+        Return v_rms^2 at input z (scalar or array), using interpolation from a precomputed grid.
+        """
+        params = merge_with_defaults(params)
+    
+        # Local grids (do not use self._k_grid inside jit context)
+        k_grid = jnp.geomspace(1e-5, 1e1, 1000)
+        z_grid = jnp.linspace(0, 5, 200)
+    
+        def pk_at_z(zval):
+            pk, k_arr = self.get_pk_at_z(zval, params=params, linear=True)
+            return jnp.interp(k_grid, k_arr, pk)
+    
+        P = jax.vmap(pk_at_z)(z_grid)  # shape (num_z, num_k)
+    
+        a = 1.0 / (1.0 + z_grid)
+        H = self.get_hubble_at_z(z_grid, params=params)
+    
+        k0 = 1e-2
+        def pk0_at_z(zval):
+            pk, k_arr = self.get_pk_at_z(zval, params=params, linear=True)
+            return jnp.interp(k0, k_arr, pk)
+        pk0 = jax.vmap(pk0_at_z)(z_grid)
+        pk0_0 = pk0_at_z(0.0)
+        D = jnp.sqrt(pk0 / pk0_0)
+    
+        dlnD = jnp.gradient(jnp.log(D), jnp.log(1 + z_grid))
+        f = -dlnD
+    
+        W = f * a * H
+        I = (1/3) * (W[:, None]**2) * P * k_grid / (2 * jnp.pi**2)
+        x = jnp.log(k_grid)
+        vrms2_grid = jax.scipy.integrate.trapezoid(I, x=x, axis=1)  # shape: (num_z,)
+    
+        # Interpolate to requested z values
+        z = jnp.atleast_1d(z)
+        vrms2_out = jnp.interp(z, z_grid, vrms2_grid)
+        return vrms2_out
     
     
+        
+        
     def get_delta_mean_from_delta_crit_at_z(self, delta_crit, z, params=None):
         """
         Convert critical density to mean density at given redshifts.

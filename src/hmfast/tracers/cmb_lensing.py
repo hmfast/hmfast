@@ -57,7 +57,7 @@ class CMBLensingTracer(BaseTracer):
         # Compute comoving distance and Hubble parameter
         chi_z = self.emulator.get_angular_distance_at_z(zq, params=params) * (1 + zq) * h # Comoving distance in Mpc/h
         H_z = self.emulator.get_hubble_at_z(zq, params=params)   # Hubble parameter in km/s/Mpc
-        print("Hz", H_z * 299792.458)
+        #print("Hz", H_z * 299792.458)
         # Placeholder for chi(z*) (CMB distance)
         chi_z_cmb = self.emulator.get_derived_parameters(params=params)["chi_star"] * h #13860.0 * h # Comoving distance to the last scattering surface (z ~ 1090) in Mpc/h
         #print(chi_z_cmb/h)
