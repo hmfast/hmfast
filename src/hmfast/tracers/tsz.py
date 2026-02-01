@@ -26,21 +26,22 @@ class TSZTracer(BaseTracer):
 
     def gnfw_pressure_profile(self, z, m, params = None):
         """
-        GNFW pressure profile as a function of dimensionless scaled radius x = r/r500.
+        GNFW pressure profile as a function of dimensionless scaled radius x = r/r_delta.
         """ 
         params = merge_with_defaults(params)
         x = self.x
     
         # Pull needed parameters
-        H0, P0, c500, alpha, beta, gamma, B = (params[k] for k in ("H0", "P0GNFW", "c500", "alphaGNFW", "betaGNFW", "gammaGNFW", "B")) 
-    
+        H0, P0, alpha, beta, gamma, B = (params[k] for k in ("H0", "P0GNFW", "alphaGNFW", "betaGNFW", "gammaGNFW", "B")) 
+        c_delta = 1.156 # Placeholder
+        
         # Compute helper variables and the final value of Pe
         h = H0 / 100.0 
     
         H = self.emulator.get_hubble_at_z(z, params=params) * 299792.458  # multiply by speed of light in km/s 
         m_delta_tilde = (m / B) # convert to M_sun 
         C = 1.65 * (h / 0.7)**2 * (H / H0)**(8 / 3) * (m_delta_tilde / (0.7 * 3e14))**(2 / 3 + 0.12) * (0.7/h)**1.5 # eV cm^-3
-        scaled_x = c500 * x
+        scaled_x = c_delta * x
         Pe = C * P0 * scaled_x**(-gamma) * (1 + scaled_x**alpha)**((gamma - beta) / alpha)
        
         return Pe
@@ -110,5 +111,3 @@ class TSZTracer(BaseTracer):
         u_ell = jax.lax.switch(moment - 1, moment_funcs, None)
     
         return ell, u_ell
-
-

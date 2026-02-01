@@ -29,7 +29,6 @@ DEFAULT_PARAMS = {
     'alphaGNFW': 1.0620,
     'betaGNFW': 5.4807,
     'gammaGNFW': 0.3292,
-    'c500': 1.156,
 
     
     # HOD tracer-specific parameters

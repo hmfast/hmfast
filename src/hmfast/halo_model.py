@@ -225,6 +225,8 @@ class HaloModel:
     
         # Apply vectorized integration along ell axis (axis=2)
         C_ell_1h = jax.vmap(integrate_single_ell, in_axes=2)(integrand)       
+
+        #C_ell_1h = self.apply_damping_1h(z, ell, C_ell_1h, params=params)
                 
         return C_ell_1h  
 
@@ -283,6 +285,31 @@ class HaloModel:
         C_ell_2h = jnp.trapezoid(integrand_z, x=z, axis=0)
     
         return C_ell_2h
+
+
+
+
+    def apply_damping_1h(self, z, ell, C_ell, params=None):
+        """
+        Apply 1-halo damping to an angular power spectrum C_ell.
+       
+        """
+        # Extract parameters
+        params = merge_with_defaults(params)
+        h = params["H0"] / 100.0
+        kstar = 0.01
+        
+        # Compute mean comoving distance over the redshift range
+        chi_z = self.emulator.get_angular_distance_at_z(z, params=params) * (1+z) * h  # in Mpc/h
+      
+        # Convert ell to effective k in h/Mpc
+        k_eff = (ell + 0.5) / chi_z
+        
+        # Compute damping factor: 1 - exp(-(k*h/k*)^2)
+        damping_factor = 1.0 - jnp.exp(-jnp.square(k_eff * h / kstar))
+        
+        # Apply damping
+        return C_ell * damping_factor
 
 
 
