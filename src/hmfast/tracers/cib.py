@@ -66,7 +66,7 @@ class CIBTracer(BaseTracer):
 
     def get_Theta(self, z, m, nu, params=None):
 
-        nu = nu * (1 + z)
+       
         """Spectral energy distribution function Theta(nu,z) for CIB, analogous to class_sz."""
         params = merge_with_defaults(params)
         T0 = params["T0_cib"]
@@ -107,9 +107,9 @@ class CIBTracer(BaseTracer):
         L0 = params["L0_cib"]
         
         
-        # Note: class_sz uses nu*(1+z) for SED
+        # Note that Theta takes nu*(1+z) for SED instead of nu
         Phi = self.get_Phi(z, m, nu, params)
-        Theta = self.get_Theta(z, m, nu, params)
+        Theta = self.get_Theta(z, m, nu, params)  
         Sigma = self.get_Sigma(z, m, nu, params)
 
         
@@ -211,19 +211,17 @@ class CIBTracer(BaseTracer):
         Compute either the first or second moment of the CIB tracer u_ell.
         For CIB:, 
             First moment:     W_I_nu / jnu_bar * Lc + Ls * u_ell_m
-            Second moment:     W_I_nu^2 / jnu_nu^2 * [Ls^2 * u_ell_m^2 + 2 * Ls * u_ell_m]
+            Second moment:     W_I_nu^2 / jnu_nu^2 * [Ls^2 * u_ell_m^2 + 2 * Ls * Lc * u_ell_m]
         You cannot simply take u_ell_g**2.
 
         Note that  W_I_nu = a(z) * jnu_bar, so  W_I_nu / jnu_bar = a(z)
         """
 
         params = merge_with_defaults(params)
-        Ls = self.get_L_cen(z, m, self.nu, params=params)
-        Lc = self.get_L_sat(z, m, self.nu, params=params)
-
-        Ls_nu_prime = self.get_L_cen(z, m, self.nu, params=params)
-        Lc_nu_prime = self.get_L_sat(z, m, self.nu, params=params)
-
+        h = params["H0"]/100
+        nu_rest = self.nu * (1 + z)
+        Ls = self.get_L_sat(z, m, nu_rest, params=params)
+        Lc = self.get_L_cen(z, m, nu_rest, params=params)
         
         a = 1. / (1. + z)
         
@@ -231,8 +229,8 @@ class CIBTracer(BaseTracer):
 
         
         moment_funcs = [
-            lambda _: 1 / (4 * jnp.pi) * (Lc + Ls * u_m),
-            lambda _: 1 / (4 * jnp.pi) * (Ls**2 * u_m**2 + 2 * Ls * Lc * u_m),
+            lambda _: 1 * h**2 / (4 * jnp.pi)    * (Lc + Ls * u_m) ,
+            lambda _: 1 * h**4 / (4 * jnp.pi)**2 * (Ls**2 * u_m**2 + 2 * Ls * Lc * u_m),
         ]
     
         u_ell = jax.lax.switch(moment - 1, moment_funcs, None)
