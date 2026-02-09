@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-from hmfast.emulator_eval import Emulator
+from hmfast.emulator import Emulator
 from hmfast.base_tracer import BaseTracer, HankelTransform
 from hmfast.defaults import merge_with_defaults
 from hmfast.literature import c_D08
@@ -24,7 +24,7 @@ class KSZTracer(BaseTracer):
         self.emulator._load_emulator("PKL")
 
          # Compute Pk once instantiate grids and thus avoid tracer errors
-        _, _ = self.emulator.get_pk_at_z(1., params=None, linear=True) 
+        _, _ = self.emulator.pk_matter(1., params=None, linear=True) 
 
 
     def nfw_density_profile(self, z, m, params=None):
@@ -33,7 +33,7 @@ class KSZTracer(BaseTracer):
         cparams = self.emulator.get_all_cosmo_params(params)
         delta = params["delta"]
         f_b = cparams["Omega_b"] / cparams["Omega0_m"]   # Baryon fraction
-        r_delta = self.emulator.get_r_delta_of_m_delta_at_z(delta, m, z, params=params)
+        r_delta = self.emulator.r_delta(z, m, delta, params=params)
     
         c_delta = self.concentration_relation(z, m)
         r_s = r_delta / c_delta
@@ -79,7 +79,7 @@ class KSZTracer(BaseTracer):
         f_b = cparams["Omega_b"] / cparams["Omega0_m"]   # Baryon fraction
         
         # Critical density at redshift z
-        rho_crit_z = self.emulator.get_rho_crit_at_z(z, params=params)
+        rho_crit_z = self.emulator.critical_density(z, params=params)
         
         # Battaglia+16 parameters (Table 2: AGN feedback model)
         A_rho0 = 4000.0
@@ -138,8 +138,8 @@ class KSZTracer(BaseTracer):
         """
         params = merge_with_defaults(params)
         h, B, delta = params['H0']/100, params['B'], params['delta']
-        d_A = self.emulator.get_angular_distance_at_z(z, params=params) * h
-        r_delta = self.emulator.get_r_delta_of_m_delta_at_z(delta, m, z, params=params) 
+        d_A = self.emulator.angular_diameter_distance(z, params=params) * h
+        r_delta = self.emulator.r_delta(z, m, delta, params=params) 
         
         ell_delta = d_A / r_delta
         return r_delta, ell_delta
@@ -157,10 +157,10 @@ class KSZTracer(BaseTracer):
         # Get relevant quantities
         h = cparams['h'] 
         r_delta, ell_delta = self._compute_r_and_ell(z, m, params=params)
-        chi = self.emulator.get_angular_distance_at_z(z, params=params) * h * (1 + z)
+        chi = self.emulator.angular_diameter_distance(z, params=params) * h * (1 + z)
 
         # Compute the root mean squared velocity needed for the kSZ prefactor
-        vrms = jnp.sqrt(self.emulator.get_vrms2_at_z(z, params=params))
+        vrms = jnp.sqrt(self.emulator.v_rms_squared(z, params=params))
 
         # sigmaT / m_prot in (Mpc/h)**2/(Msun/h) which is required for kSZ
         sigma_T_over_m_p = 8.305907197761162e-17 * h  

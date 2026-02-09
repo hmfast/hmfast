@@ -119,7 +119,7 @@ class Emulator:
     # Cosmology
     # ------------------------------------------------------------------
 
-    def get_hubble_at_z(self, z, params=None):
+    def hubble_parameter(self, z, params=None):
         """
         Get Hubble parameter at redshift z.
         
@@ -141,7 +141,7 @@ class Emulator:
         preds = 10.0 ** emu.predictions(params)
         return self._interp_z(z, self._get_z_interp(), preds)
 
-    def get_angular_distance_at_z(self, z, params=None):
+    def angular_diameter_distance(self, z, params=None):
         """
         Get angular diameter distance at redshift z.
         
@@ -168,7 +168,7 @@ class Emulator:
 
         return self._interp_z(z, self._get_z_interp(), preds)
 
-    def get_sigma8_at_z(self, z, params=None):
+    def sigma8(self, z, params=None):
         """
         Get sigma8 at redshift z.
         
@@ -230,7 +230,7 @@ class Emulator:
         return p
 
 
-    def get_rho_crit_at_z(self, z, params=None):
+    def critical_density(self, z, params=None):
         """
         Get critical density at redshift z.
         
@@ -249,7 +249,7 @@ class Emulator:
         
         params = merge_with_defaults(params)
         # Get Hubble parameter    
-        H_z = self.get_hubble_at_z(z, params)
+        H_z = self.hubble_parameter(z, params)
         h = (params["H0"]/100)
         
         # Convert to critical density
@@ -259,7 +259,7 @@ class Emulator:
         return rho_crit_factor * (H_z/h)**2 
 
 
-    def get_vrms2_at_z(self, z, params=None):
+    def v_rms_squared(self, z, params=None):
         """
         Return v_rms^2 at input z (scalar or array), using interpolation from a precomputed grid.
         """
@@ -270,17 +270,17 @@ class Emulator:
         z_grid = jnp.linspace(0, 5, 200)
     
         def pk_at_z(zval):
-            pk, k_arr = self.get_pk_at_z(zval, params=params, linear=True)
+            pk, k_arr = self.pk_matter(zval, params=params, linear=True)
             return jnp.interp(k_grid, k_arr, pk)
     
         P = jax.vmap(pk_at_z)(z_grid)  # shape (num_z, num_k)
     
         a = 1.0 / (1.0 + z_grid)
-        H = self.get_hubble_at_z(z_grid, params=params)
+        H = self.hubble_parameter(z_grid, params=params)
     
         k0 = 1e-2
         def pk0_at_z(zval):
-            pk, k_arr = self.get_pk_at_z(zval, params=params, linear=True)
+            pk, k_arr = self.pk_matter(zval, params=params, linear=True)
             return jnp.interp(k0, k_arr, pk)
         pk0 = jax.vmap(pk0_at_z)(z_grid)
         pk0_0 = pk0_at_z(0.0)
@@ -302,7 +302,7 @@ class Emulator:
     
         
         
-    def get_delta_mean_from_delta_crit_at_z(self, delta_crit, z, params=None):
+    def delta_crit_to_mean(self, delta_crit, z, params=None):
         """
         Convert critical density to mean density at given redshifts.
         
@@ -317,18 +317,19 @@ class Emulator:
         return delta_mean
         
 
-    def get_r_delta_of_m_delta_at_z(self, delta, m_delta, z, params=None):
+    def r_delta(self, z, m, delta, params=None):
         """
         Compute the halo radius corresponding to a given mass and overdensity at redshift z.
     
         Parameters
         ----------
-        delta : float
-            Overdensity parameter relative to the critical density (e.g., 200 for M_200).
-        m_delta : float
-            Halo mass enclosed within the overdensity radius, in the same units as used for rho_crit.
         z : float
             Redshift at which to compute the radius.
+        m : float
+            Halo mass enclosed within the overdensity radius, in the same units as used for rho_crit.
+        delta : float
+            Overdensity parameter relative to the critical density (e.g., 200 for M_200).
+        
         params : dict, optional
             Dictionary of cosmological parameters to use when computing the critical density.
     
@@ -337,11 +338,11 @@ class Emulator:
         float
             Radius r_delta (e.g., R_200) within which the average density equals delta * rho_crit(z).
         """
-        rho_crit = self.get_rho_crit_at_z(z,params=params)
-        return (3.0 * m_delta / (4.0 * jnp.pi * delta * rho_crit))**(1./3.)
+        rho_crit = self.critical_density(z,params=params)
+        return (3.0 * m / (4.0 * jnp.pi * delta * rho_crit))**(1./3.)
 
 
-    def get_dVdzdOmega_at_z(self, z, params=None):
+    def comoving_volume_element(self, z, params=None):
         """
         Comoving volume element per unit redshift and solid angle.
 
@@ -359,8 +360,8 @@ class Emulator:
         """
         cparams = self.get_all_cosmo_params(params)
         h = cparams["h"]
-        dAz = self.get_angular_distance_at_z(z, params=params) * h
-        Hz = self.get_hubble_at_z(z, params=params) / h  # in Mpc^(-1) h
+        dAz = self.angular_diameter_distance(z, params=params) * h
+        Hz = self.hubble_parameter(z, params=params) / h  # in Mpc^(-1) h
 
         return (1 + z)**2 * dAz**2 / Hz
    
@@ -373,9 +374,9 @@ class Emulator:
     # Matter power spectra
     # ------------------------------------------------------------------
 
-    def get_pk_at_z(self, z, params=None, linear=True):
+    def pk_matter(self, z, params=None, linear=True):
         """
-        Get linear power spectrum at redshift z.
+        Get the matter power spectrum at redshift z.
         
         Parameters
         ----------
@@ -409,7 +410,7 @@ class Emulator:
     # CMB
     # ------------------------------------------------------------------
 
-    def get_cmb_dls(self, params=None, lmax=10000):
+    def cmb_dls(self, params=None, lmax=10000):
         params = merge_with_defaults(params)
 
         tt = self._load_emulator("TT").ten_to_predictions(params)
@@ -433,7 +434,7 @@ class Emulator:
     # Derived parameters
     # ------------------------------------------------------------------
 
-    def get_derived_parameters(self, params=None):
+    def derived_parameters(self, params=None):
         params = merge_with_defaults(params)
         emu = self._load_emulator("DER")
         preds = emu.ten_to_predictions(params)

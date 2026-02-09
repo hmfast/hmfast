@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-from hmfast.emulator_eval import Emulator
+from hmfast.emulator import Emulator
 from hmfast.base_tracer import BaseTracer, HankelTransform
 from hmfast.defaults import merge_with_defaults
 from hmfast.literature import c_D08
@@ -36,7 +36,7 @@ class TSZTracer(BaseTracer):
         
         # Compute helper variables and the final value of Pe
         h = H0 / 100.0 
-        H = self.emulator.get_hubble_at_z(z, params=params) * 299792.458  # multiply by speed of light in km/s 
+        H = self.emulator.hubble_parameter(z, params=params) * 299792.458  # multiply by speed of light in km/s 
         m_delta_tilde = (m / B) # convert to M_sun 
         C = 1.65 * (h / 0.7)**2 * (H / H0)**(8 / 3) * (m_delta_tilde / (0.7 * 3e14))**(2 / 3 + 0.12) * (0.7/h)**1.5 # eV cm^-3
         scaled_x = c_delta * x
@@ -50,8 +50,8 @@ class TSZTracer(BaseTracer):
         """
         params = merge_with_defaults(params)
         h, B, delta = params['H0']/100, params['B'], params['delta']
-        d_A = self.emulator.get_angular_distance_at_z(z, params=params) * h
-        r_delta = self.emulator.get_r_delta_of_m_delta_at_z(delta, m, z, params=params) / B**(1/3)
+        d_A = self.emulator.angular_diameter_distance(z, params=params) * h
+        r_delta = self.emulator.r_delta(z, m, delta, params=params) / B**(1/3)
         ell_delta = d_A / r_delta
         return r_delta, ell_delta
 

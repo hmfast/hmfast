@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-from hmfast.emulator_eval import Emulator
+from hmfast.emulator import Emulator
 from hmfast.base_tracer import BaseTracer, HankelTransform
 from hmfast.defaults import merge_with_defaults
 from hmfast.literature import c_D08, shmf_TW10
@@ -25,7 +25,7 @@ class CIBTracer(BaseTracer):
         The x array used to define the radial profile over which the tracer will be evaluated
     """
 
-    def __init__(self, cosmo_model=0, nu=100e9, x=None, concentration_relation=c_D08, subhalo_mass_function=shmf_TW10):        
+    def __init__(self, cosmo_model=0, nu=100, x=None, concentration_relation=c_D08, subhalo_mass_function=shmf_TW10):        
 
         self.nu = nu
         self.x = x if x is not None else jnp.logspace(jnp.log10(1e-4), jnp.log10(20.0), 512)
@@ -37,7 +37,6 @@ class CIBTracer(BaseTracer):
         self.emulator = Emulator(cosmo_model=cosmo_model)
         self.emulator._load_emulator("DAZ")
         self.emulator._load_emulator("HZ")
-        self.emulator._load_emulator("DER")
 
 
     
@@ -121,7 +120,7 @@ class CIBTracer(BaseTracer):
         params = merge_with_defaults(params)
         
         # Use a small fraction of host mass or a fixed value for min subhalo mass
-        Ms_min = 1e9  # or Ms_min = 1e-4 * M_host
+        Ms_min = 1e5  # or Ms_min = 1e-4 * M_host
         ngrid = 100   # Reasonable default for integration grid
     
         Ms_grid = jnp.logspace(jnp.log10(Ms_min), jnp.log10(m), ngrid)
@@ -165,13 +164,13 @@ class CIBTracer(BaseTracer):
         # Concentration parameters
         delta = params["delta"]
         c_delta = self.concentration_relation(z, m)
-        r_delta = self.emulator.get_r_delta_of_m_delta_at_z(delta, m, z, params=params) 
+        r_delta = self.emulator.r_delta(z, m, delta, params=params) 
         lambda_val = params.get("lambda_HOD", 1.0) 
 
         # Use x grid to get l values. It may eventually make sense to not do the Hankel
         dummy_profile = jnp.ones_like(x)
         k, _ = self.hankel.transform(dummy_profile)
-        chi = self.emulator.get_angular_distance_at_z(z, params=params) * (1.0 + z) * h
+        chi = self.emulator.angular_diameter_distance(z, params=params) * (1.0 + z) * h
         ell = k * chi - 0.5
         ell = jnp.broadcast_to(ell[None, :], (m.shape[0], k.shape[0]))    # (N_m, N_k)
 
@@ -229,8 +228,8 @@ class CIBTracer(BaseTracer):
 
         
         moment_funcs = [
-            lambda _: 1 * h**2 / (4 * jnp.pi)    * (Lc + Ls * u_m) ,
-            lambda _: 1 * h**4 / (4 * jnp.pi)**2 * (Ls**2 * u_m**2 + 2 * Ls * Lc * u_m),
+            lambda _: a    * h**2 / (4 * jnp.pi)    * (Lc + Ls * u_m) ,
+            lambda _: a**2 * h**4 / (4 * jnp.pi)**2 * (Ls**2 * u_m**2 + 2 * Ls * Lc * u_m),
         ]
     
         u_ell = jax.lax.switch(moment - 1, moment_funcs, None)

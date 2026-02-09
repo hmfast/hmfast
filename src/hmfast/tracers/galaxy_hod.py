@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import jax.scipy as jscipy
 from jax.scipy.special import sici, erf 
 from hmfast.base_tracer import BaseTracer, HankelTransform
-from hmfast.emulator_eval import Emulator
+from hmfast.emulator import Emulator
 from hmfast.halo_model import HaloModel
 from hmfast.defaults import merge_with_defaults
 from hmfast.download import get_default_data_path
@@ -91,7 +91,7 @@ class GalaxyHODTracer(BaseTracer):
         Ntot = Nc + Ns
     
         def ng_bar_single(z_single):
-            dndlnm = self.halo_model.get_hmf(z_single, m, params=params)  # shape (n_m,)
+            dndlnm = self.halo_model.halo_mass_function(z_single, m, params=params)  # shape (n_m,)
             integrand = dndlnm * Ntot
             return jnp.trapezoid(integrand, x=logm)
     
@@ -116,8 +116,8 @@ class GalaxyHODTracer(BaseTracer):
         # Interpolate phi_prime to requested z
         phi_prime_at_z = jnp.interp(zq, z_data, phi_prime_data, left=0.0, right=0.0)
     
-        H_grid = self.emulator.get_hubble_at_z(zq, params=params)  # 1/Mpc
-        chi_grid = self.emulator.get_angular_distance_at_z(zq, params=params) * (1.0 + zq)  # Mpc comov
+        H_grid = self.emulator.hubble_parameter(zq, params=params)  # 1/Mpc
+        chi_grid = self.emulator.angular_diameter_distance(zq, params=params) * (1.0 + zq)  # Mpc comov
 
         # Assemble W_g on the grid
         W_g = H_grid * (phi_prime_at_z / chi_grid**2)
@@ -138,13 +138,13 @@ class GalaxyHODTracer(BaseTracer):
         # Concentration parameters
         delta = params["delta"]
         c_delta = self.concentration_relation(z, m)
-        r_delta = self.emulator.get_r_delta_of_m_delta_at_z(delta, m, z, params=params) 
+        r_delta = self.emulator.r_delta(z, m, delta, params=params) 
         lambda_val = params.get("lambda_HOD", 1.0) 
 
         # Use x grid to get l values. It may eventually make sense to not do the Hankel
         dummy_profile = jnp.ones_like(x)
         k, _ = self.hankel.transform(dummy_profile)
-        chi = self.emulator.get_angular_distance_at_z(z, params=params) * (1.0 + z) * (params["H0"]/100)
+        chi = self.emulator.angular_diameter_distance(z, params=params) * (1.0 + z) * (params["H0"]/100)
         ell = k * chi - 0.5
         ell = jnp.broadcast_to(ell[None, :], (m.shape[0], k.shape[0]))   
 
