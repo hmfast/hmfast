@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import jax.scipy as jscipy
 from jax.scipy.special import sici
 from hmfast.base_tracer import BaseTracer, HankelTransform
-from hmfast.emulator_eval import Emulator
+from hmfast.emulator import Emulator
 from hmfast.defaults import merge_with_defaults
 from hmfast.download import get_default_data_path
 from hmfast.literature import c_D08
@@ -78,8 +78,8 @@ class GalaxyLensingTracer(BaseTracer):
         phi_prime_at_z_s = jnp.interp(z_s_data, z_data, phi_prime_data, left=0.0, right=0.0)
     
         # Angular distances
-        chi_z_s = self.emulator.get_angular_distance_at_z(z_s_data) * (1 + z_s_data) * h
-        chi_z = self.emulator.get_angular_distance_at_z(zq) * (1 + zq) * h
+        chi_z_s = self.emulator.angular_diameter_distance(z_s_data) * (1 + z_s_data) * h
+        chi_z = self.emulator.angular_diameter_distance(zq) * (1 + zq) * h
     
         # Reshape for broadcasting
         chi_z_s = chi_z_s[:, None]  # (N_s, 1)
@@ -116,8 +116,8 @@ class GalaxyLensingTracer(BaseTracer):
         Omega_m = cparams["Omega0_m"]  # Matter density parameter
 
         # Compute comoving distance and Hubble parameter
-        chi_z = self.emulator.get_angular_distance_at_z(zq, params=params) * (1 + zq) * h # Comoving distance in Mpc/h
-        H_z = self.emulator.get_hubble_at_z(zq, params=params)   # Hubble parameter in km/s/Mpc
+        chi_z = self.emulator.angular_diameter_distance(zq, params=params) * (1 + zq) * h # Comoving distance in Mpc/h
+        H_z = self.emulator.hubble_parameter(zq, params=params)   # Hubble parameter in km/s/Mpc
     
         I_g = self.get_I_g(zq, params=params) 
     
@@ -146,13 +146,13 @@ class GalaxyLensingTracer(BaseTracer):
         # Concentration parameters
         delta = params["delta"]
         c_delta = self.concentration_relation(z, m)
-        r_delta = self.emulator.get_r_delta_of_m_delta_at_z(delta, m, z, params=params) 
+        r_delta = self.emulator.r_delta(z, m, delta, params=params) 
         lambda_val = params.get("lambda_HOD", 1.0) 
 
         # Use x grid to get l values. It may eventually make sense to not do the Hankel
         dummy_profile = jnp.ones_like(x)
         k, _ = self.hankel.transform(dummy_profile)
-        chi = self.emulator.get_angular_distance_at_z(z, params=params) * (1.0 + z) * h
+        chi = self.emulator.angular_diameter_distance(z, params=params) * (1.0 + z) * h
         ell = k * chi - 0.5
         ell = jnp.broadcast_to(ell[None, :], (m.shape[0], k.shape[0]))    # (N_m, N_k)
 

@@ -50,7 +50,7 @@ DEFAULT_PARAMS = {
     'sigma2_LM_cib': 0.5,         # Size of of halo masses sourcing CIB emission
     'delta_cib': 3.6,             # Redshift evolution of L − M normalisation
     'z_plateau_cib': 1e100,       # see 5.2.1 of https://arxiv.org/pdf/1208.5049.pdf
-    'M_min_cib': 0,
+    'M_min_cib': 10**11.5,
 
     
 }

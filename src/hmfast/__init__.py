@@ -11,7 +11,7 @@ __email__ = "pj407@cam.ac.uk"
 
 from .halo_model import HaloModel
 from .emulator_load import EmulatorLoader, EmulatorLoaderPCA
-from .emulator_eval import Emulator
+from .emulator import Emulator
 from .tracers.tsz import TSZTracer
 from .tracers.ksz import KSZTracer
 from .tracers.cmb_lensing import CMBLensingTracer
