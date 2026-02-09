@@ -5,8 +5,8 @@ This page documents the primary public functions provided by the ``HaloModel`` c
 
 - ``halo_mass_function(z, m, params)`` — Returns the halo mass function :math:`\mathrm{d}n/\mathrm{d}\ln M` evaluated at redshift ``z`` and halo mass array ``m``.  
 - ``halo_bias_function(z, m, params)`` — Returns the halo bias function :math:`b(m)` evaluated at redshift ``z`` and mass array ``m``.  
-- ``cl_1h(tracer, z, m, ell, params)`` — Computes the 1-halo contribution to the angular power spectrum :math:`C_\ell` for a given tracer.  
-- ``cl_2h(tracer, z, m, ell, params)`` — Computes the 2-halo contribution to the angular power spectrum :math:`C_\ell` for a given tracer.  
+- ``cl_1h(tracer, z, m, l, params)`` — Computes the 1-halo contribution to the angular power spectrum :math:`C_\ell` for a given tracer.  
+- ``cl_2h(tracer, z, m, l, params)`` — Computes the 2-halo contribution to the angular power spectrum :math:`C_\ell` for a given tracer.  
 
 
 
@@ -116,7 +116,7 @@ You may now easily compute the 1-halo and 2-halo of your tSZ tracer:
    cl_yy_1h = halo_model.cl_1h(tsz_tracer, z=jnp.linspace(0.05, 3.0, 100), m=jnp.geomspace(5e10, 3.5e15, 100), l=jnp.geomspace(2, 8e3, 50), params=params_hmfast)
    cl_yy_2h = halo_model.cl_2h(tsz_tracer, z=jnp.linspace(0.05, 3.0, 100), m=jnp.geomspace(5e10, 3.5e15, 100), l=jnp.geomspace(2, 8e3, 50), params=params_hmfast)
 
-   # ------ Convert to D_ell and plot the results ------
+   # ------ Convert to D_l and plot the results ------
    l = jnp.geomspace(2, 8e3, 50)
    dl_yy_1h = l * (l + 1) * cl_yy_1h / (2 * jnp.pi) * 1e12
    dl_yy_2h = l * (l + 1) * cl_yy_2h / (2 * jnp.pi) * 1e12
