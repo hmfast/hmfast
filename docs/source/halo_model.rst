@@ -3,10 +3,10 @@ The halo model module
 
 This page documents the primary public functions provided by the ``HaloModel`` class in ``hmfast``. It covers the following functions:
 
-- ``get_hmf(z, m, params)`` — Returns the halo mass function :math:`\mathrm{d}n/\mathrm{d}\ln M` evaluated at redshift ``z`` and halo mass array ``m``.  
-- ``get_hbf(z, m, params)`` — Returns the halo bias function :math:`b(m)` evaluated at redshift ``z`` and mass array ``m``.  
-- ``get_C_ell_1h(tracer, z, m, ell, params)`` — Computes the 1-halo contribution to the angular power spectrum :math:`C_\ell` for a given tracer.  
-- ``get_C_ell_2h(tracer, z, m, ell, params)`` — Computes the 2-halo contribution to the angular power spectrum :math:`C_\ell` for a given tracer.  
+- ``halo_mass_function(z, m, params)`` — Returns the halo mass function :math:`\mathrm{d}n/\mathrm{d}\ln M` evaluated at redshift ``z`` and halo mass array ``m``.  
+- ``halo_bias_function(z, m, params)`` — Returns the halo bias function :math:`b(m)` evaluated at redshift ``z`` and mass array ``m``.  
+- ``cl_1h(tracer, z, m, ell, params)`` — Computes the 1-halo contribution to the angular power spectrum :math:`C_\ell` for a given tracer.  
+- ``cl_2h(tracer, z, m, ell, params)`` — Computes the 2-halo contribution to the angular power spectrum :math:`C_\ell` for a given tracer.  
 
 
 
@@ -46,9 +46,9 @@ However, you can pass any configuration of arrays/scalars for mass and redshift.
 
 .. code-block:: python
 
-   hmf_z0 = halo_model.get_hmf(0.0, m=jnp.geomspace(5e10, 3.5e15, 100), params=params_hmfast)
-   hmf_z1 = halo_model.get_hmf(1.0, m=jnp.geomspace(5e10, 3.5e15, 100), params=params_hmfast)
-   hmf_z2 = halo_model.get_hmf(2.0, m=jnp.geomspace(5e10, 3.5e15, 100), params=params_hmfast)
+   hmf_z0 = halo_model.halo_mass_function(0.0, m=jnp.geomspace(5e10, 3.5e15, 100), params=params_hmfast)
+   hmf_z1 = halo_model.halo_mass_function(1.0, m=jnp.geomspace(5e10, 3.5e15, 100), params=params_hmfast)
+   hmf_z2 = halo_model.halo_mass_function(2.0, m=jnp.geomspace(5e10, 3.5e15, 100), params=params_hmfast)
 
    # ------ Plot the results ------
    m_grid = jnp.geomspace(5e10, 3.5e15, 100)
@@ -57,6 +57,7 @@ However, you can pass any configuration of arrays/scalars for mass and redshift.
    plt.loglog(m_grid, hmf_z1, label=f"z = 1.0", linestyle='--', color='C1') # Dashed line
    plt.loglog(m_grid, hmf_z2, label=f"z = 2.0", linestyle='-.', color='C2') # Dash-dot line
    plt.ylabel(r"$\mathrm{d}n/\mathrm{d}\ln M$")
+   plt.ylim([1e-8, 1e-1])
    plt.legend()
    plt.tight_layout()
    plt.show()
@@ -75,9 +76,9 @@ We can compute the halo bias function in a similar manner.
 
 .. code-block:: python
 
-   hbf_z0 = halo_model.get_hbf(0.0, m=jnp.geomspace(5e10, 3.5e15, 100), params=params_hmfast)
-   hbf_z1 = halo_model.get_hbf(1.0, m=jnp.geomspace(5e10, 3.5e15, 100), params=params_hmfast)
-   hbf_z2 = halo_model.get_hbf(2.0, m=jnp.geomspace(5e10, 3.5e15, 100), params=params_hmfast)
+   hbf_z0 = halo_model.halo_bias_function(0.0, m=jnp.geomspace(5e10, 3.5e15, 100), params=params_hmfast)
+   hbf_z1 = halo_model.halo_bias_function(1.0, m=jnp.geomspace(5e10, 3.5e15, 100), params=params_hmfast)
+   hbf_z2 = halo_model.halo_bias_function(2.0, m=jnp.geomspace(5e10, 3.5e15, 100), params=params_hmfast)
 
    # ------ Plot the results ------
    m_grid = jnp.geomspace(5e10, 3.5e15, 100)
@@ -112,17 +113,17 @@ You may now easily compute the 1-halo and 2-halo of your tSZ tracer:
 
 .. code-block:: python
 
-   C_ell_yy_1h = halo_model.get_C_ell_1h(tsz_tracer, z=jnp.linspace(0.05, 3.0, 100), m=jnp.geomspace(5e10, 3.5e15, 100), ell=jnp.geomspace(2, 8e3, 50), params=params_hmfast)
-   C_ell_yy_2h = halo_model.get_C_ell_2h(tsz_tracer, z=jnp.linspace(0.05, 3.0, 100), m=jnp.geomspace(5e10, 3.5e15, 100), ell=jnp.geomspace(2, 8e3, 50), params=params_hmfast)
+   cl_yy_1h = halo_model.cl_1h(tsz_tracer, z=jnp.linspace(0.05, 3.0, 100), m=jnp.geomspace(5e10, 3.5e15, 100), l=jnp.geomspace(2, 8e3, 50), params=params_hmfast)
+   cl_yy_2h = halo_model.cl_2h(tsz_tracer, z=jnp.linspace(0.05, 3.0, 100), m=jnp.geomspace(5e10, 3.5e15, 100), l=jnp.geomspace(2, 8e3, 50), params=params_hmfast)
 
    # ------ Convert to D_ell and plot the results ------
-   ell = jnp.geomspace(2, 8e3, 50)
-   D_ell_yy_1h = ell * (ell + 1) * C_ell_yy_1h / (2 * jnp.pi) * 1e12
-   D_ell_yy_2h = ell * (ell + 1) * C_ell_yy_2h / (2 * jnp.pi) * 1e12
+   l = jnp.geomspace(2, 8e3, 50)
+   dl_yy_1h = l * (l + 1) * cl_yy_1h / (2 * jnp.pi) * 1e12
+   dl_yy_2h = l * (l + 1) * cl_yy_2h / (2 * jnp.pi) * 1e12
 
    plt.figure()
-   plt.loglog(ell_grid_tsz, D_ell_yy_1h, label="1-halo term")
-   plt.loglog(ell_grid_tsz, D_ell_yy_2h, label="2-halo term")
+   plt.loglog(l, dl_yy_1h, label="1-halo term")
+   plt.loglog(l, dl_yy_2h, label="2-halo term")
    plt.xlabel(r"$\ell$")
    plt.ylabel(r"$10^{12} D_\ell$")
    plt.legend()

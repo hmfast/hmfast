@@ -33,7 +33,7 @@ Below are short examples showing how to call each function and plot the results.
     
     
     # Define the emulator instance
-    emulator = hmfast.emulator_eval.Emulator(cosmo_model=0)
+    emulator = hmfast.emulator.Emulator(cosmo_model=0)
 
 
 
@@ -44,16 +44,16 @@ Below is an example showing how to compute and plot the Hubble parameter for a r
 
 .. code-block:: python
 
-   H_grid = emulator.get_hubble_at_z(z=jnp.linspace(0.05, 20.0, 200), params=params_hmfast) * 299792.458
+   H_grid = emulator.hubble_parameter(z=jnp.linspace(0.05, 20.0, 200), params=params_hmfast) * 299792.458
 
-    # ------ Plot the results ------
+   # ------ Plot the results ------
    z_grid = jnp.linspace(0.05, 20.0, 200)
    plt.figure(figsize=(7,4))
    plt.semilogy(z_grid, H_grid, lw=2, label=r"$H(z)$")
    plt.grid(alpha=0.4, linestyle='--')
-   plt.xlabel("z", size=title_size)
-   plt.ylabel("H(z) [km/s/Mpc]", size=title_size)
-   plt.legend(fontsize=legend_size, frameon=False)
+   plt.xlabel("z", size=14)
+   plt.ylabel("H(z) [km/s/Mpc]", size=14)
+   plt.legend(fontsize=12, frameon=False)
    plt.minorticks_on()
    plt.show()
 
@@ -70,16 +70,16 @@ Compute and plot the angular diameter distance for the same redshift range.
 
 .. code-block:: python
 
-    dA_grid = emulator.get_angular_distance_at_z(z=jnp.linspace(0.05, 20.0, 200), params=params_hmfast)
+    dA_grid = emulator.angular_diameter_distance(z=jnp.linspace(0.05, 20.0, 200), params=params_hmfast)
 
     # ------ Plot the results ------
     z_grid = jnp.linspace(0.05, 20.0, 200)
     plt.figure(figsize=(7,4))
     plt.plot(z_grid, dA_grid, lw=2, color='C1', label=r"$d_A(z)$")
     plt.grid(alpha=0.4, linestyle='--')
-    plt.xlabel("z", size=title_size)
-    plt.ylabel("$d_A(z)$ [Mpc]", size=title_size)
-    plt.legend(fontsize=legend_size, frameon=False)
+    plt.xlabel("z", size=14)
+    plt.ylabel("$d_A(z)$ [Mpc]", size=14)
+    plt.legend(fontsize=12, frameon=False)
     plt.minorticks_on()
     plt.show()
 
@@ -96,16 +96,16 @@ Compute and plot the angular diameter distance for the same redshift range.
 
 .. code-block:: python
 
-    rho_crit_grid = emulator.get_rho_crit_at_z(z=jnp.linspace(0.05, 20.0, 200), params=params_hmfast)
+    rho_crit_grid = emulator.critical_density(z=jnp.linspace(0.05, 20.0, 200), params=params_hmfast)
 
     # ------ Plot the results ------
     z_grid = jnp.linspace(0.05, 20.0, 200)
     plt.figure(figsize=(7,4))
     plt.semilogy(z_grid, rho_crit_grid, lw=2, color='C2', label=r"$\rho_{\rm crit}(z)$")
     plt.grid(alpha=0.4, linestyle='--', which='both')
-    plt.xlabel("z", size=title_size)
-    plt.ylabel(r"$\rho_{\rm crit}\ \left[\frac{M_\odot/h}{\left(\mathrm{Mpc}/h\right)^3}\right]$", size=title_size)
-    plt.legend(fontsize=legend_size, frameon=False)
+    plt.xlabel("z", size=14)
+    plt.ylabel(r"$\rho_{\rm crit}\ \left[\frac{M_\odot/h}{\left(\mathrm{Mpc}/h\right)^3}\right]$", size=14)
+    plt.legend(fontsize=12, frameon=False)
     plt.minorticks_on()
     plt.show()
 
@@ -123,17 +123,17 @@ Below is an example showing how to compute and plot the linear and non-linear ma
 .. code-block:: python
     
     # Linear and non-linear power spectrum at z = 0.5
-    Pk_lin, k_lin = emulator.get_pk_at_z(z=0.5, params=params_hmfast, linear=True)
-    Pk_nl, k_nl = emulator.get_pk_at_z(z=0.5, params=params_hmfast, linear=False)
+    Pk_lin, k_lin = emulator.pk_matter(z=0.5, params=params_hmfast, linear=True)
+    Pk_nl, k_nl = emulator.pk_matter(z=0.5, params=params_hmfast, linear=False)
 
     # ------ Plot the results ------
     plt.figure(figsize=(7,4))
     plt.loglog(k_lin, Pk_lin, lw=2, c="skyblue", label="P_lin(k) at z=0.5")
     plt.loglog(k_nl, Pk_nl, lw=2, c="black", ls=':', label="P_nl(k) at z=0.5")
     plt.grid(which='both', linestyle='--', alpha=0.4)
-    plt.xlabel(r"$k\ \mathrm{[h/Mpc] }$", size=title_size)
-    plt.ylabel(r"$P(k)\ \mathrm{[(Mpc/h)^3]}$", size=title_size)
-    plt.legend(fontsize=legend_size, frameon=False)
+    plt.xlabel(r"$k\ \mathrm{[h/Mpc] }$", size=14)
+    plt.ylabel(r"$P(k)\ \mathrm{[(Mpc/h)^3]}$", size=14)
+    plt.legend(fontsize=12, frameon=False)
     plt.minorticks_on()
     plt.show()
 
