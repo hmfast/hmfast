@@ -198,12 +198,9 @@ class CIBTracer(BaseTracer):
                     +  jnp.sin(q) * (Si_q_scaled - Si_q) 
                     -  jnp.sin(lambda_val * c_mat * q) / q_scaled ) * f_nfw_val * m_over_rho_mean
         
-     
         return ell, u_ell_m
 
 
-
-    
 
     def get_u_ell(self, z, m, moment=1, params=None):
         """ 
@@ -218,9 +215,12 @@ class CIBTracer(BaseTracer):
 
         params = merge_with_defaults(params)
         h = params["H0"]/100
+        chi = self.emulator.angular_diameter_distance(z, params=params) * (1 + z)
         nu_rest = self.nu * (1 + z)
-        Ls = self.get_L_sat(z, m, nu_rest, params=params)
-        Lc = self.get_L_cen(z, m, nu_rest, params=params)
+
+        s_nu_factor = 1 /  ((1 + z) * 1e3 * 4 * jnp.pi * chi**2)
+        Ls = self.get_L_sat(z, m, nu_rest, params=params) * s_nu_factor
+        Lc = self.get_L_cen(z, m, nu_rest, params=params) * s_nu_factor
         
         a = 1. / (1. + z)
         
@@ -228,8 +228,8 @@ class CIBTracer(BaseTracer):
 
         
         moment_funcs = [
-            lambda _: a    * h**2 / (4 * jnp.pi)    * (Lc + Ls * u_m) ,
-            lambda _: a**2 * h**4 / (4 * jnp.pi)**2 * (Ls**2 * u_m**2 + 2 * Ls * Lc * u_m),
+            lambda _: 1    * h**2 / (4 * jnp.pi)    * (Lc + Ls * u_m) ,
+            lambda _: 1**2 * h**4 / (4 * jnp.pi)**2 * (Ls**2 * u_m**2 + 2 * Ls * Lc * u_m),
         ]
     
         u_ell = jax.lax.switch(moment - 1, moment_funcs, None)

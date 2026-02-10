@@ -215,7 +215,7 @@ class HaloModel:
         # Handle 1h damping if requested (i.e. if kstar_damping_1h is not None)
         chi = self.emulator.angular_diameter_distance(z, params=params) * (1 + z)
         k_grid = (l[None, :] + 0.5) / chi[:, None]
-        damping = jnp.where(kstar_damping_1h is None, 1.0, 1.0 - jnp.exp(-(k_grid / kstar_damping_1h) ** 2))
+        damping = jax.lax.cond(kstar_damping_1h <= 0.0, lambda _: jnp.ones_like(k_grid), lambda _: 1.0 - jnp.exp(-(k_grid / kstar_damping_1h) ** 2), operand=None)
         integrand *= damping[:, None, :]
     
         # Calculate uniform spacings
