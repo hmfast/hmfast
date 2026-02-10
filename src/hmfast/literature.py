@@ -116,10 +116,10 @@ def c_D08(z, m, A=5.71, B=-0.084, C=-0.47, M_pivot=2e12):
     return A * (m / M_pivot)**B * (1 + z)**C
 
 
-def c_SC14(m, z):
+def c_SC14(z, m):
     """
     Sanchez-Conde & Prada (2014) concentration-mass relation for c200_c.
-    Coefficients are found below equation 1, https://arxiv.org/pdf/1312.1729
+    Coefficients are found below Equation 1, https://arxiv.org/pdf/1312.1729
     """
     
     # Coefficients from Eq. 1
@@ -127,8 +127,30 @@ def c_SC14(m, z):
     logM = jnp.log10(m)
     powers = jnp.array([logM**i for i in range(6)])
     poly = jnp.sum(c_array[:, None] * powers, axis=0)
-    c200 = poly * (1 + z) ** -1
-    return c200
+    c200_c = poly * (1 + z) ** -1
+    return c200_c
 
+
+def c_B13(z, m, D):
+    """
+    Bhattacharya et al. (2013) mass-concentration relation for c200_c.
+    Obtained from Table 2, https://arxiv.org/pdf/1112.5479
+    D here is the growth factor D(z).
+    """
+    # Use the nu as defined in the B13 paper and pivot mass in Msun/h
+    nu = (1.12 * (m / 5e13)**0.3 + 0.53) / D
+    c200_c = (D**0.54) * 5.9 * nu**(-0.35)
+    return c200_c
+
+
+def c_DM14(z, m):
+    """
+    Dutton & Macciò (2014) mass-concentration relation for c_vir.
+
+    """
+    a = 0.537 + (1.025 - 0.537) * ((1 + z) ** -0.718) ** 1.08  # exponent on (1+z)
+    b = -0.097 + 0.024 * z
+    c_vir = 10 ** (a + b * jnp.log10(m / 1e12))
+    return c_vir
    
 

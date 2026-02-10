@@ -49,8 +49,8 @@ class HaloModel:
         self.mass_model = mass_model
         self.bias_model = bias_model
 
-        # Create TophatVar instance once
-        _, dummy_k = self.emulator.pk_matter(1., params=None, linear=True)
+        # Create TophatVar instance once to instantiate it
+        dummy_k, _ = self.emulator.pk_matter(1., params=None, linear=True)
         self._tophat_instance = partial(TophatVar(dummy_k, lowring=True, backend='jax'), extrap=True)
         self._tophat_instance_dvar = partial(TophatVar(dummy_k, lowring=True, backend='jax', deriv=1))
 
@@ -76,15 +76,15 @@ class HaloModel:
             sigma : array_like, σ(R, z) values
         """
 
-        z_grid = jnp.linspace(0.0, 8.0, 250) #self.emulator.z_grid() # May need to modify this
-        cparams = self.emulator.get_all_cosmo_params(params)   #
+        z_grid = self.emulator._z_grid_pk
+        cparams = self.emulator.get_all_cosmo_params(params)   
         h, delta = cparams["h"], params['delta'] 
        
         # Power spectra for all redshifts
-        P = jax.vmap(lambda zp: self.emulator.pk_matter(zp, params=params, linear=True)[0].flatten())(z_grid).T
+        P = jax.vmap(lambda zp: self.emulator.pk_matter(zp, params=params, linear=True)[1].flatten())(z_grid).T
         
         # Compute σ²(R, z) and dσ²/dR using TophatVar
-        _, ks = self.emulator.pk_matter(1.0, params=params, linear=True)
+        ks, _ = self.emulator.pk_matter(1.0, params=params, linear=True)
         R_grid, var = jax.vmap(self._tophat_instance, in_axes=1, out_axes=(None, 0))(P)
         dvar_grid = jax.vmap(lambda pks_col: self._tophat_instance_dvar(pks_col * ks, extrap=True)[1], in_axes=1)(P) 
 
@@ -192,8 +192,9 @@ class HaloModel:
     def cl_1h(self, tracer, 
                            z = jnp.geomspace(0.005, 3.0, 100), 
                            m = jnp.geomspace(5e10, 3.5e15, 100), 
-                           l = jnp.geomspace(1e2, 3.5e3, 50),  
-                           params = None):
+                           l = jnp.geomspace(1e2, 3.5e3, 50),
+                           params = None, 
+                           kstar_damping_1h = 0.01):
         """
         Compute the 1-halo term for cl.
         """
@@ -210,10 +211,15 @@ class HaloModel:
     
         # Perform element-wise multiplication
         integrand = u_l_squared_grid * dndlnm_grid_expanded * comov_vol_expanded  # Shape becomes (dim_z, dim_m, dim_l)
-        
-        logm_grid = jnp.log(m)
+
+        # Handle 1h damping if requested (i.e. if kstar_damping_1h is not None)
+        chi = self.emulator.angular_diameter_distance(z, params=params) * (1 + z)
+        k_grid = (l[None, :] + 0.5) / chi[:, None]
+        damping = jnp.where(kstar_damping_1h is None, 1.0, 1.0 - jnp.exp(-(k_grid / kstar_damping_1h) ** 2))
+        integrand *= damping[:, None, :]
     
         # Calculate uniform spacings
+        logm_grid = jnp.log(m)
         dx_m = logm_grid[1] - logm_grid[0]
         dx_z = z[1] - z[0]
     
@@ -265,7 +271,7 @@ class HaloModel:
 
         
         def P_at_k_for_z(z_idx):
-            P_z, ks = self.emulator.pk_matter(z[z_idx], params=params, linear=True)
+            ks, P_z = self.emulator.pk_matter(z[z_idx], params=params, linear=True)
             # P_z and ks are 1D arrays (length n_k). Interpolate P_z at query points k_grid[z_idx].
             # jnp.interp does 1D linear interpolation; out-of-bounds values take edge values.
             return jnp.interp(k_grid[z_idx], ks, P_z)

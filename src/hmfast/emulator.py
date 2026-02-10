@@ -41,9 +41,11 @@ class Emulator:
         # atomic emulator cache
         self._emu = {}
         # cached grids / derived constants
-        self._z_interp = None
+        self._z_grid_bg = jnp.linspace(0.0, 20.0, 5000, dtype=jnp.float64)    # z grid for background quantities such as H(z), d_A(z), sigma8(z)
+        self._z_grid_pk = jnp.linspace(0.0, 5.0, 1000, dtype=jnp.float64)     # z grid for Pk(z)
         self._k_grid = None
         self._pk_power_fac = None
+        self._setup_pk_grid()                  
 
     # ------------------------------------------------------------------
     # atomic lazy loader (Python-side only)
@@ -77,9 +79,6 @@ class Emulator:
     # ------------------------------------------------------------------
     # shared grids (lazy, cached)
     # ------------------------------------------------------------------
-
-    def _get_z_interp(self):
-        return jnp.linspace(0.0, 20.0, 5000, dtype=jnp.float64)
 
     def _setup_pk_grid(self):
         if self._k_grid is not None:
@@ -139,7 +138,7 @@ class Emulator:
         params = merge_with_defaults(params)
         emu = self._load_emulator("HZ")
         preds = 10.0 ** emu.predictions(params)
-        return self._interp_z(z, self._get_z_interp(), preds)
+        return self._interp_z(z, self._z_grid_bg, preds)
 
     def angular_diameter_distance(self, z, params=None):
         """
@@ -166,7 +165,7 @@ class Emulator:
             preds = 10.0 ** preds
             preds = jnp.insert(preds, 0, 0.0)
 
-        return self._interp_z(z, self._get_z_interp(), preds)
+        return self._interp_z(z, self._z_grid_bg, preds)
 
     def sigma8(self, z, params=None):
         """
@@ -187,7 +186,7 @@ class Emulator:
         params = merge_with_defaults(params)
         emu = self._load_emulator("S8Z")
         preds = emu.predictions(params)
-        return self._interp_z(z, self._get_z_interp(), preds)
+        return self._interp_z(z, self._z_grid_bg, preds)
 
 
     def get_all_cosmo_params(self, params = None):
@@ -259,48 +258,58 @@ class Emulator:
         return rho_crit_factor * (H_z/h)**2 
 
 
+    def growth_factor(self, z, params=None):
+        """
+        Linear growth factor D(z), normalized to D(0)=1.
+        """
+        
+        params = merge_with_defaults(params)
+        z = jnp.atleast_1d(z)
+    
+        k0 = 1e-2  # reference wavenumber
+        pk0_grid = jax.vmap(lambda zp: jnp.interp(k0, *self.pk_matter(zp, params=params, linear=True)))(self._z_grid_pk)
+        D_grid = jnp.sqrt(pk0_grid / jnp.interp(k0, *self.pk_matter(0.0, params=params, linear=True)))
+    
+        return jnp.interp(z, self._z_grid_pk, D_grid)
+
+
+    def growth_rate(self, z, params=None):
+        """
+        Return the linear growth rate f(z) = d ln D / d ln a.
+        """
+        
+        params = merge_with_defaults(params)
+        z = jnp.atleast_1d(z)
+        
+        D_grid = self.growth_factor(self._z_grid_pk, params=params)
+        a_grid = 1.0 / (1.0 + self._z_grid_pk)
+        f_grid = jnp.gradient(jnp.log(D_grid), jnp.log(a_grid))
+        
+        return jnp.interp(z, self._z_grid_pk, f_grid)
+
+
+
     def v_rms_squared(self, z, params=None):
         """
-        Return v_rms^2 at input z (scalar or array), using interpolation from a precomputed grid.
+        v_rms^2(z) from linear growth factor and matter power spectrum.
         """
-        params = merge_with_defaults(params)
-    
-        # Local grids (do not use self._k_grid inside jit context)
-        k_grid = jnp.geomspace(1e-5, 1e1, 1000)
-        z_grid = jnp.linspace(0, 5, 200)
-    
-        def pk_at_z(zval):
-            pk, k_arr = self.pk_matter(zval, params=params, linear=True)
-            return jnp.interp(k_grid, k_arr, pk)
-    
-        P = jax.vmap(pk_at_z)(z_grid)  # shape (num_z, num_k)
-    
-        a = 1.0 / (1.0 + z_grid)
-        H = self.hubble_parameter(z_grid, params=params)
-    
-        k0 = 1e-2
-        def pk0_at_z(zval):
-            pk, k_arr = self.pk_matter(zval, params=params, linear=True)
-            return jnp.interp(k0, k_arr, pk)
-        pk0 = jax.vmap(pk0_at_z)(z_grid)
-        pk0_0 = pk0_at_z(0.0)
-        D = jnp.sqrt(pk0 / pk0_0)
-    
-        dlnD = jnp.gradient(jnp.log(D), jnp.log(1 + z_grid))
-        f = -dlnD
-    
-        W = f * a * H
-        I = (1/3) * (W[:, None]**2) * P * k_grid / (2 * jnp.pi**2)
-        x = jnp.log(k_grid)
-        vrms2_grid = jax.scipy.integrate.trapezoid(I, x=x, axis=1)  # shape: (num_z,)
-    
-        # Interpolate to requested z values
-        z = jnp.atleast_1d(z)
-        vrms2_out = jnp.interp(z, z_grid, vrms2_grid)
-        return vrms2_out
-    
-    
         
+        z = jnp.atleast_1d(z)
+        k_grid = jnp.geomspace(1e-5, 1e1, 1000)
+    
+        # P(k, z) on the pk grid
+        P_grid = jax.vmap(lambda zp: jnp.interp(k_grid, *self.pk_matter(zp, params=params, linear=True)))(self._z_grid_pk)
+    
+        a_grid = 1.0 / (1.0 + self._z_grid_pk)
+        H_grid = self.hubble_parameter(self._z_grid_pk, params=params)
+        f_grid = self.growth_rate(self._z_grid_pk, params=params)
+    
+        W_grid = f_grid * a_grid * H_grid
+        integrand = (W_grid[:, None]**2 / 3) * P_grid * k_grid / (2 * jnp.pi**2)
+        vrms2_grid = jax.scipy.integrate.trapezoid(integrand, x=jnp.log(k_grid), axis=1)
+    
+        return jnp.interp(z, self._z_grid_pk, vrms2_grid)
+
         
     def delta_crit_to_mean(self, delta_crit, z, params=None):
         """
@@ -366,10 +375,6 @@ class Emulator:
         return (1 + z)**2 * dAz**2 / Hz
    
 
-    def z_grid(self) -> jnp.ndarray:
-        return self._get_z_interp()
-   
-
     # ------------------------------------------------------------------
     # Matter power spectra
     # ------------------------------------------------------------------
@@ -399,12 +404,10 @@ class Emulator:
         key = "PKL" if linear else "PKNL"
         emu = self._load_emulator(key)
 
-        self._setup_pk_grid()
-
         pk_log = emu.predictions(params)
         pk = 10.0 ** pk_log * self._pk_power_fac
 
-        return pk, self._k_grid
+        return self._k_grid, pk
 
     # ------------------------------------------------------------------
     # CMB
