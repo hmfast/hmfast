@@ -17,30 +17,30 @@ To use the ``HaloModel`` class, you must first instantiate your halo model by sp
 
 .. code-block:: python
 
-    import hmfast 
-    import jax
-    import jax.numpy as jnp
-    import matplotlib.pyplot as plt
+   import hmfast 
+   import jax
+   import jax.numpy as jnp
+   import matplotlib.pyplot as plt
     
     
-    params_hmfast = {
-        'omega_b': 0.02,
-        'omega_cdm':  0.12,
-        'H0': 67.5, 
-        'tau_reio': 0.0561,
-        'ln10^{10}A_s': 3.047,
-        'n_s': 0.9665
-    }
+   params_hmfast = {
+      'omega_b': 0.02,
+      'omega_cdm':  0.12,
+      'H0': 67.5, 
+      'tau_reio': 0.0561,
+      'ln10^{10}A_s': 3.047,
+      'n_s': 0.9665
+   }
 
    # Define the halo model instance
-    halo_model = hmfast.halo_model.HaloModel(cosmo_model=0)
+   halo_model = hmfast.halo_model.HaloModel(cosmo_model=0)
 
 
 
 Halo mass function
 ----------------------------
 
-With our halo model defined, we can now compute halo mass function. 
+With our halo model defined, we can now compute halo mass function, which is defined as :math:`\mathrm{d}n/\mathrm{d}\ln M`.
 In this example, we will evaluate three scalar redshifts for an array of masses.
 However, you can pass any configuration of arrays/scalars for mass and redshift.
 
@@ -106,7 +106,7 @@ Once you're ready to compute the angular power spectra, you must first instantia
 
 .. code-block:: python
 
-    tsz_tracer = halo_model.create_tracer("y")
+   tsz_tracer = halo_model.create_tracer("y")
 
 You may now easily compute the 1-halo and 2-halo of your tSZ tracer:
 
