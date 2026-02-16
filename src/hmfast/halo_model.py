@@ -126,7 +126,7 @@ class HaloModel:
         Returns
         -------
         jnp.ndarray
-            Mass function dn/dM [h^3/Mpc^3/Msun]
+            Mass function dn/dlnM [h^3/Mpc^3/Msun]
         """
 
         # Compute the hmf values which sets up the interpolator

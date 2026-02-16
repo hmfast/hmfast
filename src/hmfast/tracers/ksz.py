@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 from hmfast.emulator import Emulator
-from hmfast.base_tracer import BaseTracer, HankelTransform
+from hmfast.tracers.base_tracer import BaseTracer, HankelTransform
 from hmfast.defaults import merge_with_defaults
 from hmfast.literature import c_D08
 
@@ -16,6 +16,7 @@ class KSZTracer(BaseTracer):
         self.x = x if x is not None else jnp.logspace(jnp.log10(1e-4), jnp.log10(20.0), 512)
         self.hankel = HankelTransform(self.x, nu=0.5)
         self.concentration_relation = concentration_relation
+        self.profile = self.b16_density_profile
 
         # Load emulator and make sure the required files are loaded outside of jitted functions
         self.emulator = Emulator(cosmo_model=0)
@@ -131,20 +132,6 @@ class KSZTracer(BaseTracer):
         
         return rho_gas
     
-
-    def _compute_r_and_ell(self, z, m, params=None):
-        """
-        Helper to compute r_delta and ell_delta for each halo.
-        """
-        params = merge_with_defaults(params)
-        h, B, delta = params['H0']/100, params['B'], params['delta']
-        d_A = self.emulator.angular_diameter_distance(z, params=params) * h
-        r_delta = self.emulator.r_delta(z, m, delta, params=params) 
-        
-        ell_delta = d_A / r_delta
-        return r_delta, ell_delta
-
-
    
     def get_prefactor(self, z, m, params=None):
         """
@@ -155,8 +142,10 @@ class KSZTracer(BaseTracer):
         cparams = self.emulator.get_all_cosmo_params(params=params)
 
         # Get relevant quantities
-        h = cparams['h'] 
-        r_delta, ell_delta = self._compute_r_and_ell(z, m, params=params)
+        h, delta = params['H0']/100, params['delta']
+        d_A = self.emulator.angular_diameter_distance(z, params=params) * h
+        r_delta = self.emulator.r_delta(z, m, delta, params=params) 
+        ell_delta = d_A / r_delta
         chi = self.emulator.angular_diameter_distance(z, params=params) * h * (1 + z)
 
         # Compute the root mean squared velocity needed for the kSZ prefactor
@@ -171,25 +160,7 @@ class KSZTracer(BaseTracer):
         f_free = 1
         prefactor =  4 * jnp.pi * r_delta**3 * a * sigma_T_over_m_p * f_free / mu_e * (1 + z)**3 / chi**2 * vrms
 
-        return prefactor, ell_delta
-
-
-    def get_hankel_integrand(self, z, m, params=None):
-        params = merge_with_defaults(params)
-        cparams = self.emulator.get_all_cosmo_params(params=params)
-
-        h  = cparams['h'] 
-        r_delta, ell_delta = self._compute_r_and_ell(z, m, params=params)
-        x = self.x
-       
-        # First element in x grid is the smallest, truncate at r_delta (x = r_delta/r_delta = 1)
-        W_x = jnp.where((x >= x[0]) & (x <= 1), 1.0, 0.0)
-
-        def single_m(m_val):
-            rho_gas = self.b16_density_profile(z, m_val, params=params)
-            return x**0.5 * rho_gas * W_x
-            
-        return jax.vmap(single_m)(m)
+        return prefactor
 
 
     def get_u_ell(self, z, m, moment=1, params=None):
@@ -202,15 +173,11 @@ class KSZTracer(BaseTracer):
         
         params = merge_with_defaults(params)
         
-        # Hankel transform
-        hankel_integrand = self.get_hankel_integrand(z, m, params=params)
-        k, u_k = self.hankel.transform(hankel_integrand)
-        u_k *= jnp.sqrt(jnp.pi / (2 * k[None, :]))
-    
-        # Prefactors and ell-scaling
-        prefactor, scale_factor = self.get_prefactor(z, m, params=params)
-        ell = k[None, :] * scale_factor[:, None] 
-        u_ell_base = prefactor[:, None] * u_k
+        # Get prefactor and perform Hankel transform from BaseTracer 
+        prefactor = self.get_prefactor(z, m, params=params)
+        ell, u_ell = self.u_ell_hankel(z, m, self.x, params=params)
+        
+        u_ell_base = prefactor[:, None] * u_ell
     
         # Select moment using JAX-safe branching
         moment_funcs = [
