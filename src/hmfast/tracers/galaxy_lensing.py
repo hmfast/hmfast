@@ -57,7 +57,7 @@ class GalaxyLensingTracer(BaseTracer):
     
     def get_I_g(self, z, params=None):
         """
-        Return Wg_grid at requested z.
+        Return I_g at requested z.
         Uses pre-loaded dndz_data = [z, phi_prime].
         Integrates only over sources behind the lens (z_s > z).
         """
@@ -95,7 +95,7 @@ class GalaxyLensingTracer(BaseTracer):
 
 
 
-    def get_W_kappa_g(self, z, params=None):
+    def kernel(self, z, params=None):
         """
         Compute the galaxy lensing kernel W_kappa_g at redshift z.
         """
@@ -139,7 +139,7 @@ class GalaxyLensingTracer(BaseTracer):
 
         params = merge_with_defaults(params)
         cparams = self.halo_model.emulator.get_all_cosmo_params(params)
-        W = self.get_W_kappa_g(z, params=params) 
+        W = self.kernel(z, params=params) 
 
         # Compute u_m_ell from BaseTracer
         ell, u_m = self.u_ell_analytic(z, m, params=params)

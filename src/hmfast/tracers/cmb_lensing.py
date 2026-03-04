@@ -9,7 +9,6 @@ from hmfast.halo_model import HaloModel
 from hmfast.tracers.base_tracer import BaseTracer
 from hmfast.defaults import merge_with_defaults
 from hmfast.download import get_default_data_path
-from hmfast.literature import c_D08
 
 jax.config.update("jax_enable_x64", True)
 
@@ -35,8 +34,9 @@ class CMBLensingTracer(BaseTracer):
         self.halo_model.emulator._load_emulator("DAZ")
         self.halo_model.emulator._load_emulator("HZ")
         self.halo_model.emulator._load_emulator("DER")
+        
 
-    def get_W_kappa_cmb(self, z, params=None):
+    def kernel(self, z, params=None):
         """
         Compute the CMB lensing kernel W_kappa_cmb at redshift z.
         """
@@ -81,7 +81,7 @@ class CMBLensingTracer(BaseTracer):
 
         params = merge_with_defaults(params)
         cparams = self.halo_model.emulator.get_all_cosmo_params(params)
-        W = self.get_W_kappa_cmb(z, params=params) 
+        W = self.kernel(z, params=params) 
 
         # Compute u_m_ell from BaseTracer
         ell, u_m = self.u_ell_analytic(z, m, params=params)

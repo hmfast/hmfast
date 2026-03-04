@@ -7,9 +7,9 @@ from hmfast.tracers.base_tracer import BaseTracer, HankelTransform
 from hmfast.defaults import merge_with_defaults
 from hmfast.tools.constants import Const
 
+jax.config.update("jax_enable_x64", True)
 
-
-class TSZTracer(BaseTracer):
+class tSZTracer(BaseTracer):
     """
     tSZ tracer using GNFW profile.
     """
@@ -39,7 +39,8 @@ class TSZTracer(BaseTracer):
         
         # Compute helper variables and the final value of Pe
         h = H0 / 100.0 
-        H = self.halo_model.emulator.hubble_parameter(z, params=params) * 299792.458  # multiply by speed of light in km/s 
+        c_km_s = Const._c_ / 1e3
+        H = self.halo_model.emulator.hubble_parameter(z, params=params) * c_km_s  # multiply by speed of light in km/s 
         m_delta_tilde = (m / B) # convert to M_sun 
         C = 1.65 * (h / 0.7)**2 * (H / H0)**(8 / 3) * (m_delta_tilde / (0.7 * 3e14))**(2 / 3 + 0.12) * (0.7/h)**1.5 # eV cm^-3
         scaled_x = c_delta * x
@@ -48,7 +49,7 @@ class TSZTracer(BaseTracer):
         return Pe
         
 
-    def get_prefactor(self, z, m, params=None):
+    def prefactor(self, z, m, params=None):
         """
         Compute tSZ prefactor.
         """
@@ -59,8 +60,12 @@ class TSZTracer(BaseTracer):
         r_delta = self.halo_model.r_delta(z, m, delta, params=params) / B**(1/3)
         ell_delta = d_A / r_delta
 
-        m_e, sigma_T, mpc_per_h_to_cm = 510998.95, 6.6524587321e-25, 3.085677581e24 / h
+        # Get electon mass in eV, Thomson cross section in cm^2, and Mpc/h in cm
+        m_e = Const._m_e_ * Const._c_**2 / Const._eV_
+        sigma_T = Const._sigma_T_ * 1e6
+        mpc_per_h_to_cm =  Const._Mpc_over_m_ / h
 
+        # Define prefactor and return it
         prefactor = (sigma_T / m_e) * 4 * jnp.pi * r_delta * mpc_per_h_to_cm / (ell_delta**2)
         return prefactor
 
@@ -76,7 +81,7 @@ class TSZTracer(BaseTracer):
         params = merge_with_defaults(params)
        
          # Get prefactor and perform Hankel transform from BaseTracer
-        prefactor = self.get_prefactor(z, m, params=params)
+        prefactor = self.prefactor(z, m, params=params)
         ell, u_ell = self.u_ell_hankel(z, m, self.x, params=params)
 
         # For tSZ, we need to correct with the hydrostatic mass bias factor B 
