@@ -5,7 +5,7 @@ from hmfast.emulator import Emulator
 from hmfast.halo_model import HaloModel
 from hmfast.tracers.base_tracer import BaseTracer, HankelTransform
 from hmfast.defaults import merge_with_defaults
-from hmfast.tools.constants import Const
+from hmfast.utils import Const
 
 jax.config.update("jax_enable_x64", True)
 

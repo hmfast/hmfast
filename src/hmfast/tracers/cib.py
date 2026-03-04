@@ -5,9 +5,8 @@ from hmfast.emulator import Emulator
 from hmfast.halo_model import HaloModel
 from hmfast.tracers.base_tracer import BaseTracer
 from hmfast.defaults import merge_with_defaults
-from hmfast.literature import TW10SubHaloMass
-from hmfast.tools.lambertw import lambertw
-from hmfast.tools.constants import Const
+from hmfast.halo_model.mass_function import TW10SubHaloMass
+from hmfast.utils import lambertw, Const
 
 jax.config.update("jax_enable_x64", True)
 
@@ -116,7 +115,7 @@ class CIBTracer(BaseTracer):
         params = merge_with_defaults(params)
         
         # Use a small fraction of host mass or a fixed value for min subhalo mass
-        Ms_min = 1e5  # or Ms_min = 1e-4 * M_host
+        Ms_min = 1e5  # or Ms_min = 1e-4 * M_host - should eventually be a free parameter
         ngrid = 100   # Reasonable default for integration grid
     
         Ms_grid = jnp.logspace(jnp.log10(Ms_min), jnp.log10(m), ngrid)
@@ -145,6 +144,71 @@ class CIBTracer(BaseTracer):
          L_cen = N_cen * L_gal
          return L_cen
 
+    def jbar_nu(self, z, m, nu, params=None):
+        """
+        Compute j̄_ν(z) = ∫dlnM (dn/dlnM) * (1/4π) * (Lc + Ls)
+        
+       
+        Returns
+        -------
+        float
+            j̄_ν(z) in appropriate units
+        """
+        params = merge_with_defaults(params)
+        
+        # Rest-frame frequency
+        nu_rest = nu * (1 + z)
+        
+        # Get Lc and Ls at each mass (no NFW profile for monopole)
+        Lc = jax.vmap(lambda m_i: self.l_cen(z, m_i, nu_rest, params=params))(m)
+        Ls = jax.vmap(lambda m_i: self.l_sat(z, m_i, nu_rest, params=params))(m)
+        
+        # Halo mass function
+        dndlnm = self.halo_model.halo_mass_function(z, m, params=params)
+        
+        # Integrand: (dn/dlnM) * (1/4π) * (Lc + Ls)
+        integrand = dndlnm * (1.0 / (4.0 * jnp.pi)) * (Lc + Ls)
+        
+        # Integrate over ln(M)
+        logm = jnp.log(m)
+        jbar = jnp.trapezoid(integrand, x=logm)
+        
+        return jbar
+
+
+    def cib_monopole(self, nu, z=jnp.geomspace(0.005, 3.0, 100), m=jnp.geomspace(1e10, 1e15, 100), params=None):
+        """
+        Compute the CIB monopole I_ν = ∫dz j̄_ν(z) * h² * (c/H)
+        
+        Returns
+        -------
+        float
+            I_ν in Jy/sr
+        """
+        params = merge_with_defaults(params)
+        
+        
+        h = params["H0"] / 100.0
+        c_km_s = 299792.458  # speed of light in km/s
+        
+        # Compute j̄_ν(z) at each redshift
+        jbar_grid = jax.vmap(lambda z_i: self.jbar_nu(z_i, m, nu, params=params))(z)
+        
+        # H(z) in km/s/Mpc
+        Hz_grid = self.halo_model.emulator.hubble_parameter(z, params=params) * c_km_s  # Convert from 1/Mpc to km/s/Mpc
+        
+        # dχ/dz = c/H(z) in Mpc
+        dchi_dz = c_km_s / Hz_grid
+        
+        # Integrand: j̄_ν * h² * (c/H)
+        integrand = jbar_grid * h**2 * dchi_dz
+        
+        # Integrate over z
+        I_nu = jnp.trapezoid(integrand, x=z)
+        
+        return I_nu
+
+
 
     def get_u_ell(self, z, m, moment=1, params=None):
         """ 
@@ -164,7 +228,7 @@ class CIBTracer(BaseTracer):
         chi = self.halo_model.emulator.angular_diameter_distance(z, params=params) * (1 + z) * h 
         nu_rest = self.nu * (1 + z)
 
-        s_nu_factor = 1 / ((1 + z) * chi**2) 
+        s_nu_factor = jnp.sqrt(1 + z) / ((1 + z) * chi**2) 
         
         Ls = self.l_sat(z, m, nu_rest, params=params) 
         Lc = self.l_cen(z, m, nu_rest, params=params) 
@@ -179,12 +243,18 @@ class CIBTracer(BaseTracer):
 
         Hz = self.halo_model.emulator.hubble_parameter(z, params=params)
 
-        u_m *= m_over_rho_mean
+        #u_m *= m_over_rho_mean
     
         moment_funcs = [
-            lambda _: 1 / h      / (4*jnp.pi)          * (Lc + Ls * u_m)                        * s_nu_factor     *  Hz *  (1+z)    ,
-            lambda _: 1 / h**2   / (4*jnp.pi)**2       * (Ls**2 * u_m**2 + 2 * Ls * Lc * u_m)   * s_nu_factor**2  * (Hz * (1+z))**2 ,
+            lambda _: 1 / h**2      / (4*jnp.pi)          * (Lc + Ls * u_m)                           * s_nu_factor        ,
+            lambda _: 1 / h**4      / (4*jnp.pi)**2       * (Ls**2 * u_m**2 + 2 * Ls * Lc * u_m)      * s_nu_factor**2     ,
         ]
+
+
+        #moment_funcs = [
+        #    lambda _: 1 / h**4      / (4*jnp.pi)          * (Lc + Ls * u_m)                                                ,
+        #    lambda _: 1 / h**8      / (4*jnp.pi)**2       * (Ls**2 * u_m**2 + 2 * Ls * Lc * u_m)                           ,
+        #]
     
         u_ell = jax.lax.switch(moment - 1, moment_funcs, None)
     
