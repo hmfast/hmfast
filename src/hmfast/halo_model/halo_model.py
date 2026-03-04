@@ -9,10 +9,12 @@ from typing import Dict, Any, Optional, Callable
 from functools import partial
 from mcfit import TophatVar
 
-from hmfast.literature import T08HaloMass, T10HaloBias, D08Concentration, B13Concentration
+from hmfast.halo_model.mass_function import T08HaloMass
+from hmfast.halo_model.bias import T10HaloBias
+from hmfast.halo_model.concentration import D08Concentration, B13Concentration
 from hmfast.emulator import Emulator
 from hmfast.defaults import merge_with_defaults
-from hmfast.tools.newton_root import newton_root
+from hmfast.utils import newton_root
 
 jax.config.update("jax_enable_x64", True)
 

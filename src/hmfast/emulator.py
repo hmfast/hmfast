@@ -5,7 +5,7 @@ from typing import Dict, Union
 from hmfast.emulator_load import EmulatorLoader, EmulatorLoaderPCA
 from hmfast.defaults import merge_with_defaults
 from hmfast.download import get_default_data_path
-from hmfast.tools.constants import Const
+from hmfast.utils import Const
 
 jax.config.update("jax_enable_x64", True)
 
