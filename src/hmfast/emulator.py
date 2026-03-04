@@ -211,7 +211,6 @@ class Emulator:
     
         p = merge_with_defaults(params)
         
-        #p['Rho_crit_0'] = 2.77528234822e11 * p['h']**2  
 
         c, G, M_sun, sigma_B, Mpc_over_m = Const._c_, Const._G_, Const._M_sun_, Const._sigma_B_, Const._Mpc_over_m_
 
@@ -265,6 +264,23 @@ class Emulator:
         rho_crit_factor = (3.0 / (8.0 * jnp.pi * G * M_sun)) * Mpc_over_m * c**2 
         
         return rho_crit_factor * (H_z/h)**2 
+        
+
+    def omega_m_z(self, z, params=None):
+        """
+        Compute Ω_m(z) = rho_m(z) / rho_crit(z) without neutrinos.
+    
+        Returns
+        -------
+        omega_m : float or array
+            Dimensionless matter density at redshift z
+        """
+        params = merge_with_defaults(params)
+        params = self.get_all_cosmo_params(params)
+        om0, om0_nonu, or0, ol0 = params['Omega0_m'], params['Omega0_m_nonu'], params['Omega0_r'], params['Omega_Lambda']
+        Omega_m_z = om0_nonu * (1. + z)**3. / (om0 * (1. + z)**3. + ol0 + or0 * (1. + z)**4.) # omega_matter without neutrinos
+        
+        return Omega_m_z
 
 
     def growth_factor(self, z, params=None):

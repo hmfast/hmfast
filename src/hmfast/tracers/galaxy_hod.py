@@ -4,6 +4,7 @@ import jax
 import jax.numpy as jnp
 import jax.scipy as jscipy
 from jax.scipy.special import sici, erf 
+
 from hmfast.tracers.base_tracer import BaseTracer
 from hmfast.emulator import Emulator
 from hmfast.halo_model import HaloModel
@@ -49,7 +50,7 @@ class GalaxyHODTracer(BaseTracer):
         return (jnp.array(x), jnp.array(y))
         
         
-    def get_N_centrals(self, m, params = None):
+    def n_cen(self, m, params = None):
         """Mean central occupation: shape = M.shape"""
 
         params = merge_with_defaults(params)
@@ -61,7 +62,7 @@ class GalaxyHODTracer(BaseTracer):
         return 0.5 * (1.0 + erf(x))
 
     
-    def get_N_satellites(self, m, params = None):
+    def n_sat(self, m, params = None):
         """Mean satellite occupation: shape = M.shape"""
         params = merge_with_defaults(params)
         M0 = params["M0_HOD"]
@@ -70,11 +71,11 @@ class GalaxyHODTracer(BaseTracer):
 
         # power law only above M0 and use jnp.where to keep differentiability
         pow_term = jnp.maximum((m - M0) / M1p, 0.0)**alpha
-        N_c = self.get_N_centrals(m, params = params)
+        N_c = self.n_cen(m, params = params)
         return  N_c * pow_term
         
 
-    def get_ng_bar(self, z, m, params = None):
+    def ng_bar(self, z, m, params = None):
         """
         Compute comoving galaxy number density ng(z) = ∫ dlnM [dn/dlnM] [Nc+Ns].
         halo_model: HaloModel instance
@@ -87,8 +88,8 @@ class GalaxyHODTracer(BaseTracer):
         logm = jnp.log(m)
         z = jnp.atleast_1d(z)
 
-        Nc = self.get_N_centrals(m, params=params)
-        Ns = self.get_N_satellites(m, params=params)
+        Nc = self.n_cen(m, params=params)
+        Ns = self.n_sat(m, params=params)
         Ntot = Nc + Ns
     
         def ng_bar_single(z_single):
@@ -100,7 +101,7 @@ class GalaxyHODTracer(BaseTracer):
         return jax.vmap(ng_bar_single)(z)
         
 
-    def get_W_g(self, z, params=None):
+    def kernel(self, z, params=None):
         """
         Return Wg_grid at requested z.
         Uses pre-loaded dndz_data = [z, phi_prime].
@@ -134,10 +135,10 @@ class GalaxyHODTracer(BaseTracer):
         """
 
         params = merge_with_defaults(params)
-        Ns = self.get_N_satellites(m, params=params)
-        Nc = self.get_N_centrals(m, params=params)
-        ng = self.get_ng_bar(z, m, params=params) * (params["H0"]/100)**3
-        W  = self.get_W_g(z, params=params)
+        Ns = self.n_sat(m, params=params)
+        Nc = self.n_cen(m, params=params)
+        ng = self.ng_bar(z, m, params=params) * (params["H0"]/100)**3
+        W  = self.kernel(z, params=params)
 
         # Compute u_m_ell from BaseTracer
         ell, u_m = self.u_ell_analytic(z, m, params=params)  

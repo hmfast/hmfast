@@ -3,8 +3,9 @@ import jax.numpy as jnp
 import functools
 import mcfit
 from abc import ABC, abstractmethod
-from hmfast.defaults import merge_with_defaults
 from jax.scipy.special import sici, erf 
+
+from hmfast.defaults import merge_with_defaults
 
 
 

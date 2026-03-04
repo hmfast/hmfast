@@ -5,10 +5,11 @@ from hmfast.emulator import Emulator
 from hmfast.halo_model import HaloModel
 from hmfast.tracers.base_tracer import BaseTracer, HankelTransform
 from hmfast.defaults import merge_with_defaults
+from hmfast.tools.constants import Const
 
+jax.config.update("jax_enable_x64", True)
 
-
-class KSZTracer(BaseTracer):
+class kSZTracer(BaseTracer):
     """
     tSZ tracer using GNFW profile.
     """
@@ -16,7 +17,7 @@ class KSZTracer(BaseTracer):
 
 
         # Set tracer parameters
-        self.x = x if x is not None else jnp.logspace(jnp.log10(1e-4), jnp.log10(20.0), 512)
+        self.x = x if x is not None else jnp.logspace(jnp.log10(1e-4), jnp.log10(1.0), 512)
         self.hankel = HankelTransform(self.x, nu=0.5)
         self.profile = self.b16_density_profile
 
@@ -135,7 +136,7 @@ class KSZTracer(BaseTracer):
         return rho_gas
     
    
-    def get_prefactor(self, z, m, params=None):
+    def prefactor(self, z, m, params=None):
         """
         Compute kSZ prefactor.
         """
@@ -154,7 +155,8 @@ class KSZTracer(BaseTracer):
         vrms = jnp.sqrt(self.halo_model.emulator.v_rms_squared(z, params=params))
 
         # sigmaT / m_prot in (Mpc/h)**2/(Msun/h) which is required for kSZ
-        sigma_T_over_m_p = 8.305907197761162e-17 * h  
+        sigma_T_over_m_p = (Const._sigma_T_ / Const._m_p_) / Const._Mpc_over_m_**2 * Const._M_sun_ * h
+        #sigma_T_over_m_p = 8.305907197761162e-17 * h  
 
         # Get full prefactor
         a = 1.0 / (1.0 + z)
@@ -176,7 +178,7 @@ class KSZTracer(BaseTracer):
         params = merge_with_defaults(params)
         
         # Get prefactor and perform Hankel transform from BaseTracer 
-        prefactor = self.get_prefactor(z, m, params=params)
+        prefactor = self.prefactor(z, m, params=params)
         ell, u_ell = self.u_ell_hankel(z, m, self.x, params=params)
         
         u_ell_base = prefactor[:, None] * u_ell

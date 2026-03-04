@@ -57,12 +57,23 @@ DEFAULT_PARAMS = {
 
 
 def merge_with_defaults(user_params=None):
-    """
-    Merge user-supplied parameters with the global defaults.
-    """
-    merged = DEFAULT_PARAMS.copy()
-    if user_params:
-        merged.update(user_params)
-    return merged
+    """Merge user parameters with defaults (case-insensitive) and validate."""
+    if user_params is None:
+        return DEFAULT_PARAMS.copy()
 
+    # Build lowercase maps for validation
+    lc_defaults = {k.lower(): k for k in DEFAULT_PARAMS}  # maps lowercase -> original key
+    lc_user = {k.lower(): v for k, v in user_params.items()}
+
+    # Validate keys
+    invalid = [k for k in lc_user if k not in lc_defaults]
+    if invalid:
+        raise ValueError(f"Invalid parameter(s) provided: {invalid}. Please refer to the documentation for the full list of parameters.")
+
+    # Merge using original DEFAULT_PARAMS keys
+    merged = DEFAULT_PARAMS.copy()
+    for lc_key, value in lc_user.items():
+        merged[lc_defaults[lc_key]] = value
+
+    return merged
 

@@ -7,15 +7,13 @@ import jax.numpy as jnp
 import jax.scipy as jscipy
 from typing import Dict, Any, Optional, Callable
 from functools import partial
+from mcfit import TophatVar
 
-from hmfast.literature import hmf_T08, hbf_T10, c_D08, c_B13
+from hmfast.literature import T08HaloMass, T10HaloBias, D08Concentration, B13Concentration
 from hmfast.emulator import Emulator
 from hmfast.defaults import merge_with_defaults
-import hmfast.tracers as tracers
 from hmfast.tools.newton_root import newton_root
 
-
-from mcfit import TophatVar
 jax.config.update("jax_enable_x64", True)
 
 
@@ -27,7 +25,7 @@ class HaloModel:
     with automatic differentiation capabilities.
     """
     
-    def __init__(self, cosmo_model=0, delta = 200, delta_ref = "critical", mass_model = hmf_T08, bias_model = hbf_T10, concentration_relation=c_D08):
+    def __init__(self, cosmo_model=0, delta = 200, delta_ref = "critical", mass_model = T08HaloMass(), bias_model = T10HaloBias(), concentration_relation=D08Concentration()):
         """
         Initialize the halo model.
         
@@ -55,8 +53,10 @@ class HaloModel:
         self.bias_model = bias_model
         self.concentration_relation = concentration_relation
         
+        self._delta = None
+        self._delta_ref = None
+        self.delta_ref = delta_ref
         self.delta = delta
-        self.delta_ref = delta_ref 
 
 
         # Create TophatVar instance once to instantiate it
@@ -70,26 +70,68 @@ class HaloModel:
     
     @delta_ref.setter
     def delta_ref(self, value):
+        value = str(value).lower()
         if value not in ("critical", "mean"):
             raise ValueError("delta_ref must be either 'critical' or 'mean'")
+            
+        # Prevent changing delta_ref if delta == "vir"
+        if getattr(self, "_delta", None) == "vir" and value != "critical":
+            raise ValueError("'vir' is only allowed with 'critical' delta_ref")
         self._delta_ref = value
 
-    
-    def omega_m_z(self, z, params=None):
+        
+    @property
+    def delta(self):
+        return self._delta
+
+        
+    @delta.setter
+    def delta(self, value):
+        if isinstance(value, str):
+            value = value.lower()
+            
+        # If 'vir', delta_ref must be 'critical'
+        if value == "vir":
+            if getattr(self, "_delta_ref", None) != "critical":
+                raise ValueError("'vir' is only allowed with 'critical' delta_ref")
+            self._delta = value
+            return
+
+        # Otherwise, it must be numeric
+        if isinstance(value, (int, float)):
+            self._delta = value
+            return
+
+        raise ValueError("delta must be numeric or 'vir'")
+
+
+    def delta_vir_to_crit(self, z, params=None):
         """
-        Compute Ω_m(z) = rho_m(z) / rho_crit(z) without neutrinos.
+        Bryan & Norman (1998) virial overdensity for a flat universe.
+        Returns Δ_vir relative to the critical density.
     
         Returns
         -------
-        omega_m : float or array
-            Dimensionless matter density at redshift z
+        float or array
+            Δ_vir(z) relative to rho_crit
         """
-        params = merge_with_defaults(params)
-        params = self.emulator.get_all_cosmo_params(params)
-        om0, om0_nonu, or0, ol0 = params['Omega0_m'], params['Omega0_m_nonu'], params['Omega0_r'], params['Omega_Lambda']
-        Omega_m_z = om0_nonu * (1. + z)**3. / (om0 * (1. + z)**3. + ol0 + or0 * (1. + z)**4.) # omega_matter without neutrinos
-        
-        return Omega_m_z
+        omega_m = self.emulator.omega_m_z(z, params=params)
+        x = omega_m - 1.0
+    
+        return 18.0 * jnp.pi**2 + 82.0 * x - 39.0 * x**2
+
+    def _delta_numeric(self, z, params=None):
+        """ 
+        Always return numeric delta at redshift z
+        in the native reference (self.delta_ref).
+        """
+        if self.delta == "vir":
+            if self.delta_ref != "critical":
+                raise ValueError("virial overdensity only defined w.r.t. critical density")
+            return self.delta_vir_to_crit(z, params=params)
+    
+        return self.delta
+
 
     def convert_delta_ref(self, z, delta, from_ref='critical', to_ref='mean', params=None):
         """
@@ -104,7 +146,7 @@ class HaloModel:
         if from_ref == to_ref:
             return jnp.full_like(z, delta)
             
-        omega_m = self.omega_m_z(z, params=params)
+        omega_m = self.emulator.omega_m_z(z, params=params)
         if from_ref == 'critical' and to_ref == 'mean':
             return delta / omega_m
         elif from_ref == 'mean' and to_ref == 'critical':
@@ -181,15 +223,24 @@ class HaloModel:
             Radius r_delta (e.g., R_200) within which the average density equals delta * rho_crit(z).
         """
         params = merge_with_defaults(params)
-        rho_crit = self.emulator.critical_density(z, params=params)
-        return (3.0 * m / (4.0 * jnp.pi * delta * rho_crit))**(1./3.)
+        #cparams = get_all_cosmo_params(params)
+
+        # Define your reference density. Default is rho_crit
+        rho_ref = self.emulator.critical_density(z, params=params)
+
+        # If the user selects vir or rho_mean, correct for this
+        delta = self._delta_numeric(z, params=params)
+        if self.delta_ref == "mean":
+            rho_ref *= self.emulator.omega_m_z(z, params=params)
+            
+        return (3.0 * m / (4.0 * jnp.pi * delta * rho_ref))**(1./3.)
 
 
 
     @partial(jax.jit, static_argnums=0)
     def c_delta(self, z, m, params=None):
         params = merge_with_defaults(params)
-        return self.concentration_relation(self, z, m, params=params)
+        return self.concentration_relation.c_delta(self, z, m, params=params)
 
 
     def _compute_hmf_grid(self, params=None):
@@ -228,10 +279,11 @@ class HaloModel:
         M_grid = 4.0 * jnp.pi / 3.0 * Omega0_cb * rho_crit_0 * (R_grid ** 3) * h ** 3
     
         # Overdensity threshold
-        delta_mean = self.convert_delta_ref(z_grid, self.delta, from_ref=self.delta_ref, to_ref='mean', params=params) 
+        delta_numeric = self._delta_numeric(z_grid, params=params)
+        delta_mean = self.convert_delta_ref(z_grid, delta_numeric, from_ref=self.delta_ref, to_ref='mean', params=params) 
     
         # Halo mass function grid, shape: (n_z, n_R)
-        hmf_grid = self.mass_model(sigma_grid, z_grid, delta_mean)
+        hmf_grid = self.mass_model.f_sigma(sigma_grid, z_grid, delta_mean)
     
         # Compute d n / d ln(M)
         dlnnu_dlnR_grid = -dvar_grid * R_grid / jnp.exp(2. * ln_sigma_grid)
@@ -271,8 +323,8 @@ class HaloModel:
         return hmf 
 
 
-    @partial(jax.jit, static_argnums=(0,))
-    def halo_bias_function(self, z = jnp.geomspace(0.005, 3.0, 100), m = jnp.geomspace(5e10, 3.5e15, 100), params = None) -> jnp.ndarray:
+    @partial(jax.jit, static_argnums=(0, 3))
+    def halo_bias(self, z = jnp.geomspace(0.005, 3.0, 100), m = jnp.geomspace(5e10, 3.5e15, 100), order=1, params = None) -> jnp.ndarray:
         """
         Compute the halo bias function.
         
@@ -297,8 +349,15 @@ class HaloModel:
         sigma_M = jnp.exp(_sigma_interp((jnp.log(1.+z), jnp.log(m))))
 
         # Get the delta_mean values and pass it to the bias model
-        delta_mean = self.convert_delta_ref(z, self.delta, from_ref=self.delta_ref, to_ref='mean', params=params)
-        return self.bias_model(sigma_M, z, delta_mean)
+        delta_numeric = self._delta_numeric(z, params=params)
+        delta_mean = self.convert_delta_ref(z, delta_numeric, from_ref=self.delta_ref, to_ref='mean', params=params)
+
+        if order == 1: 
+            return self.bias_model.b1_nu(sigma_M, z, delta_mean)
+        elif order == 2:
+            return self.bias_model.b2_nu(sigma_M, z, delta_mean)
+        else:
+            raise ValueError("order must be either 1 or 2")
 
 
     def interpolate_tracer(self, tracer, z, m, l_eval, moment=1, params = None):
@@ -379,7 +438,7 @@ class HaloModel:
     
         # Compute mass function and bias
         dndlnm_grid = jax.vmap(lambda z: self.halo_mass_function(z, m, params=params))(z)
-        bias_grid = jax.vmap(lambda z: self.halo_bias_function(z, m, params=params))(z)
+        bias_grid = jax.vmap(lambda z: self.halo_bias(z, m, params=params))(z)
         u_l_grid = jax.vmap(lambda z: self.interpolate_tracer(tracer, z, m, l, moment=1, params=params)[1])(z)
         
         # Integrate over mass for each z and l
