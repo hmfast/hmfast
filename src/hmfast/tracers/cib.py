@@ -1,5 +1,7 @@
 import jax
 import jax.numpy as jnp
+import os
+import numpy as np
 
 from hmfast.emulator import Emulator
 from hmfast.halo_model import HaloModel
@@ -38,7 +40,7 @@ class CIBTracer(BaseTracer):
 
         if s_nu is None:
             s_nu_path = os.path.join(get_default_data_path(), "auxiliary_files", "filtered_snu_planck_fine.txt")
-            self.s_nu = self.np.loadtxt(s_nu_path)
+            self.s_nu = np.loadtxt(s_nu_path)
         else:
             self.s_nu = s_nu
         

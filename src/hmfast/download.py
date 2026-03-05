@@ -104,6 +104,11 @@ AUX_FILES = [
         "url": "https://raw.githubusercontent.com/hmfast/hmfast/refs/heads/main/src/hmfast/data/nz_source_normalized_bin4.txt",
         "subdir": "auxiliary_files",
         "filename": "nz_source_normalized_bin4.txt"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/hmfast/hmfast/refs/heads/main/src/hmfast/data/filtered_snu_planck_fine.txt",
+        "subdir": "auxiliary_files",
+        "filename": "filtered_snu_planck_fine.txt"
     }
 ]
 
