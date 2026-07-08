@@ -395,6 +395,20 @@ class TestCl1hIntegrand:
         assert jnp.all(jnp.isfinite(cl_from_integrand))
         assert jnp.allclose(cl_from_integrand, cl_ref, rtol=1e-10, atol=0.0)
 
+    def test_integrates_to_cl_1h_masked_cross_tracer_damped(self, halo_model, tsz_tracer):
+        """Cross-tracer branch and k_damp > 0 branch agree with cl_1h_masked too."""
+        other_tsz = tSZTracer(profile=GNFWPressureProfile(P0=6.0))
+        ell = jnp.array([100.0, 500.0])
+        m = jnp.logspace(13.5, 16.0, 20)
+        z = jnp.geomspace(0.01, 3.0, 10)
+        mask = jnp.ones((m.size, z.size))
+        integrand = halo_model.cl_1h_integrand(
+            tsz_tracer, other_tsz, l=ell, m=m, z=z, mask_mz=mask, k_damp=0.01)
+        inner = jnp.trapezoid(integrand, x=jnp.log(m), axis=-1)
+        cl_from_integrand = jnp.trapezoid(inner, x=z, axis=0)
+        cl_ref = halo_model.cl_1h_masked(tsz_tracer, other_tsz, ell, m, z, mask, k_damp=0.01)
+        assert jnp.allclose(cl_from_integrand, cl_ref, rtol=1e-10, atol=0.0)
+
     def test_default_mask_is_unity(self, halo_model, tsz_tracer):
         ell = jnp.array([500.0])
         m = jnp.logspace(13.5, 16.0, 15)

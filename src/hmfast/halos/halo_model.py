@@ -793,8 +793,13 @@ class HaloModel:
 
         Integrating this array with ``jnp.trapezoid`` over :math:`\\ln M` (last
         axis) and then :math:`z` (first axis) reproduces :meth:`cl_1h_masked`
-        exactly (same quadrature). Useful for kernel-analysis plots showing
-        which halos contribute to :math:`C_\\ell` in the :math:`(z, M)` plane.
+        to float round-off (same quadrature). As in :meth:`cl_1h_masked`, the
+        halo-model consistency counterterm is dropped, so the integral differs
+        from :meth:`cl_1h` by that counterterm when ``hm_consistency=True``.
+        Useful for kernel-analysis plots showing which halos contribute to
+        :math:`C_\\ell` in the :math:`(z, M)` plane. Memory scales as
+        :math:`N_z N_\\ell N_m \\times 8` bytes times a small integer (u_k
+        intermediates), so bound the grid accordingly.
 
         Parameters
         ----------
