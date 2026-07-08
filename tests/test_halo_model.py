@@ -365,6 +365,48 @@ class TestAngularPowerSpectra:
 
 
 # ---------------------------------------------------------------------------
+# 1-halo Limber integrand (kernel analysis)
+# ---------------------------------------------------------------------------
+
+class TestCl1hIntegrand:
+    """cl_1h_integrand exposes d^2 C_ell / (dz dlnM) on the (z, l, m) grid."""
+
+    def test_shape_finite_nonnegative(self, halo_model, tsz_tracer):
+        ell = jnp.array([100.0, 500.0, 1000.0])
+        m = jnp.logspace(13.5, 16.0, 20)
+        z = jnp.geomspace(0.01, 3.0, 15)
+        integrand = halo_model.cl_1h_integrand(tsz_tracer, None, l=ell, m=m, z=z, k_damp=0.0)
+        assert integrand.shape == (15, 3, 20)
+        assert jnp.all(jnp.isfinite(integrand))
+        assert jnp.all(integrand >= 0)
+
+    def test_integrates_to_cl_1h_masked(self, halo_model, tsz_tracer):
+        """trapz_z(trapz_lnM(integrand)) must equal cl_1h_masked exactly."""
+        ell = jnp.array([100.0, 500.0])
+        m = jnp.logspace(13.5, 16.0, 25)
+        z = jnp.geomspace(0.01, 3.0, 12)
+        # Smooth nontrivial (Nm, Nz) selection weights
+        mask = jnp.exp(-0.5 * ((jnp.log(m)[:, None] - jnp.log(3e14)) / 1.5) ** 2) * jnp.ones((1, z.size))
+        integrand = halo_model.cl_1h_integrand(
+            tsz_tracer, None, l=ell, m=m, z=z, mask_mz=mask, k_damp=0.0)
+        inner = jnp.trapezoid(integrand, x=jnp.log(m), axis=-1)  # (Nz, Nl)
+        cl_from_integrand = jnp.trapezoid(inner, x=z, axis=0)  # (Nl,)
+        cl_ref = halo_model.cl_1h_masked(tsz_tracer, None, ell, m, z, mask, k_damp=0.0)
+        assert jnp.all(jnp.isfinite(cl_from_integrand))
+        assert jnp.allclose(cl_from_integrand, cl_ref, rtol=1e-10, atol=0.0)
+
+    def test_default_mask_is_unity(self, halo_model, tsz_tracer):
+        ell = jnp.array([500.0])
+        m = jnp.logspace(13.5, 16.0, 15)
+        z = jnp.geomspace(0.01, 3.0, 8)
+        no_mask = halo_model.cl_1h_integrand(tsz_tracer, None, l=ell, m=m, z=z, k_damp=0.0)
+        unit_mask = halo_model.cl_1h_integrand(
+            tsz_tracer, None, l=ell, m=m, z=z,
+            mask_mz=jnp.ones((m.size, z.size)), k_damp=0.0)
+        assert jnp.allclose(no_mask, unit_mask, rtol=1e-12, atol=0.0)
+
+
+# ---------------------------------------------------------------------------
 # Gradient consistency
 # ---------------------------------------------------------------------------
 

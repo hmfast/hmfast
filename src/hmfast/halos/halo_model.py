@@ -779,6 +779,88 @@ class HaloModel:
 
 
     @jax.jit
+    def cl_1h_integrand(self, tracer1, tracer2, l, m, z, mask_mz=None, k_damp=0.01):
+        """
+        Compute the Limber 1-halo integrand :math:`d^2 C_\\ell / (dz\\, d\\ln M)`
+        on the full :math:`(z, \\ell, M)` grid, without integrating.
+
+        .. math::
+
+            \\frac{d^2 C_\\ell^{1h}}{dz\\, d\\ln M} =
+                \\frac{dV}{dz\\, d\\Omega} W_1(z) W_2(z)
+                \\frac{dn}{d\\ln M}
+                u_1(k_\\ell, M, z)\\, u_2(k_\\ell, M, z)\\, \\mathcal{M}(M, z)
+
+        Integrating this array with ``jnp.trapezoid`` over :math:`\\ln M` (last
+        axis) and then :math:`z` (first axis) reproduces :meth:`cl_1h_masked`
+        exactly (same quadrature). Useful for kernel-analysis plots showing
+        which halos contribute to :math:`C_\\ell` in the :math:`(z, M)` plane.
+
+        Parameters
+        ----------
+        tracer1, tracer2 : Tracer or None
+            Same conventions as :meth:`cl_1h`.
+        l : array-like
+            Multipole grid.
+        m : array
+            Halo-mass grid in physical :math:`M_\\odot`.
+        z : array
+            Redshift grid.
+        mask_mz : array or None
+            Optional selection weights of shape :math:`(N_m, N_z)` applied
+            pointwise to the integrand (e.g. a completeness-based mask).
+            ``None`` means unit weights.
+        k_damp : float, default 0.01
+            Low-:math:`k` damping, as in :meth:`cl_1h`.
+
+        Returns
+        -------
+        integrand : array
+            :math:`d^2 C_\\ell / (dz\\, d\\ln M)` with shape
+            :math:`(N_z, N_\\ell, N_m)`.
+        """
+
+        tracer2 = tracer1 if tracer2 is None else tracer2
+
+        l = jnp.atleast_1d(l)
+        m = jnp.atleast_1d(m)
+        z = jnp.atleast_1d(z)
+
+        dndlnm = self.halo_mass_function.halo_mass_function(self, m, z)  # (Nm, Nz)
+        weights_mz = dndlnm if mask_mz is None else dndlnm * mask_mz
+
+        is_same_tracer = tracer1 is tracer2
+
+        damp_mask = k_damp > 0
+
+        def _damping(k_arr):
+            return jnp.where(damp_mask,
+                             1.0 - jnp.exp(-(k_arr / jnp.where(damp_mask, k_damp, 1.0))**2),
+                             1.0)
+
+        def slice_z(i):
+            zi = z[i]
+            chi_i = self.cosmology.angular_diameter_distance(zi) * (1.0 + zi)
+            ki = (l + 0.5) / chi_i
+            u1 = tracer1.profile.u_k(self, ki, m, jnp.atleast_1d(zi))[:, :, 0]  # (Nl, Nm)
+            if is_same_tracer:
+                u_sq = u1 * u1
+            else:
+                u2 = tracer2.profile.u_k(self, ki, m, jnp.atleast_1d(zi))[:, :, 0]
+                u_sq = u1 * u2
+            u_sq = u_sq * _damping(ki)[:, None]
+            return u_sq * weights_mz[:, i][None, :]  # (Nl, Nm)
+
+        grid = jax.vmap(slice_z)(jnp.arange(z.shape[0]))  # (Nz, Nl, Nm)
+
+        kernel1 = tracer1.kernel(self.cosmology, z)
+        kernel2 = tracer2.kernel(self.cosmology, z)
+        comov_vol = self.cosmology.comoving_volume_element(z)
+        weight_z = comov_vol * kernel1 * kernel2  # (Nz,)
+        return grid * weight_z[:, None, None]
+
+
+    @jax.jit
     def cl_2h(self, tracer1, tracer2, l, m, z):
         """
         Compute the 2-halo contribution to the angular power spectrum
