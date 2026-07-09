@@ -406,15 +406,15 @@ class HaloModel:
     
 
 
-    @jax.jit
-    def pk_2h(self, tracer1, tracer2, k, m, z):
+    @partial(jax.jit, static_argnames=("linear",))
+    def pk_2h(self, tracer1, tracer2, k, m, z, linear=True):
         """
         Compute the 2-halo contribution to the 3D power spectrum in
         physical units.
 
         .. math::
-        
-            P_{2h}(k, z) = P_{\\mathrm{lin}}(k, z) \\, I_1(k, z) \\, I_2(k, z)
+
+            P_{2h}(k, z) = P_{\\mathrm{m}}(k, z) \\, I_1(k, z) \\, I_2(k, z)
         
         with
         
@@ -424,7 +424,9 @@ class HaloModel:
         
         where :math:`u_i(k \\mid M, z)` is the Fourier-space tracer profile,
         :math:`dn/d\\ln M` is the halo mass function, and :math:`b(M, z)` is the
-        linear halo bias.
+        linear halo bias. :math:`P_{\\mathrm{m}}` is the linear matter power
+        spectrum by default (``linear=True``); set ``linear=False`` to use the
+        nonlinear matter power spectrum instead.
 
         Parameters
         ----------
@@ -439,6 +441,11 @@ class HaloModel:
             defines the integration grid over halo mass.
         z : array-like
             Redshift grid.
+        linear : bool, optional
+            If True (default) use the linear matter power spectrum
+            :math:`P_{\\mathrm{lin}}`; if False use the nonlinear matter power
+            spectrum :math:`P_{\\mathrm{nl}}`. Passed through to
+            :meth:`Cosmology.pk`.
 
         Returns
         -------
@@ -482,11 +489,13 @@ class HaloModel:
         I1 = get_I(tracer1)
         I2 = I1 if tracer1 is tracer2 else get_I(tracer2)
         
-        # Reconstruct the legacy linear spectrum normalization used by the
-        # current halo-model projection chain so outputs remain unchanged.
-        P_lin = jax.vmap(lambda zi: jnp.interp(h * k, *self.cosmology.pk(zi, linear=True)))(z).T * h**6
-        
-        return P_lin * I1 * I2
+        # Reconstruct the legacy spectrum normalization used by the current
+        # halo-model projection chain so outputs remain unchanged. Uses the
+        # linear matter power spectrum by default; linear=False selects the
+        # nonlinear one.
+        P_m = jax.vmap(lambda zi: jnp.interp(h * k, *self.cosmology.pk(zi, linear=linear)))(z).T * h**6
+
+        return P_m * I1 * I2
 
 
     @jax.jit
@@ -865,8 +874,8 @@ class HaloModel:
         return grid * weight_z[:, None, None]
 
 
-    @jax.jit
-    def cl_2h(self, tracer1, tracer2, l, m, z):
+    @partial(jax.jit, static_argnames=("linear",))
+    def cl_2h(self, tracer1, tracer2, l, m, z, linear=True):
         """
         Compute the 2-halo contribution to the angular power spectrum
         :math:`C_\\ell^{2h}`.
@@ -890,6 +899,10 @@ class HaloModel:
         z : array
             Redshift array. This must be an array because it defines the
             integration grid over redshift.
+        linear : bool, optional
+            If True (default) build the 2-halo term from the linear matter
+            power spectrum; if False use the nonlinear one. Forwarded to
+            :meth:`pk_2h`.
 
         Returns
         -------
@@ -901,10 +914,10 @@ class HaloModel:
 
         # Define the slice function for Limber integration
         def get_pk_slice(zi):
-            # Map l to k using the Limber approximation and then get the pk_2h  
-            chi_i = self.cosmology.angular_diameter_distance(zi) * (1 + zi) 
+            # Map l to k using the Limber approximation and then get the pk_2h
+            chi_i = self.cosmology.angular_diameter_distance(zi) * (1 + zi)
             ki = (l + 0.5) / chi_i
-            return self.pk_2h(tracer1, tracer2, k=ki, m=m, z=jnp.atleast_1d(zi)).flatten()
+            return self.pk_2h(tracer1, tracer2, k=ki, m=m, z=jnp.atleast_1d(zi), linear=linear).flatten()
     
         # Map over redshift to get P(k=l/chi, z)
         P_2h_grid = jax.vmap(get_pk_slice)(z) 
