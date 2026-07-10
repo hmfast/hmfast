@@ -201,9 +201,8 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
-# Claude Code — local API keys / Z.AI (never commit)
-.claude/settings.json
-.claude/settings.local.json
+# Claude Code — local configuration, skills, credentials, and worktrees
+.claude/
 CLAUDE.local.md
 
 # Marimo
