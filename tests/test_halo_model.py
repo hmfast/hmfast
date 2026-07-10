@@ -237,6 +237,30 @@ class TestMassFunction:
         hmf = halo_model.halo_mass_function.halo_mass_function(halo_model, m, z)
         assert jnp.all(hmf > 0)
 
+    def test_st99_mass_function_shape_positive(self, halo_model):
+        from hmfast.halos.massfunc import ST99HaloMass
+
+        st = ST99HaloMass()
+        m = jnp.logspace(11, 15, 30)
+        z = jnp.array([0.0, 0.5, 1.0])
+        hmf = st.halo_mass_function(halo_model, m, z)
+        assert hmf.shape == (30, 3)
+        assert jnp.all(jnp.isfinite(hmf))
+        assert jnp.all(hmf > 0)
+
+    def test_st99_f_sigma_formula(self):
+        """ST99 f(σ)/2 matches A sqrt(2ν'/π) (1+ν'^{-p}) exp(-ν'/2) / 2."""
+        from hmfast.halos.massfunc import ST99HaloMass
+
+        st = ST99HaloMass(A=0.3222, a=0.707, p=0.3, delta_c=1.686)
+        sigma = jnp.array([[0.5, 1.0, 1.5, 2.0]])  # (Nz=1, NR)
+        f = st._f_sigma(None, sigma, jnp.array([0.0]))
+        nu_p = 0.707 * (1.686 / sigma) ** 2
+        expected = 0.5 * 0.3222 * jnp.sqrt(nu_p * 2.0 / jnp.pi) * jnp.exp(
+            -0.5 * nu_p
+        ) * (1.0 + nu_p ** (-0.3))
+        assert jnp.allclose(f, expected, rtol=1e-10)
+
 
 class TestBias:
     def test_bias_shape(self, halo_model):
@@ -256,6 +280,34 @@ class TestBias:
         z = jnp.array([0.5])
         b2 = halo_model.halo_bias.halo_bias(halo_model, m, z, order=2)
         assert b2.shape == (30, 1)
+
+    def test_st99_bias_shape_and_finite(self, halo_model):
+        from hmfast.halos.bias import ST99HaloBias
+
+        st99 = ST99HaloBias()
+        m = jnp.logspace(11, 15, 30)
+        z = jnp.array([0.0, 0.5, 1.0])
+        b1 = st99.halo_bias(halo_model, m, z, order=1)
+        b2 = st99.halo_bias(halo_model, m, z, order=2)
+        assert b1.shape == (30, 3)
+        assert b2.shape == (30, 3)
+        assert jnp.all(jnp.isfinite(b1))
+        assert jnp.all(jnp.isfinite(b2))
+
+    def test_st99_bias_formula(self):
+        """ST99 b1 matches eq. 12: 1 + (a ν² - 1 + 2p/(1+(a ν²)^p))/δ_c."""
+        from hmfast.halos.bias import ST99HaloBias
+
+        st99 = ST99HaloBias(a=0.707, p=0.3, delta_c=1.686)
+        # nu = δ_c / σ  =>  σ = δ_c / nu
+        nu = jnp.array([0.5, 1.0, 2.0, 3.0])
+        sigmas = st99.delta_c / nu
+        b1 = st99._b1_nu(sigmas)
+        a_nu2 = 0.707 * nu ** 2
+        expected = 1.0 + (a_nu2 - 1.0 + 2.0 * 0.3 / (1.0 + a_nu2 ** 0.3)) / 1.686
+        assert jnp.allclose(b1, expected, rtol=1e-10)
+        # high-mass halos are more biased
+        assert b1[-1] > b1[0]
 
 
 class TestConcentration:
@@ -362,6 +414,62 @@ class TestAngularPowerSpectra:
         cl = halo_model.cl_1h(cmb_lensing_tracer, cmb_lensing_tracer, l=ell, m=m, z=z)
         assert cl.shape == (20,)
         assert jnp.all(jnp.isfinite(cl))
+
+
+# ---------------------------------------------------------------------------
+# 1-halo Limber integrand (kernel analysis)
+# ---------------------------------------------------------------------------
+
+class TestCl1hIntegrand:
+    """cl_1h_integrand exposes d^2 C_ell / (dz dlnM) on the (z, l, m) grid."""
+
+    def test_shape_finite_nonnegative(self, halo_model, tsz_tracer):
+        ell = jnp.array([100.0, 500.0, 1000.0])
+        m = jnp.logspace(13.5, 16.0, 20)
+        z = jnp.geomspace(0.01, 3.0, 15)
+        integrand = halo_model.cl_1h_integrand(tsz_tracer, None, l=ell, m=m, z=z, k_damp=0.0)
+        assert integrand.shape == (15, 3, 20)
+        assert jnp.all(jnp.isfinite(integrand))
+        assert jnp.all(integrand >= 0)
+
+    def test_integrates_to_cl_1h_masked(self, halo_model, tsz_tracer):
+        """trapz_z(trapz_lnM(integrand)) must equal cl_1h_masked exactly."""
+        ell = jnp.array([100.0, 500.0])
+        m = jnp.logspace(13.5, 16.0, 25)
+        z = jnp.geomspace(0.01, 3.0, 12)
+        # Smooth nontrivial (Nm, Nz) selection weights
+        mask = jnp.exp(-0.5 * ((jnp.log(m)[:, None] - jnp.log(3e14)) / 1.5) ** 2) * jnp.ones((1, z.size))
+        integrand = halo_model.cl_1h_integrand(
+            tsz_tracer, None, l=ell, m=m, z=z, mask_mz=mask, k_damp=0.0)
+        inner = jnp.trapezoid(integrand, x=jnp.log(m), axis=-1)  # (Nz, Nl)
+        cl_from_integrand = jnp.trapezoid(inner, x=z, axis=0)  # (Nl,)
+        cl_ref = halo_model.cl_1h_masked(tsz_tracer, None, ell, m, z, mask, k_damp=0.0)
+        assert jnp.all(jnp.isfinite(cl_from_integrand))
+        assert jnp.allclose(cl_from_integrand, cl_ref, rtol=1e-10, atol=0.0)
+
+    def test_integrates_to_cl_1h_masked_cross_tracer_damped(self, halo_model, tsz_tracer):
+        """Cross-tracer branch and k_damp > 0 branch agree with cl_1h_masked too."""
+        other_tsz = tSZTracer(profile=GNFWPressureProfile(P0=6.0))
+        ell = jnp.array([100.0, 500.0])
+        m = jnp.logspace(13.5, 16.0, 20)
+        z = jnp.geomspace(0.01, 3.0, 10)
+        mask = jnp.ones((m.size, z.size))
+        integrand = halo_model.cl_1h_integrand(
+            tsz_tracer, other_tsz, l=ell, m=m, z=z, mask_mz=mask, k_damp=0.01)
+        inner = jnp.trapezoid(integrand, x=jnp.log(m), axis=-1)
+        cl_from_integrand = jnp.trapezoid(inner, x=z, axis=0)
+        cl_ref = halo_model.cl_1h_masked(tsz_tracer, other_tsz, ell, m, z, mask, k_damp=0.01)
+        assert jnp.allclose(cl_from_integrand, cl_ref, rtol=1e-10, atol=0.0)
+
+    def test_default_mask_is_unity(self, halo_model, tsz_tracer):
+        ell = jnp.array([500.0])
+        m = jnp.logspace(13.5, 16.0, 15)
+        z = jnp.geomspace(0.01, 3.0, 8)
+        no_mask = halo_model.cl_1h_integrand(tsz_tracer, None, l=ell, m=m, z=z, k_damp=0.0)
+        unit_mask = halo_model.cl_1h_integrand(
+            tsz_tracer, None, l=ell, m=m, z=z,
+            mask_mz=jnp.ones((m.size, z.size)), k_damp=0.0)
+        assert jnp.allclose(no_mask, unit_mask, rtol=1e-12, atol=0.0)
 
 
 # ---------------------------------------------------------------------------
