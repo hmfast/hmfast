@@ -3,6 +3,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 import mcfit
+from scipy.special import ive
 from hmfast.download import get_default_data_path
 from hmfast.utils import Const
 from hmfast.halos.mass_definition import MassDefinition, convert_m_delta
@@ -493,6 +494,309 @@ jax.tree_util.register_pytree_node(
     ParametricGNFWPressureProfile,
     lambda obj: obj._tree_flatten(),
     lambda aux_data, children: ParametricGNFWPressureProfile._tree_unflatten(aux_data, children)
+)
+
+
+class TruncatedParametricGNFWPressureProfile(ParametricGNFWPressureProfile):
+    r"""
+    :class:`ParametricGNFWPressureProfile` with a per-halo angular truncation
+    matching the JXPaint painter's disc cutoff.
+
+    The painter assigns Compton-:math:`y` to sky pixels within an angular
+    radius :math:`\theta_{\max}(M, z)` of each halo centre,
+
+    .. math::
+
+        \theta_{\max}(M, z) = \min\!\Big(
+        \max\big(2\,\mathrm{FWHM},\; c_{\rm mult}\,\theta_{500}\big),\;
+        \theta_{\rm cap}\Big),
+        \qquad
+        \theta_{500} = \arctan\!\frac{r_{500c} / B^{1/3}}{d_A(z)},
+        \tag{1}
+
+    where :math:`r_{500c}` is the physical :math:`500c` radius and
+    :math:`B` is the hydrostatic mass bias (geometry matches
+    ``jxpaint.painting.geometry.theta_max_array``).  The truncation is a
+    cylinder (line-of-sight disc) cutoff of the projected profile, so it is
+    folded into the harmonic-space profile as a multiplicative ratio
+
+    .. math::
+
+        u_\ell^{\rm trunc}(k, M, z) = u_\ell^{\rm full}(k, M, z)\,
+        T(k, M, z),
+        \qquad
+        T = \frac{\mathcal{H}_0[y_{2D}\,\Theta(\theta \le \theta_{\max})]}
+                 {\mathcal{H}_0[y_{2D}]},
+        \tag{2}
+
+    where :math:`y_{2D}` is the line-of-sight projected profile,
+    :math:`\mathcal{H}_0` a Hankel transform of order zero, and
+    :math:`u_\ell^{\rm full}` is the parent's exact profile so the absolute
+    normalization is unchanged.  :math:`T` is precomputed on a coarse
+    :math:`(M, z, q)` grid (:math:`q = k\,r_{500c}^{\rm com}` dimensionless)
+    by :meth:`precompute` and trilinearly interpolated inside :meth:`u_k`.
+
+    Notes
+    -----
+    Because the full profile is the parent's exact :math:`u_k`, any halo-model
+    integral that calls :meth:`u_k` (e.g. ``cl_1h_masked``,
+    ``trispectrum_1h_masked``) is truncated consistently.  The :math:`q`-axis
+    uses ``MassDefinition(500, "critical").r_delta`` on the input mass, so the
+    truncation is exact when the halo model's mass definition is :math:`500c`
+    (the JXPaint validation setup).
+
+    Parameters
+    ----------
+    fwhm_arcmin : float
+        Beam FWHM in arcmin (sets the :math:`2\,\mathrm{FWHM}` floor).
+    cap_deg : float
+        Angular cap :math:`\theta_{\rm cap}` in degrees.
+    mult : float
+        Multiple :math:`c_{\rm mult}` of :math:`\theta_{500}` (painter uses 4).
+    n_mz : int
+        Number of grid points per axis for the coarse :math:`(M, z)` cache.
+    nperp, ns, nr : int
+        Sampling of the projected-radius, line-of-sight, and 3D-radius grids.
+    """
+
+    def __init__(self, x=None, A_SZ=-4.97, alpha_SZ=0.7867,
+                 P0=8.130, c500=1.156, alpha=1.0620, beta=5.4807, gamma=0.3292,
+                 B=1.4, fwhm_arcmin=10.0, cap_deg=5.0, mult=4.0,
+                 n_mz=40, n_theta=3000, nq=512, **_legacy):
+        super().__init__(x=x, A_SZ=A_SZ, alpha_SZ=alpha_SZ, P0=P0, c500=c500,
+                         alpha=alpha, beta=beta, gamma=gamma, B=B)
+        self.fwhm_arcmin = float(fwhm_arcmin)
+        self.cap_deg = float(cap_deg)
+        self.mult = float(mult)
+        self.n_mz = int(n_mz)
+        self.n_theta = int(n_theta)
+        self.nq = int(nq)
+        self._cache = None  # filled by precompute()
+
+    def precompute(self, halo_model, m_min, m_max, z_min, z_max):
+        r"""
+        Tabulate the truncation ratio :math:`T(k, M, z)` on a coarse grid.
+
+        The painter smears each halo with a Gaussian beam, truncates the
+        *beamed* projected profile at the angular disc radius
+        :math:`\theta_{\max}`, and the power-spectrum pipeline then deconvolves
+        the beam.  Because beam-convolution and a sharp disc cut do not commute,
+        the truncation ratio is computed to match that exact sequence:
+
+        .. math::
+
+            T(\ell, M, z) = \frac{\mathcal{H}_0\!\big[(y_{2D} \ast b)\,
+            \Theta(\theta \le \theta_{\max})\big] / b_\ell}
+            {\mathcal{H}_0[y_{2D}]},
+
+        where :math:`y_{2D}(\theta) = Y(\theta / \theta_{500})` is the projected
+        GNFW shape on the hydrostatically de-biased angular scale
+        :math:`\theta_{500} = (r_{500c}/B^{1/3})/d_A` (matching the painter and
+        ``PressureProfile.u_k``), :math:`b` is the Gaussian beam of FWHM
+        ``fwhm_arcmin``, and :math:`b_\ell` its harmonic transform.  Setting
+        ``fwhm_arcmin = 0`` recovers the sharp-truncation ratio.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+            Halo model providing cosmology and radii. Its mass definition is
+            treated as :math:`500c` for the :math:`q`-axis scaling.
+        m_min, m_max : float
+            Mass range (same units as the halo model mass) for the cache.
+        z_min, z_max : float
+            Redshift range for the cache.
+
+        Returns
+        -------
+        TruncatedParametricGNFWPressureProfile
+            ``self``, with the interpolation cache populated.
+
+        Notes
+        -----
+        All Hankel/beam work lives here (run once).  ``u_k`` only interpolates
+        the cached :math:`T` and multiplies the parent profile, so the per-call
+        power-spectrum cost is unchanged.  :math:`T` is a pure shape ratio and
+        is independent of ``A_SZ``/``alpha_SZ``, so it need not be recomputed
+        when only the tSZ amplitude parameters vary.
+        """
+        cosmo = halo_model.cosmology
+        Nm = Nz = self.n_mz
+        mg = np.geomspace(m_min, m_max, Nm)
+        zg = np.geomspace(z_min, z_max, Nz)
+
+        mdef500 = MassDefinition(500, "critical")
+        R500 = np.asarray(mdef500.r_delta(cosmo, jnp.asarray(mg), jnp.asarray(zg)))  # (Nm,Nz)
+        d_A = np.asarray(cosmo.angular_diameter_distance(jnp.asarray(zg)))[None, :]  # (1,Nz)
+        th500b = (R500 / self.B ** (1.0 / 3.0)) / d_A                  # biased angular R500
+        th500u = R500 / d_A                                            # unbiased (q<->ell map)
+
+        # Painter theta_max: min(max(2FWHM, mult*theta500b), cap).
+        two_fwhm = 2.0 * np.deg2rad(self.fwhm_arcmin / 60.0)
+        theta_max = np.minimum(np.maximum(two_fwhm, self.mult * th500b),
+                               np.deg2rad(self.cap_deg))               # (Nm,Nz)
+
+        # Universal projected GNFW shape Y(u) = 2 int_0^inf gnfw(sqrt(u^2+w^2)) dw
+        # (tanh-sinh), matching the biased-scale profile that PressureProfile.u_k
+        # encodes; amplitude is irrelevant since T is a ratio.
+        c500, al, be, ga = self.c500, self.alpha, self.beta, self.gamma
+        ts_t = np.linspace(-4.0, 4.0, 600)
+        ts_w = np.exp((np.pi / 2.0) * np.sinh(ts_t))
+        ts_q = (ts_t[1] - ts_t[0]) * ts_w * (np.pi / 2.0) * np.cosh(ts_t)
+        ug = np.logspace(-7, 5, 30000)
+        sc = c500 * np.sqrt(ug[:, None] ** 2 + ts_w[None, :] ** 2)
+        Yg = 2.0 * np.sum(sc ** (-ga) * (1.0 + sc ** al) ** ((ga - be) / al) * ts_q[None, :], axis=1)
+
+        def _Y(x):
+            return np.interp(np.log(np.clip(x, ug[0], ug[-1])), np.log(ug), Yg,
+                             left=Yg[0], right=0.0)
+
+        # Fixed angular grid (out past the cap plus beam wings) and projected
+        # profile per (M,z): y2d(theta) = Y(theta / theta500b).
+        theta = np.logspace(-6, np.log10(np.deg2rad(2.0 * self.cap_deg + 4.0)), self.n_theta)
+        y2d = _Y(theta[:, None, None] / th500b[None, :, :])           # (Nt,Nm,Nz)
+        Y2 = y2d.reshape(self.n_theta, -1)                            # (Nt, Nm*Nz)
+
+        # Beam the projected profile (flat-sky Gaussian, exponentially scaled I0
+        # for stability), truncate the beamed disc, then deconvolve b_ell.
+        sig = np.deg2rad(self.fwhm_arcmin / 60.0) / 2.3548200450309493
+        if sig > 0.0:
+            s2 = sig * sig
+            ti = theta[:, None]
+            tj = theta[None, :]
+            dt = np.gradient(theta)[None, :]
+            W = ive(0, ti * tj / s2) * np.exp(-(ti - tj) ** 2 / (2.0 * s2)) * (tj / s2) * dt
+            W = W / np.clip(W.sum(axis=1, keepdims=True), 1e-300, None)
+            Y2b = W @ Y2
+        else:
+            Y2b = Y2
+        disc = (theta[:, None] <= theta_max.reshape(-1)[None, :]).astype(np.float64)
+        Y2bt = Y2b * disc
+
+        han = mcfit.Hankel(theta, nu=0, lowring=True)
+        ell_native, F_full = han(Y2.T)
+        _, F_bt = han(Y2bt.T)
+        F_full = F_full.T                                            # (Nell, Nm*Nz)
+        F_bt = F_bt.T
+        bl = np.exp(-0.5 * ell_native ** 2 * sig * sig) if sig > 0.0 else np.ones_like(ell_native)
+        T_ell = (F_bt / (bl[:, None] * np.where(np.abs(F_full) > 0, F_full, 1.0)))
+        T_ell = T_ell.reshape(len(ell_native), Nm, Nz)
+
+        # Recast T(ell) onto the q = k*R500_c axis used by u_k: ell = q / theta500u.
+        q_native = np.geomspace(1e-4, 1e2, self.nq)
+        log_ell = np.log(ell_native)
+        T_cache = np.empty((Nm, Nz, self.nq))
+        for im in range(Nm):
+            for iz in range(Nz):
+                ellq = q_native / th500u[im, iz]
+                T_cache[im, iz] = np.interp(
+                    np.log(np.clip(ellq, ell_native[0], ell_native[-1])),
+                    log_ell, T_ell[:, im, iz], left=T_ell[0, im, iz], right=1.0)
+
+        self._cache = {
+            "logm_grid": jnp.asarray(np.log(mg)),
+            "z_grid": jnp.asarray(zg),
+            "q_native": jnp.asarray(q_native),
+            "T_cache": jnp.asarray(T_cache),
+        }
+        return self
+
+    def _interp_T(self, logm, z, q):
+        """Trilinear interpolation of the cached T over (logm, z, q)."""
+        lg = self._cache["logm_grid"]
+        zg = self._cache["z_grid"]
+        qg = self._cache["q_native"]
+        Tc = self._cache["T_cache"]                                  # (Nm_c,Nz_c,Nq)
+
+        def idx1d(xp, x):
+            i = jnp.searchsorted(xp, x, side="right") - 1
+            return jnp.clip(i, 0, xp.shape[0] - 2)
+
+        il = idx1d(lg, logm)                                         # (Nm,)
+        iz = idx1d(zg, z)                                            # (Nz,)
+        iq = idx1d(qg, q)                                            # (Nk,Nm,Nz)
+        wl = (logm - lg[il]) / (lg[il + 1] - lg[il])                # (Nm,)
+        wz = (z - zg[iz]) / (zg[iz + 1] - zg[iz])                   # (Nz,)
+        wq = (q - qg[iq]) / (qg[iq + 1] - qg[iq])                   # (Nk,Nm,Nz)
+
+        il_b = il[None, :, None]
+        iz_b = iz[None, None, :]
+        iq_b = iq
+        wl_b = wl[None, :, None]
+        wz_b = wz[None, None, :]
+        c000 = Tc[il_b, iz_b, iq_b];         c001 = Tc[il_b, iz_b, iq_b + 1]
+        c010 = Tc[il_b, iz_b + 1, iq_b];     c011 = Tc[il_b, iz_b + 1, iq_b + 1]
+        c100 = Tc[il_b + 1, iz_b, iq_b];     c101 = Tc[il_b + 1, iz_b, iq_b + 1]
+        c110 = Tc[il_b + 1, iz_b + 1, iq_b]; c111 = Tc[il_b + 1, iz_b + 1, iq_b + 1]
+        T = (c000 * (1 - wl_b) * (1 - wz_b) * (1 - wq) + c001 * (1 - wl_b) * (1 - wz_b) * wq +
+             c010 * (1 - wl_b) * wz_b * (1 - wq)       + c011 * (1 - wl_b) * wz_b * wq +
+             c100 * wl_b * (1 - wz_b) * (1 - wq)       + c101 * wl_b * (1 - wz_b) * wq +
+             c110 * wl_b * wz_b * (1 - wq)             + c111 * wl_b * wz_b * wq)
+        T = jnp.where(q > qg[-1], 1.0, T)                           # high-q -> no truncation
+        T_lo = Tc[il_b, iz_b, 0]
+        T = jnp.where(q < qg[0], T_lo, T)                           # low-q -> ell->0 limit
+        return T
+
+    @jax.jit
+    def u_k(self, halo_model, k, m, z):
+        """
+        Parent :meth:`ParametricGNFWPressureProfile.u_k` with the disc
+        truncation folded in.
+
+        Returns
+        -------
+        jnp.ndarray
+            Truncated Fourier-space profile with shape :math:`(N_k, N_m, N_z)`.
+            Reduces to the parent profile when :meth:`precompute` has not run.
+        """
+        u_full = super().u_k(halo_model, k, m, z)                   # (Nk,Nm,Nz) exact
+        if self._cache is None:
+            return u_full
+        k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
+        mdef500 = MassDefinition(500, "critical")
+        R500_c = mdef500.r_delta(halo_model.cosmology, m, z) * (1.0 + z)[None, :]  # (Nm,Nz)
+        q = k[:, None, None] * R500_c[None, :, :]                   # (Nk,Nm,Nz)
+        T = self._interp_T(jnp.log(m), z, q)
+        return u_full * T
+
+    def _tree_flatten(self):
+        c = self._cache
+        if c is None:                              # before precompute()
+            z1 = jnp.zeros((1,))
+            logm_g = z_g = q_g = Tc = z1
+        else:
+            logm_g, z_g, q_g, Tc = (
+                c["logm_grid"], c["z_grid"], c["q_native"], c["T_cache"])
+        leaves = (self.A_SZ, self.alpha_SZ, self.P0, self.c500, self.alpha,
+                  self.beta, self.gamma, self.B,
+                  logm_g, z_g, q_g, Tc)
+        aux_data = (tuple(self._x.tolist()), self._hankel, self.fwhm_arcmin,
+                    self.cap_deg, self.mult, self.n_mz, self.n_theta, self.nq,
+                    c is not None)
+        return (leaves, aux_data)
+
+    @classmethod
+    def _tree_unflatten(cls, aux_data, leaves):
+        (x_tuple, hankel, fwhm, cap, mult, nmz, n_theta, nq, has_cache) = aux_data
+        (A_SZ, alpha_SZ, P0, c500, alpha, beta, gamma, B,
+         logm_grid, z_grid, q_native, T_cache) = leaves
+        obj = cls.__new__(cls)
+        (obj.A_SZ, obj.alpha_SZ, obj.P0, obj.c500, obj.alpha,
+         obj.beta, obj.gamma, obj.B) = (A_SZ, alpha_SZ, P0, c500, alpha, beta, gamma, B)
+        obj._x = np.array(x_tuple)
+        obj._hankel = hankel
+        obj.fwhm_arcmin, obj.cap_deg, obj.mult = fwhm, cap, mult
+        obj.n_mz, obj.n_theta, obj.nq = nmz, n_theta, nq
+        obj._cache = {
+            "logm_grid": logm_grid, "z_grid": z_grid, "q_native": q_native,
+            "T_cache": T_cache,
+        } if has_cache else None
+        return obj
+
+
+jax.tree_util.register_pytree_node(
+    TruncatedParametricGNFWPressureProfile,
+    lambda obj: obj._tree_flatten(),
+    lambda aux_data, children: TruncatedParametricGNFWPressureProfile._tree_unflatten(aux_data, children)
 )
 
 
