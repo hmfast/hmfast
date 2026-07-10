@@ -257,6 +257,34 @@ class TestBias:
         b2 = halo_model.halo_bias.halo_bias(halo_model, m, z, order=2)
         assert b2.shape == (30, 1)
 
+    def test_st99_bias_shape_and_finite(self, halo_model):
+        from hmfast.halos.bias import ST99HaloBias
+
+        st99 = ST99HaloBias()
+        m = jnp.logspace(11, 15, 30)
+        z = jnp.array([0.0, 0.5, 1.0])
+        b1 = st99.halo_bias(halo_model, m, z, order=1)
+        b2 = st99.halo_bias(halo_model, m, z, order=2)
+        assert b1.shape == (30, 3)
+        assert b2.shape == (30, 3)
+        assert jnp.all(jnp.isfinite(b1))
+        assert jnp.all(jnp.isfinite(b2))
+
+    def test_st99_bias_formula(self):
+        """ST99 b1 matches eq. 12: 1 + (a ν² - 1 + 2p/(1+(a ν²)^p))/δ_c."""
+        from hmfast.halos.bias import ST99HaloBias
+
+        st99 = ST99HaloBias(a=0.707, p=0.3, delta_c=1.686)
+        # nu = δ_c / σ  =>  σ = δ_c / nu
+        nu = jnp.array([0.5, 1.0, 2.0, 3.0])
+        sigmas = st99.delta_c / nu
+        b1 = st99._b1_nu(sigmas)
+        a_nu2 = 0.707 * nu ** 2
+        expected = 1.0 + (a_nu2 - 1.0 + 2.0 * 0.3 / (1.0 + a_nu2 ** 0.3)) / 1.686
+        assert jnp.allclose(b1, expected, rtol=1e-10)
+        # high-mass halos are more biased
+        assert b1[-1] > b1[0]
+
 
 class TestConcentration:
     def test_concentration_shape(self, halo_model):

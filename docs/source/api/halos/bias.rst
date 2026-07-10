@@ -9,3 +9,4 @@ Halo bias models
    :nosignatures:
 
    hmfast.halos.bias.T10HaloBias
+   hmfast.halos.bias.ST99HaloBias
