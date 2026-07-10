@@ -359,6 +359,125 @@ class T10HaloMass(HaloMass):
 
 
 
+class ST99HaloMass(HaloMass):
+    """
+    Halo mass function from `Sheth & Tormen (1999)
+    <https://ui.adsabs.harvard.edu/abs/1999MNRAS.308..119S/abstract>`_
+    (sometimes referred to as ST98 from the arXiv date).
+
+    Implements equation (10) of that paper with the standard parameters
+    :math:`A = 0.3222`, :math:`a = 0.707`, :math:`p = 0.3`, and
+    :math:`\\delta_c = 1.686`. Unlike :class:`T08HaloMass`, this multiplicity
+    function does not depend on the spherical-overdensity mass definition.
+
+    Notes
+    -----
+    The internal :math:`f(\\sigma)` returned by :meth:`_f_sigma` includes the
+    conventional factor of :math:`1/2` used throughout hmfast so that
+    :meth:`HaloMass._compute_hmf_grid` produces
+    :math:`dn/d\\ln M` in comoving :math:`\\mathrm{Mpc}^{-3}`.
+    """
+
+    def __init__(self, A=0.3222, a=0.707, p=0.3, delta_c=1.686):
+        """
+        Parameters
+        ----------
+        A : float, optional
+            Overall amplitude. Default ``0.3222`` (ST99 normalisation).
+        a : float, optional
+            Barrier rescaling (often denoted :math:`q`). Default ``0.707``.
+        p : float, optional
+            Low-mass slope. Default ``0.3``.
+        delta_c : float, optional
+            Spherical-collapse barrier. Default ``1.686``.
+        """
+        self.A = float(A)
+        self.a = float(a)
+        self.p = float(p)
+        self.delta_c = float(delta_c)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _f_sigma(self, halo_model, sigma, z):
+        """
+        Evaluate the internal Sheth–Tormen (1999) fitting function.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+            Halo model instance (cosmology unused beyond the shared grid).
+        sigma : jnp.ndarray
+            Root-mean-square linear density fluctuation :math:`\\sigma(R, z)`,
+            shape ``(N_z, N_R)``.
+        z : float or jnp.ndarray
+            Redshift grid corresponding to ``sigma`` (unused; ST99 has no
+            explicit redshift evolution beyond :math:`\\sigma(z)`).
+
+        Returns
+        -------
+        f_sigma : jnp.ndarray
+            Internal fitting function with shape matching ``sigma``.
+        """
+        # Standard f(σ) (colossus / ST99 eq. 10), times 1/2 for hmfast grid
+        # convention (same 0.5 prefactor as T08/T10).
+        nu_p = self.a * (self.delta_c / sigma) ** 2
+        f_std = (
+            self.A
+            * jnp.sqrt(nu_p * 2.0 / jnp.pi)
+            * jnp.exp(-0.5 * nu_p)
+            * (1.0 + nu_p ** (-self.p))
+        )
+        return 0.5 * f_std
+
+    @partial(jax.jit, static_argnums=(0,))
+    def halo_mass_function(self, halo_model, m, z) -> jnp.ndarray:
+        """
+        Compute the halo mass function :math:`dn/d\\ln M`.
+
+        .. math::
+
+            \\frac{dn}{d\\ln M} = f(\\sigma)\\,\\frac{\\rho_{m,0}}{M}
+            \\left|\\frac{d\\ln\\sigma^{-1}}{d\\ln M}\\right|
+
+        with the Sheth–Tormen (1999) multiplicity
+
+        .. math::
+
+            f(\\sigma) = A\\sqrt{\\frac{2a}{\\pi}}\\,\\frac{\\delta_c}{\\sigma}
+            \\left[1 + \\left(\\frac{a\\delta_c^2}{\\sigma^2}\\right)^{-p}\\right]
+            \\exp\\left(-\\frac{a\\delta_c^2}{2\\sigma^2}\\right),
+
+        or equivalently
+        :math:`f = A\\sqrt{2\\nu'/\\pi}\\,(1+\\nu'^{-p})\\,e^{-\\nu'/2}` with
+        :math:`\\nu' = a\\delta_c^2/\\sigma^2`.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+            Halo model instance supplying the cosmology.
+        m : array-like
+            Halo mass grid in physical :math:`M_\\odot`.
+        z : array-like
+            Redshift grid.
+
+        Returns
+        -------
+        dndlnM : array-like
+            Halo mass function values :math:`dn/d\\ln M` in comoving
+            :math:`\\mathrm{Mpc}^{-3}`, with shape :math:`(N_m, N_z)`.
+        """
+        m = jnp.atleast_1d(m)
+        z = jnp.atleast_1d(z)
+
+        ln_x_grid, ln_M_grid, dn_dlnM_grid = self._compute_hmf_grid(halo_model)
+
+        log_dn_grid = jnp.log(jnp.clip(dn_dlnM_grid, 1e-300, None))
+        _hmf_interp = jscipy.interpolate.RegularGridInterpolator(
+            (ln_x_grid, ln_M_grid), log_dn_grid
+        )
+        mm, zz = jnp.meshgrid(m, z, indexing="ij")
+        pts = jnp.stack([jnp.log(1.0 + zz), jnp.log(mm)], axis=-1)
+
+        return jnp.exp(_hmf_interp(pts))
 
 
 class MTHaloMass(HaloMass):

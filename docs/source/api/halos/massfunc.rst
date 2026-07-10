@@ -10,6 +10,7 @@ Halo mass functions
 
    hmfast.halos.massfunc.T08HaloMass
    hmfast.halos.massfunc.T10HaloMass
+   hmfast.halos.massfunc.ST99HaloMass
 
 
 Subhalo mass functions

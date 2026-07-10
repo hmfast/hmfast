@@ -237,6 +237,30 @@ class TestMassFunction:
         hmf = halo_model.halo_mass_function.halo_mass_function(halo_model, m, z)
         assert jnp.all(hmf > 0)
 
+    def test_st99_mass_function_shape_positive(self, halo_model):
+        from hmfast.halos.massfunc import ST99HaloMass
+
+        st = ST99HaloMass()
+        m = jnp.logspace(11, 15, 30)
+        z = jnp.array([0.0, 0.5, 1.0])
+        hmf = st.halo_mass_function(halo_model, m, z)
+        assert hmf.shape == (30, 3)
+        assert jnp.all(jnp.isfinite(hmf))
+        assert jnp.all(hmf > 0)
+
+    def test_st99_f_sigma_formula(self):
+        """ST99 f(σ)/2 matches A sqrt(2ν'/π) (1+ν'^{-p}) exp(-ν'/2) / 2."""
+        from hmfast.halos.massfunc import ST99HaloMass
+
+        st = ST99HaloMass(A=0.3222, a=0.707, p=0.3, delta_c=1.686)
+        sigma = jnp.array([[0.5, 1.0, 1.5, 2.0]])  # (Nz=1, NR)
+        f = st._f_sigma(None, sigma, jnp.array([0.0]))
+        nu_p = 0.707 * (1.686 / sigma) ** 2
+        expected = 0.5 * 0.3222 * jnp.sqrt(nu_p * 2.0 / jnp.pi) * jnp.exp(
+            -0.5 * nu_p
+        ) * (1.0 + nu_p ** (-0.3))
+        assert jnp.allclose(f, expected, rtol=1e-10)
+
 
 class TestBias:
     def test_bias_shape(self, halo_model):
