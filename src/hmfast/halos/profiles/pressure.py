@@ -800,6 +800,88 @@ jax.tree_util.register_pytree_node(
 )
 
 
+class TruncatedGNFWPressureProfile(GNFWPressureProfile):
+    """Ordinary Arnaud GNFW profile with the painter-matched disc truncation.
+
+    Its pressure normalization and JAX state are purely those of
+    :class:`GNFWPressureProfile`; only the precomputed beam-and-disc transfer
+    function is shared with the truncated parametric implementation.
+    """
+
+    def __init__(self, x=None, P0=8.130, c500=1.156, alpha=1.0620,
+                 beta=5.4807, gamma=0.3292, B=1.4, fwhm_arcmin=10.0,
+                 cap_deg=5.0, mult=4.0, n_mz=40, n_theta=3000, nq=512,
+                 **legacy):
+        super().__init__(x=x, P0=P0, c500=c500, alpha=alpha, beta=beta,
+                         gamma=gamma, B=B)
+        self.fwhm_arcmin = float(fwhm_arcmin)
+        self.cap_deg = float(cap_deg)
+        self.mult = float(mult)
+        self.n_mz = int(n_mz)
+        self.n_theta = int(n_theta)
+        self.nq = int(nq)
+        self._cache = None
+
+    precompute = TruncatedParametricGNFWPressureProfile.precompute
+    _interp_T = TruncatedParametricGNFWPressureProfile._interp_T
+
+    @jax.jit
+    def u_k(self, halo_model, k, m, z):
+        u_full = GNFWPressureProfile.u_k(self, halo_model, k, m, z)
+        if self._cache is None:
+            return u_full
+        k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
+        mdef500 = MassDefinition(500, "critical")
+        R500_c = mdef500.r_delta(
+            halo_model.cosmology, m, z
+        ) * (1.0 + z)[None, :]
+        q = k[:, None, None] * R500_c[None, :, :]
+        return u_full * self._interp_T(jnp.log(m), z, q)
+
+    def _tree_flatten(self):
+        c = self._cache
+        if c is None:
+            z1 = jnp.zeros((1,))
+            logm_g = z_g = q_g = Tc = z1
+        else:
+            logm_g, z_g, q_g, Tc = (
+                c["logm_grid"], c["z_grid"], c["q_native"], c["T_cache"])
+        leaves = (self.P0, self.c500, self.alpha, self.beta, self.gamma, self.B,
+                  logm_g, z_g, q_g, Tc)
+        aux_data = (tuple(self._x.tolist()), self._hankel, self.fwhm_arcmin,
+                    self.cap_deg, self.mult, self.n_mz, self.n_theta, self.nq,
+                    c is not None)
+        return leaves, aux_data
+
+    @classmethod
+    def _tree_unflatten(cls, aux_data, leaves):
+        (x_tuple, hankel, fwhm, cap, mult, nmz, n_theta, nq,
+         has_cache) = aux_data
+        (P0, c500, alpha, beta, gamma, B,
+         logm_grid, z_grid, q_native, T_cache) = leaves
+        obj = cls.__new__(cls)
+        (obj.P0, obj.c500, obj.alpha, obj.beta, obj.gamma, obj.B) = (
+            P0, c500, alpha, beta, gamma, B)
+        obj._x = np.array(x_tuple)
+        obj._hankel = hankel
+        obj.fwhm_arcmin, obj.cap_deg, obj.mult = fwhm, cap, mult
+        obj.n_mz, obj.n_theta, obj.nq = nmz, n_theta, nq
+        obj._cache = {
+            "logm_grid": logm_grid, "z_grid": z_grid,
+            "q_native": q_native, "T_cache": T_cache,
+        } if has_cache else None
+        return obj
+
+
+jax.tree_util.register_pytree_node(
+    TruncatedGNFWPressureProfile,
+    lambda obj: obj._tree_flatten(),
+    lambda aux_data, children: TruncatedGNFWPressureProfile._tree_unflatten(
+        aux_data, children
+    ),
+)
+
+
 class B12PressureProfile(PressureProfile):
     """
     Electron pressure profile from `Battaglia et al. (2012) <https://ui.adsabs.harvard.edu/abs/2012ApJ...758...74B/abstract>`_.

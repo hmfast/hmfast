@@ -7,6 +7,7 @@ from .pressure import (
     PressureProfile,
     GNFWPressureProfile,
     ParametricGNFWPressureProfile,
+    TruncatedGNFWPressureProfile,
     TruncatedParametricGNFWPressureProfile,
     B12PressureProfile,
 )
@@ -19,6 +20,6 @@ __all__ = [
     "GalaxyHODProfile", "Z07GalaxyHODProfile",
     "MatterProfile", "NFWMatterProfile",
     "PressureProfile", "GNFWPressureProfile", "ParametricGNFWPressureProfile",
-    "TruncatedParametricGNFWPressureProfile",
+    "TruncatedGNFWPressureProfile", "TruncatedParametricGNFWPressureProfile",
     "B12PressureProfile",
 ]
