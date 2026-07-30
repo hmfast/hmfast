@@ -70,6 +70,7 @@ import jax
 import jax.numpy as jnp
 
 from hmfast.halos.mass_definition import MassDefinition, convert_m_delta
+from hmfast.utils import Const
 
 
 # ----------------------------------------------------------------------
@@ -127,6 +128,41 @@ def compute_y0_parametric(halo_model, m, z, A_SZ, alpha_SZ, B):
     m_tilde = (m500c * h / B) / (0.7 * 3.0e14)  # (Nm, Nz), in 0.7*3e14 M_sun units
     y0 = (10.0 ** A_SZ) * (m_tilde ** alpha_SZ) * (E_z ** 2) * ((h / 0.7) ** (-0.5))
     return y0
+
+
+@jax.jit
+def compute_y0_gnfw(halo_model, m, z, P0=8.130, B=1.4):
+    """Central Compton-y of the ordinary Arnaud GNFW pressure profile."""
+    m = jnp.atleast_1d(m)
+    z = jnp.atleast_1d(z)
+
+    H0 = halo_model.cosmology.H0
+    h = H0 / 100.0
+    mass_def_500c = MassDefinition(500, "critical")
+    c_old = halo_model.concentration.c_delta(halo_model, m, z)
+    m500c = convert_m_delta(
+        halo_model.cosmology, m, z,
+        halo_model.mass_definition, mass_def_500c, c_old=c_old,
+    )
+
+    H_z = jnp.atleast_1d(halo_model.cosmology.hubble_parameter(z))[None, :]
+    E_z = H_z / H0
+    m500c_tilde = m500c * h / B
+    P_500c = (
+        1.65 * (h / 0.7) ** 2 * E_z ** (8.0 / 3.0)
+        * (m500c_tilde / (0.7 * 3.0e14)) ** (2.0 / 3.0 + 0.12)
+        * (0.7 / h) ** 1.5
+    )
+
+    sigma_T_cm2 = 6.6524587e-25
+    m_e_c2_eV = 510998.95
+    shape_integral = 0.470502095
+    r500c = mass_def_500c.r_delta(halo_model.cosmology, m500c, z)
+    r500c_cm = r500c * Const._Mpc_over_m_ * 100.0
+    return (
+        2.0 * (sigma_T_cm2 / m_e_c2_eV) * P0 * P_500c
+        * r500c_cm * shape_integral
+    )
 
 
 @jax.jit
@@ -318,6 +354,45 @@ def build_snr_grid(
 
     coeff_j = jnp.asarray(coeff)
     return _snr_grid_jit(halo_model, m, z, A_SZ, alpha_SZ, B, coeff_j)
+
+
+@jax.jit
+def _gnfw_snr_grid_jit(halo_model, m, z, P0, B, coeff):
+    y0 = compute_y0_gnfw(halo_model, m, z, P0=P0, B=B)
+    theta = compute_theta500_arcmin(halo_model, m, z, B)
+    sigma = sigma_y0_from_theta(theta, coeff)
+    return y0 / sigma
+
+
+def build_gnfw_snr_grid(
+    halo_model,
+    m,
+    z,
+    P0: float = 8.130,
+    B: float = 1.4,
+    *,
+    sigma_obj_file: str = DEFAULT_SIGMA_OBJ_FILE,
+    skyfr_file: str = DEFAULT_SKYFR_FILE,
+    filter_name: str = "immf6",
+    theta_min: float = 0.5,
+    theta_max: float = 32.0,
+    poly_deg: int = 3,
+    coeff=None,
+):
+    """Construct the selection SNR from the ordinary GNFW central y0."""
+    if coeff is None:
+        coeff, _ = load_sigma_y0_curve(
+            sigma_obj_file=sigma_obj_file,
+            skyfr_file=skyfr_file,
+            filter_name=filter_name,
+            theta_min=theta_min,
+            theta_max=theta_max,
+            poly_deg=poly_deg,
+        )
+    return _gnfw_snr_grid_jit(
+        halo_model, m, z, P0, B, jnp.asarray(coeff)
+    )
+
 
 def snr_mask(snr_grid, q_cat: float, at: float = 0.0):
     r"""Heaviside selection :math:`\Theta(q_{\rm cat} - \mathrm{SNR})`.
