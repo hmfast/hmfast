@@ -273,4 +273,114 @@ class T10HaloBias(HaloBias):
             raise ValueError("order must be either 1 or 2")
 
 
+class ST99HaloBias(HaloBias):
+    """
+    Halo bias model from `Sheth & Tormen (1999)
+    <https://ui.adsabs.harvard.edu/abs/1999MNRAS.308..119S/abstract>`_.
+
+    Linear bias follows the peak-background split applied to the Sheth–Tormen
+    mass function (their equation 12). Quadratic bias follows the Cooray &
+    Sheth (2002) expressions derived from the same mass function. Parameters
+    are the standard ST99 values :math:`a = 0.707` and :math:`p = 0.3`.
+
+    Notes
+    -----
+    Unlike :class:`T10HaloBias`, this relation depends only on peak height
+    :math:`\\nu = \\delta_c / \\sigma(M, z)` and not on the spherical-overdensity
+    mass definition.
+    """
+
+    def __init__(self, a=0.707, p=0.3, delta_c=1.686):
+        """
+        Parameters
+        ----------
+        a : float, optional
+            ST99 barrier rescaling parameter (often denoted :math:`q` or
+            :math:`a`). Default ``0.707``.
+        p : float, optional
+            ST99 low-mass slope parameter. Default ``0.3``.
+        delta_c : float, optional
+            Spherical-collapse barrier height. Default ``1.686``.
+        """
+        self.a = float(a)
+        self.p = float(p)
+        self.delta_c = float(delta_c)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _b1_nu(self, sigmas):
+        """First-order (linear) ST99 halo bias :math:`b_1(\\nu)`."""
+        nu = self.delta_c / sigmas
+        a_nu2 = self.a * nu ** 2
+        return 1.0 + (a_nu2 - 1.0 + 2.0 * self.p / (1.0 + a_nu2 ** self.p)) / self.delta_c
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _b2_nu(self, sigmas):
+        """
+        Second-order ST99 halo bias :math:`b_2(\\nu)`.
+
+        Expressions follow Cooray & Sheth (2002), equations for the ST mass
+        function (see also HMx ``b2_ST``).
+        """
+        nu = self.delta_c / sigmas
+        a_nu2 = self.a * nu ** 2
+        dc = self.delta_c
+        a2 = -17.0 / 21.0
+
+        eps1 = (a_nu2 - 1.0) / dc
+        eps2 = a_nu2 * (a_nu2 - 3.0) / dc ** 2
+        E1 = (2.0 * self.p) / (dc * (1.0 + a_nu2 ** self.p))
+        E2 = ((1.0 + 2.0 * self.p) / dc + 2.0 * eps1) * E1
+        return 2.0 * (1.0 + a2) * (eps1 + E1) + eps2 + E2
+
+    @partial(jax.jit, static_argnums=(0, 4))
+    def halo_bias(self, halo_model, m, z, order=1):
+        """
+        Compute the ST99 halo bias of the requested order.
+
+        The first-order (Eulerian linear) bias is
+
+        .. math::
+
+            b_1(\\nu) = 1 + \\frac{a\\nu^2 - 1}{\\delta_c}
+            + \\frac{2p}{\\delta_c\\,[1 + (a\\nu^2)^p]}
+
+        with peak height :math:`\\nu = \\delta_c / \\sigma(M, z)`,
+        :math:`a = 0.707`, :math:`p = 0.3`, and
+        :math:`\\delta_c \\approx 1.686` (Sheth & Tormen 1999, eq. 12).
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+            Halo-model instance supplying the cosmology used to evaluate
+            :math:`\\sigma(M, z)`.
+        m : array-like
+            Halo mass grid in physical :math:`M_\\odot`.
+        z : array-like
+            Redshift grid.
+        order : int, optional
+            Bias order to evaluate. Supported values are ``1`` and ``2``.
+
+        Returns
+        -------
+        array-like
+            Dimensionless halo bias values of the requested order, shape
+            :math:`(N_m, N_z)`.
+        """
+        m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
+        ln_x_grid, ln_M_grid, sigma_grid = self._compute_sigma_grid(halo_model)
+
+        _sigma_interp = jscipy.interpolate.RegularGridInterpolator(
+            (ln_x_grid, ln_M_grid), jnp.log(sigma_grid)
+        )
+        zz, mm = jnp.meshgrid(z, m, indexing="ij")
+        pts = jnp.stack([jnp.log(1.0 + zz), jnp.log(mm)], axis=-1)
+        sigma_M = jnp.exp(_sigma_interp(pts))
+
+        if order == 1:
+            return self._b1_nu(sigma_M).T
+        elif order == 2:
+            return self._b2_nu(sigma_M).T
+        else:
+            raise ValueError("order must be either 1 or 2")
+
 
