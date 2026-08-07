@@ -2,6 +2,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from hmfast.halos.profiles.profiles_2pt import _fourier_2pt
+
 
 # -------------------------
 # Perturbation theory helpers
@@ -169,6 +171,283 @@ def _kr_pkr(hm, k, kp, z_arr):
     kr = _ksum(k_b, kp_b, cth)
     pkr = jnp.reshape(hm.cosmology.pk(kr.flatten(), z_arr, linear=True), kr.shape)
     return k_b, kp_b, kr, pkr
+
+
+# -------------------------
+# Halo model power spectrum
+# -------------------------
+
+class Pk:
+    """
+    Halo model power spectrum P(k, z).
+    """
+
+    # ------------------------------------------------------------------
+    # 1-halo term
+    # ------------------------------------------------------------------
+
+    def pk_1h(self, halo_model, profile1, profile2, k, z, k_damp=0.01):
+        """
+        Compute the 1-halo contribution to the 3D power spectrum.
+
+        .. math::
+
+            P_{1h}(k, z) = \\int d\\ln M \\, \\frac{dn}{d\\ln M} \\, u_1(k, M, z) u_2(k, M, z)
+
+        where :math:`dn/d\\ln M` is the halo mass function
+        and :math:`u_i(k \\mid M, z)` is the Fourier-space tracer profile.
+        The mass integral is performed over :attr:`m_grid`.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+        profile1 : HaloProfile
+            First halo profile object.
+        profile2 : HaloProfile or None
+            Second halo profile object (if None, uses profile1).
+        k : array-like
+            Wavenumber grid in :math:`\\mathrm{Mpc}^{-1}`.
+        z : array-like
+            Redshift grid.
+        k_damp : float, default 0.01
+            Damping wavenumber in :math:`\\mathrm{Mpc}^{-1}` for the low-k suppression factor.
+
+        Returns
+        -------
+        pk_1h : array
+            1-halo power spectrum in :math:`\\mathrm{Mpc}^3`, with shape
+            :math:`(N_k, N_z)`, where singleton dimensions get squeezed before
+            return.
+        """
+        hm = halo_model
+        k, m, z = jnp.atleast_1d(k), hm.m_grid, jnp.atleast_1d(z)
+        profile2 = profile2 if profile2 is not None else profile1
+
+        # Weights and Setup
+        logm = jnp.log(m)
+        dm = jnp.diff(logm)
+        w = jnp.concatenate([jnp.array([dm[0]]), dm[:-1] + dm[1:], jnp.array([dm[-1]])]) * 0.5
+
+        dndlnm = jnp.reshape(hm.halo_mass_function.dndlnm(hm.cosmology, m, z, hm.mass_def, hm.convert_masses), (len(m), len(z)))
+        total_weights = dndlnm * w[:, None]  # (Nm, Nz)
+
+        # Process a single mass bin at a time and extract the uk^2 at the lowest mass for the halo model consistency term
+        def process_bin(i):
+            pair_kernel = _fourier_2pt(hm, profile1, profile2, k, m, z)
+            pair_kernel = jnp.reshape(pair_kernel, (len(k), len(m), len(z)))
+            uk_sq_row = pair_kernel[:, i, :]
+
+            return uk_sq_row * total_weights[i], uk_sq_row
+
+        # vmap through the mass bins
+        integrand_rows, all_sq_profiles = jax.vmap(process_bin)(jnp.arange(len(m)))
+
+        pk1h = jnp.sum(integrand_rows, axis=0)
+
+        # Apply halo model consistency correction: n_min * uk_sq_min
+        uk_sq_min = all_sq_profiles[0]
+        n_min, _, _ = hm._counter_terms(z)
+        correction = n_min[None, :] * uk_sq_min
+        pk1h = pk1h + hm.hm_consistency * correction
+
+        # Apply damping
+        mask = k_damp > 0
+        damping = jnp.where(mask, 1.0 - jnp.exp(-(k / jnp.where(mask, k_damp, 1.0))**2), 1.0)
+
+        return jnp.squeeze(pk1h * damping[:, None])
+
+    # ------------------------------------------------------------------
+    # 2-halo term
+    # ------------------------------------------------------------------
+
+    def pk_2h(self, halo_model, profile1, profile2, k, z):
+        """
+        Compute the 2-halo contribution to the 3D power spectrum.
+
+        .. math::
+
+            P_{2h}(k, z) = P_{\\mathrm{lin}}(k, z) \\, I_1(k, z) \\, I_2(k, z)
+
+        with
+
+        .. math::
+
+            I_i(k, z) = \\int d\\ln M \\, \\frac{dn}{d\\ln M}(M, z) \\, b(M, z) \\, u_i(k \\mid M, z),
+
+        where :math:`u_i(k \\mid M, z)` is the Fourier-space tracer profile,
+        :math:`dn/d\\ln M` is the halo mass function, and :math:`b(M, z)` is the
+        linear halo bias. The mass integral is performed over :attr:`m_grid`.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+        profile1 : HaloProfile
+            First halo profile object.
+        profile2 : HaloProfile or None
+            Second halo profile object (if None, uses profile1).
+        k : array-like
+            Wavenumber grid in :math:`\\mathrm{Mpc}^{-1}`.
+        z : array-like
+            Redshift grid.
+
+        Returns
+        -------
+        pk_2h : array
+            2-halo power spectrum in :math:`\\mathrm{Mpc}^3`, with shape
+            :math:`(N_k, N_z)`, where singleton dimensions get squeezed before
+            return.
+        """
+        hm = halo_model
+        k, m, z = jnp.atleast_1d(k), hm.m_grid, jnp.atleast_1d(z)
+
+        profile2 = profile2 if profile2 is not None else profile1
+
+        # Weights and Ingredients
+        logm = jnp.log(m)
+        dm = jnp.diff(logm)
+        w = jnp.concatenate([jnp.array([dm[0]]), dm[:-1] + dm[1:], jnp.array([dm[-1]])]) * 0.5
+
+        # Combine hmf, bias, and weights into a single (Nm, Nz) weight grid
+        dndlnm = jnp.reshape(hm.halo_mass_function.dndlnm(hm.cosmology, m, z, hm.mass_def, hm.convert_masses), (len(m), len(z)))
+        bias = jnp.reshape(hm.halo_bias.bias(hm.cosmology, m, z, hm.mass_def, hm.convert_masses), (len(m), len(z)))
+        total_weights = dndlnm * bias * w[:, None]
+
+        def get_I(profile):
+            # This function processes a single index 'i' of the mass axis
+            def process_bin(i):
+                uk_full = jnp.reshape(profile.fourier(hm, k, m, z), (len(k), len(m), len(z)))
+                uk_slice = uk_full[:, i, :]
+                return uk_slice * total_weights[i], uk_slice
+
+            # Vmap over the indices 0...Nm-1, then integrate and pluck index 0 for hm consistency
+            integrand_rows, all_profiles = jax.vmap(process_bin)(jnp.arange(len(m)))
+            integral = jnp.sum(integrand_rows, axis=0)
+            u_k_min = all_profiles[0]  # vmap output is (Nm, Nk, Nz)
+
+            n_min, b1_min, _ = hm._counter_terms(z)
+            correction = b1_min[None, :] * n_min[None, :] * u_k_min
+
+            return integral + hm.hm_consistency * correction
+
+        # Final Power Spectrum
+        I1 = get_I(profile1)
+        I2 = I1 if profile1 is profile2 else get_I(profile2)
+
+        P_lin = hm.cosmology.pk(k, z, linear=True)
+        # Ensure P_lin has shape (N_k, N_z)
+        P_lin = jnp.reshape(P_lin, (len(k), -1))
+
+        return jnp.squeeze(P_lin * I1 * I2)
+
+    # ------------------------------------------------------------------
+    # Angular power spectrum (Limber projection)
+    # ------------------------------------------------------------------
+
+    def cl_1h(self, halo_model, tracer1, tracer2, l, z, k_damp=0.01):
+        """
+        Compute the 1-halo contribution to the angular power spectrum
+        :math:`C_\\ell^{1h}`.
+
+        The Limber-projected spectrum is obtained by integrating the 1-halo
+        3D power spectrum against the tracer kernels and the comoving volume
+        element. The mass integral is performed over :attr:`m_grid`.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+        tracer1 : Tracer
+            First tracer object.
+        tracer2 : Tracer or None
+            Second tracer object (if None, uses tracer1).
+        l : array-like
+            Multipole grid.
+        z : array
+            Redshift array. This must be an array because it defines the
+            integration grid over redshift.
+        k_damp : float, default 0.01
+            Damping wavenumber in :math:`\\mathrm{Mpc}^{-1}` passed through to :meth:`pk_1h`.
+
+        Returns
+        -------
+        cl_1h : array
+            Dimensionless 1-halo angular power spectrum with shape
+            :math:`(N_\\ell,)`, where singleton dimensions get squeezed before
+            return.
+        """
+        hm = halo_model
+        tracer2 = tracer1 if tracer2 is None else tracer2
+
+        # Define the slice function to map l -> k for a specific z
+        def get_pk_slice(zi):
+            chi_i = hm.cosmology.angular_diameter_distance(zi) * (1 + zi)
+            ki = (l + 0.5) / chi_i
+            pk = self.pk_1h(hm, tracer1.profile, tracer2.profile, k=ki, z=jnp.atleast_1d(zi), k_damp=k_damp)
+            return pk.flatten()
+
+        # Get the halo model pk_1h, the kernels, and the Limber weight c/(H chi^2)
+        P_1h_grid = jax.vmap(get_pk_slice)(z)
+        kernel1 = tracer1.kernel(hm.cosmology, z)
+        kernel2 = tracer2.kernel(hm.cosmology, z)
+        chi = hm.cosmology.angular_diameter_distance(z) * (1.0 + z)
+        limber_weight = hm.cosmology.comoving_volume_element(z) / chi**4
+
+        # Limber integral: C_ell = int dz (c/H chi^2) W1 W2 P
+        integrand = P_1h_grid * (limber_weight[:, None] * kernel1[:, None] * kernel2[:, None])
+
+        return jnp.squeeze(jnp.trapezoid(integrand, x=z, axis=0))
+
+    def cl_2h(self, halo_model, tracer1, tracer2, l, z):
+        """
+        Compute the 2-halo contribution to the angular power spectrum
+        :math:`C_\\ell^{2h}`.
+
+        The Limber-projected spectrum is obtained by integrating the 2-halo
+        3D power spectrum against the tracer kernels and the comoving volume
+        element. The mass integral is performed over :attr:`m_grid`.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+        tracer1 : Tracer
+            First tracer object.
+        tracer2 : Tracer or None
+            Second tracer object (if None, uses tracer1).
+        l : array-like
+            Multipole grid.
+        z : array
+            Redshift array. This must be an array because it defines the
+            integration grid over redshift.
+
+        Returns
+        -------
+        cl_2h : array
+            Dimensionless 2-halo angular power spectrum with shape
+            :math:`(N_\\ell,)`, where singleton dimensions get squeezed before
+            return.
+        """
+        hm = halo_model
+        tracer2 = tracer1 if tracer2 is None else tracer2
+
+        # Define the slice function for Limber integration
+        def get_pk_slice(zi):
+            # Map l to k using the Limber approximation and then get the pk_2h
+            chi_i = hm.cosmology.angular_diameter_distance(zi) * (1 + zi)
+            ki = (l + 0.5) / chi_i
+            return self.pk_2h(hm, tracer1.profile, tracer2.profile, k=ki, z=jnp.atleast_1d(zi)).flatten()
+
+        # Map over redshift to get P(k=l/chi, z)
+        P_2h_grid = jax.vmap(get_pk_slice)(z)
+
+        # Get individual kernels and the Limber weight c/(H chi^2)
+        kernel1 = tracer1.kernel(hm.cosmology, z)
+        kernel2 = tracer2.kernel(hm.cosmology, z)
+        chi = hm.cosmology.angular_diameter_distance(z) * (1.0 + z)
+        limber_weight = hm.cosmology.comoving_volume_element(z) / chi**4
+
+        # Limber integral: C_ell = int dz (c/H chi^2) W1 W2 P
+        integrand = P_2h_grid * (limber_weight[:, None] * kernel1[:, None] * kernel2[:, None])
+
+        return jnp.squeeze(jnp.trapezoid(integrand, x=z, axis=0))
 
 
 # -------------------------

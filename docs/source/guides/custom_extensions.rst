@@ -35,6 +35,7 @@ Not physical — only intended as a tiny runnable example users can adapt::
   from hmfast.halos.concentration import Concentration
   from hmfast.halos.profiles.matter import MatterProfile
   from hmfast.tracers.base_tracer import Tracer
+  from hmfast.power import Pk
 
   # Grids used for the example (mass, redshift, multipole)
   m_grid = jnp.geomspace(1e10, 1e15, 105)
@@ -99,8 +100,10 @@ Not physical — only intended as a tiny runnable example users can adapt::
     concentration=NewConcentration(),
   )
 
+  pk_calc = Pk()
+
   # Compute a tiny toy 1-halo + 2-halo cl. Second tracer None => autocorrelation of tracer1.
-  cl = hm.cl_1h(tracer1, None, l_grid, m_grid, z_grid) + hm.cl_2h(tracer1, None, l_grid, m_grid, z_grid)
+  cl = pk_calc.cl_1h(hm, tracer1, None, l_grid, m_grid, z_grid) + pk_calc.cl_2h(hm, tracer1, None, l_grid, m_grid, z_grid)
 
   print("cl shape:", cl.shape)   # should be (N_ell,)
   print("cl (toy values):", cl)
