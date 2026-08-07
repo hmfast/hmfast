@@ -87,8 +87,9 @@ class kSZTracer(Tracer):
         W_ksz : array_like
             kSZ kernel evaluated at redshift(s) :math:`z`.
         """
-        # sigmaT / m_prot in physical Mpc^2 / Msun.
-        sigma_T_over_m_p = (Const._sigma_T_ / Const._m_p_) / Const._Mpc_over_m_**2 * Const._M_sun_
+        # sigmaT / (mu_e * m_prot) in physical Mpc^2 / Msun; mu_e converts gas density to electron density.
+        mu_e = 1.14
+        sigma_T_over_m_p = (Const._sigma_T_ / Const._m_p_) / Const._Mpc_over_m_**2 * Const._M_sun_ / mu_e
         z = jnp.atleast_1d(z)
         velocity_dispersion = jnp.sqrt(cosmology.velocity_dispersion(z))
         return sigma_T_over_m_p * velocity_dispersion / (1.0 + z)

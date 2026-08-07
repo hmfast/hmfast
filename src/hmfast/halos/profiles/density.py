@@ -274,11 +274,10 @@ class B16DensityProfile(DensityProfile):
         # Profile Shape Function (Nx, Nm, Nz)
         p_x = (x_200c / xc)**gamma * (1 + (x_200c / xc)**alpha)**(-(beta + gamma) / alpha)
 
-        mu_e = 1.14
         rho_gas = rho0 * rho_crit_z * f_b * f_free * p_x
         rho_gas = jnp.where(x_200c <= self.x_out, rho_gas, 0.0)
 
-        return jnp.squeeze(rho_gas / mu_e)
+        return jnp.squeeze(rho_gas)
 
 
     @partial(jax.jit, static_argnums=(0,))
