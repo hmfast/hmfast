@@ -6,6 +6,7 @@ hmfast.halos
    :nosignatures:
 
    hmfast.halos.HaloModel
+   hmfast.halos.Pk
    hmfast.halos.Bk
    hmfast.halos.Tk
 
