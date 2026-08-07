@@ -4,7 +4,7 @@ import numpy as np
 
 
 # -------------------------
-# F2 kernel (unchanged)
+# Perturbation theory helpers
 # -------------------------
 def _F2(k1, k2, mu):
     """Leading-order SPT kernel F2 (EdS approximation)."""
@@ -12,20 +12,6 @@ def _F2(k1, k2, mu):
     k2_over_k1 = jnp.where(k1 == 0.0, 0.0, k2 / k1)
     return 5.0 / 7.0 + 0.5 * (k1_over_k2 + k2_over_k1) * mu + 2.0 / 7.0 * mu ** 2
 
-
-# -------------------------
-# G2 kernel (unchanged)
-# -------------------------
-def _G2(k1, k2, mu):
-    """Leading-order velocity-divergence kernel G2 (EdS approximation)."""
-    k1_over_k2 = jnp.where(k2 == 0.0, 0.0, k1 / k2)
-    k2_over_k1 = jnp.where(k1 == 0.0, 0.0, k2 / k1)
-    return 3.0 / 7.0 + 0.5 * (k1_over_k2 + k2_over_k1) * mu + 4.0 / 7.0 * mu ** 2
-
-
-# -------------------------
-# cosine law helper (safe)
-# -------------------------
 @jax.jit
 def _mu(k1, k2, k3):
     """Cosine between k1 and k2 given opposite side k3."""
@@ -36,49 +22,13 @@ def _mu(k1, k2, k3):
         (k3 ** 2 - k1 ** 2 - k2 ** 2) / den
     )
 
-
-# -------------------------
-# forward cosine law helper (companion to _mu)
-# -------------------------
 @jax.jit
 def _ksum(k1, k2, mu):
     """Magnitude of the vector sum of k1, k2 given the cosine of the angle between them."""
     return jnp.sqrt(k1 ** 2 + k2 ** 2 + 2.0 * k1 * k2 * mu)
 
 
-# -------------------------
-# FIXED F3 (symmetrized approximation)
-# -------------------------
-@jax.jit
-def _F3(k1, k2, k3, k4):
-    """
-    Symmetry-fixed EdS-inspired F3 approximation.
-
-    Key fix: no single ordering; average over channels.
-    """
-
-    def channel(a, b, c):
-        k_ab = jnp.sqrt(a**2 + b**2)
-        mu_ab = _mu(a, b, k_ab)
-        F2_ab = _F2(a, b, mu_ab)
-
-        k_abc = jnp.sqrt(k_ab**2 + c**2)
-        mu_abc = _mu(k_ab, c, k_abc)
-        F2_abc = _F2(k_ab, c, mu_abc)
-
-        return F2_ab * F2_abc
-
-    return (
-        channel(k1, k2, k3) +
-        channel(k1, k2, k4) +
-        channel(k1, k3, k4) +
-        channel(k2, k3, k4)
-    ) / 4.0
-
-
-# -------------------------
 # Trispectrum tree-level helpers (4-halo term)
-# -------------------------
 #
 # The 4-halo trispectrum term needs the tree-level kernel angle-averaged over
 # the relative orientation of the k_u and k_v leg pairs -- a genuinely free
@@ -117,80 +67,20 @@ def _X3(k, kp):
     return -7.0 / 4.0 * (1.0 + jnp.squeeze(r, axis=1) ** 2) + isotropized
 
 
-# -------------------------
-# Bispectrum (unchanged)
-# -------------------------
-def _bk(cosmology, k1, k2, k3, z):
-
-    k1, k2, k3 = jnp.asarray(k1), jnp.asarray(k2), jnp.asarray(k3)
-
-    mu12 = _mu(k1, k2, k3)
-    mu23 = _mu(k2, k3, k1)
-    mu31 = _mu(k3, k1, k2)
-
-    P1 = cosmology.pk(k1, z)
-    P2 = cosmology.pk(k2, z)
-    P3 = cosmology.pk(k3, z)
-
-    B12 = 2.0 * _F2(k1, k2, mu12) * P1 * P2
-    B23 = 2.0 * _F2(k2, k3, mu23) * P2 * P3
-    B31 = 2.0 * _F2(k3, k1, mu31) * P3 * P1
-
-    return B12 + B23 + B31
-
-
-# -------------------------
-# FIXED trispectrum
-# -------------------------
-@jax.jit
-def _tk(cosmology, k1, k2, k3, k4, z):
-
-    k = jnp.array([k1, k2, k3, k4])
-    P = cosmology.pk(k, z)
-
-    # ---------------------
-    # T22 term (stable pairing)
-    # ---------------------
-    mu12 = _mu(k1, k2, jnp.sqrt(k1**2 + k2**2))
-    mu34 = _mu(k3, k4, jnp.sqrt(k3**2 + k4**2))
-
-    F12 = _F2(k1, k2, mu12)
-    F34 = _F2(k3, k4, mu34)
-
-    T22 = 4.0 * F12 * F34 * P[0] * P[1] * P[2] * P[3]
-
-    # ---------------------
-    # T13 term (FIXED symmetry)
-    # ---------------------
-    T13 = (
-        _F3(k1, k2, k3, k4) * P[0] * P[1] * P[2] +
-        _F3(k1, k2, k4, k3) * P[0] * P[1] * P[3] +
-        _F3(k1, k3, k4, k2) * P[0] * P[2] * P[3] +
-        _F3(k2, k3, k4, k1) * P[1] * P[2] * P[3]
-    )
-
-    return T22 + T13
-
-
-# -------------------------
-# vectorized version
-# -------------------------
-_vtk = jax.vmap(_tk, in_axes=(None, 0, 0, 0, 0, None))
-
 
 # -------------------------
 # Halo model mass-integral building blocks
 # -------------------------
 #
-# Shared across _Bk and _Tk (not tied to either class's state), so kept at
+# Shared across Bk and Tk (not tied to either class's state), so kept at
 # module level rather than duplicated as a private method on each.
 
 def _pair_integral(halo_model, p1, p2, k1, k2, z):
     """
     ∫ dn/dlnM * b1(M) * p1.fourier(k1,M,z) * p2.fourier(k2,M,z) dlnM
 
-    Pair integral with first-order halo bias included, matching the
-    class_sz 2h convention. Used as a building block for ``_Bk.bk_2h`` and
+    Pair integral with first-order halo bias included.
+    Used as a building block for ``Bk.bk_2h`` and
     the halo-model trispectrum's 2h/3h terms.
 
     Future generalisation: replace ``u1 * u2`` with a ``_fourier_2pt``
@@ -285,26 +175,15 @@ def _kr_pkr(hm, k, kp, z_arr):
 # Halo model bispectrum
 # -------------------------
 
-class _Bk:
+class Bk:
     """
     Halo model bispectrum B(k1, k2, k3, z).
-
-    Computes the 1-, 2-, and 3-halo contributions following the standard halo
-    model decomposition, matching class_sz ``bk_at_z_hm``.
-
-    The three-halo term includes both the linear-bias (tree-level SPT) piece and
-    the quadratic-bias (b2) correction.
 
     For profiles whose higher moments reduce to simple products of their
     Fourier-space first moments (e.g. matter, tSZ, CMB lensing), the nth-order
     profile product within a single halo is taken as u1(k1,M)*...*un(kn,M).
     Profiles with more complex intra-halo occupancy statistics (HOD, CIB) will
-    require a dedicated ``_fourier_3pt`` helper analogous to ``_fourier_2pt`` in
-    ``profiles_2pt.py`` — this is left as a future extension point.
-
-    ``HaloModel`` is **not** stored as class state — it is passed explicitly to
-    each method so that the same ``_Bk`` instance can be reused across different
-    halo model configurations.
+    require a dedicated 3-point profile; this is left as a future extension point.
     """
 
     # ------------------------------------------------------------------
@@ -392,8 +271,7 @@ class _Bk:
                    + P_{\\mathrm{lin}}(k_3)\\, I^{(1)}_3(k_3)\\, J^{(1)}_{12}(k_1,k_2)
 
         where :math:`I^{(1)}_i = \\int dn/d\\ln M\\, b_1 u_i` and
-        :math:`J^{(1)}_{ij} = \\int dn/d\\ln M\\, b_1 u_i u_j` (bias included in
-        both the single and pair integrals, matching class_sz convention).
+        :math:`J^{(1)}_{ij} = \\int dn/d\\ln M\\, b_1 u_i u_j`.
 
         Parameters
         ----------
@@ -487,7 +365,7 @@ class _Bk:
 
         tree_term = B_tree * I1_b1 * I2_b1 * I3_b1
 
-        # Quadratic-bias corrections (no 1/2 prefactor — b2 convention matches class_sz)
+        # Quadratic-bias corrections 
         b2_term = (
             I1_b2 * I2_b1 * I3_b1 * P2 * P3
             + I1_b1 * I2_b2 * I3_b1 * P1 * P3
@@ -501,44 +379,38 @@ class _Bk:
 # Halo model trispectrum
 # -------------------------
 
-class _Tk:
+class Tk:
     """
     Halo model trispectrum T(k_u, k_v, z) in the parallelogram ("covariance")
     configuration k1 = -k2 = k_u, k3 = -k4 = k_v.
 
-    Momentum conservation k1+k2+k3+k4=0 is automatically satisfied for any
-    k_u, k_v and any relative angle between the two pairs, since each pair
-    already sums to zero individually. This is the standard configuration
-    entering the covariance of the power spectrum,
-    Cov[P(k), P(k')] ⊃ T(k,-k,k',-k'), and (after angle-averaging over the
-    residual relative orientation of the two pairs) it reduces the
-    trispectrum to a function of exactly two wavenumbers, k_u and k_v.
+    # Momentum conservation k1+k2+k3+k4=0 is automatically satisfied for any
+    # k_u, k_v and any relative angle between the two pairs, since each pair
+    # already sums to zero individually. This is the standard configuration
+    # entering the covariance of the power spectrum,
+    # Cov[P(k), P(k')] ⊃ T(k,-k,k',-k'), and (after angle-averaging over the
+    # residual relative orientation of the two pairs) it reduces the
+    # trispectrum to a function of exactly two wavenumbers, k_u and k_v.
 
-    All four (1-, 2-, 3- and 4-halo) terms are implemented. The 2-halo and
-    3-halo terms need the same angular quadrature over the relative
-    orientation of the k_u and k_v pairs as the 4-halo term (see the
-    ``_Pbar_kernel``/``_P3_kernel``/``_P4_kernel``/``_Bpt_kernel`` private
-    methods, which all share the same underlying ``kr = |k_u + k_v|`` and
-    :math:`P_{\\mathrm{lin}}(k_r)` computation via ``_kr_pkr``).
+    # All four (1-, 2-, 3- and 4-halo) terms are implemented. The 2-halo and
+    # 3-halo terms need the same angular quadrature over the relative
+    # orientation of the k_u and k_v pairs as the 4-halo term (see the
+    # ``_Pbar_kernel``/``_P3_kernel``/``_P4_kernel``/``_Bpt_kernel`` private
+    # methods, which all share the same underlying ``kr = |k_u + k_v|`` and
+    # :math:`P_{\\mathrm{lin}}(k_r)` computation via ``_kr_pkr``).
 
-    ``k_u`` and ``k_v`` are exposed as two *independent*, explicit
-    arguments (rather than a single array reused for both), consistent with
-    how ``_Bk`` exposes k1, k2, k3 directly rather than a reduced
-    parametrization — this keeps the interface general and
-    ``jax.grad``/``vmap``-friendly without tying it to a shared tabulation
-    grid.
+    # ``k_u`` and ``k_v`` are exposed as two *independent*, explicit
+    # arguments (rather than a single array reused for both), consistent with
+    # how ``Bk`` exposes k1, k2, k3 directly rather than a reduced
+    # parametrization — this keeps the interface general and
+    # ``jax.grad``/``vmap``-friendly without tying it to a shared tabulation
+    # grid.
 
     For profiles whose higher moments reduce to simple products of their
-    Fourier-space first moments (e.g. matter, tSZ, CMB lensing), the
-    4-point profile product within a single halo is taken as
-    u1(k_u,M)*u2(k_u,M)*u3(k_v,M)*u4(k_v,M). Profiles with more complex
-    intra-halo occupancy statistics (HOD, CIB) will require a dedicated
-    ``_fourier_4pt`` helper analogous to ``_fourier_2pt`` in
-    ``profiles_2pt.py`` — this is left as a future extension point (as is
-    already noted for ``_Bk``).
-
-    ``HaloModel`` is **not** stored as class state — it is passed explicitly
-    to each method, mirroring ``_Bk``.
+    Fourier-space first moments (e.g. matter, tSZ, CMB lensing), the nth-order
+    profile product within a single halo is taken as u1(k1,M)*...*un(kn,M).
+    Profiles with more complex intra-halo occupancy statistics (HOD, CIB) will
+    require a dedicated 3-point and 4-point profile; this is left as a future extension point.
     """
 
     # ------------------------------------------------------------------
@@ -555,8 +427,7 @@ class _Tk:
             \\int \\frac{dn}{d\\ln M}\\, u_1(k_u \\mid M, z)\\, u_2(k_u \\mid M, z)\\,
             u_3(k_v \\mid M, z)\\, u_4(k_v \\mid M, z)\\, d\\ln M
 
-        where :math:`u_i` are the Fourier-space profiles (first moments),
-        under the simple-product moment assumption (see class docstring).
+        where :math:`u_i` are the Fourier-space profiles (first moments).
 
         Parameters
         ----------
@@ -611,7 +482,7 @@ class _Tk:
         """
         Angle-averaged isotropized linear power spectrum
         :math:`\\bar P(k,k') = \\langle P_{\\mathrm{lin}}(|{\\bf k}+{\\bf k}'|)\\rangle_\\theta`
-        entering the "22" diagram of the 2-halo trispectrum term.
+        entering the "22" diagram of the 2-halo trispectrum term.\
         """
         _, _, _, pkr = _kr_pkr(hm, k, kp, z_arr)
         wgt = _TRISPEC_THETA_WEIGHT[None, :]
@@ -883,3 +754,6 @@ class _Tk:
         I4 = hm._I(profile4, k_v, z, bias_order=1)
 
         return jnp.squeeze(T_pt * I1 * I2 * I3 * I4)
+
+
+        
