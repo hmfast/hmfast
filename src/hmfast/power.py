@@ -1,5 +1,8 @@
+import functools
+
 import jax
 import jax.numpy as jnp
+import mcfit
 import numpy as np
 
 from hmfast.halos.profiles.profiles_2pt import _fourier_2pt
@@ -182,6 +185,16 @@ class Pk:
     Halo model power spectrum P(k, z).
     """
 
+    # FFTLog k grid for xi_1h/xi_2h -- a single class attribute k_grid
+    k_grid = jnp.geomspace(1e-5, 1e3, 256)
+
+    def __init__(self):
+        # Define the P2xi object from mcfit, as we need to instantiate it before it can be used in a jitted function 
+        self._p2xi = jax.jit(functools.partial(
+            mcfit.P2xi(self.k_grid, lowring=True, backend='jax'),
+            axis=0, extrap=False,
+        ))
+
     # ------------------------------------------------------------------
     # 1-halo term
     # ------------------------------------------------------------------
@@ -338,6 +351,113 @@ class Pk:
         P_lin = jnp.reshape(P_lin, (len(k), -1))
 
         return jnp.squeeze(P_lin * I1 * I2)
+
+    # ------------------------------------------------------------------
+    # Correlation function (FFTLog transform of pk_1h / pk_2h)
+    # ------------------------------------------------------------------
+
+    def xi_1h(self, halo_model, profile1, profile2, r, z, k_damp=0.01):
+        """
+        Compute the 1-halo contribution to the 3D correlation function.
+
+        .. math::
+
+            \\xi_{1h}(r, z) = \\frac{1}{2\\pi^2} \\int dk\\, k^2\\,
+            P_{1h}(k, z)\\, j_0(kr)
+
+        obtained by an FFTLog transform (:class:`mcfit.P2xi`) of
+        :meth:`pk_1h`, tabulated on this :class:`Pk` instance's internal
+        log-spaced ``k`` grid (:attr:`k_grid`) and interpolated onto the
+        requested ``r``.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+        profile1 : HaloProfile
+            First halo profile object.
+        profile2 : HaloProfile or None
+            Second halo profile object (if None, uses profile1).
+        r : array-like
+            Comoving separation grid in :math:`\\mathrm{Mpc}`. Only reliable
+            well inside the range dual to :attr:`k_grid`; values of ``r`` too
+            close to that range's edges are affected by FFTLog ringing.
+        z : array-like
+            Redshift grid.
+        k_damp : float, default 0.01
+            Damping wavenumber in :math:`\\mathrm{Mpc}^{-1}`, passed through
+            to :meth:`pk_1h`.
+
+        Returns
+        -------
+        xi_1h : array
+            1-halo correlation function (dimensionless), with shape
+            :math:`(N_r, N_z)`, where singleton dimensions get squeezed
+            before return.
+        """
+        r, z = jnp.atleast_1d(r), jnp.atleast_1d(z)
+
+        pk = self.pk_1h(halo_model, profile1, profile2, self.k_grid, z, k_damp=k_damp)
+        pk = jnp.reshape(pk, (len(self.k_grid), len(z)))
+
+        r_native, xi_native = self._p2xi(pk)
+        ln_r, ln_r_native = jnp.log(r), jnp.log(r_native)
+
+        # Linear in xi against ln r rather than log-log
+        def interp_col(xi_col):
+            return jnp.interp(ln_r, ln_r_native, xi_col)
+
+        xi = jax.vmap(interp_col, in_axes=1, out_axes=1)(xi_native)
+        return jnp.squeeze(xi)
+
+    def xi_2h(self, halo_model, profile1, profile2, r, z):
+        """
+        Compute the 2-halo contribution to the 3D correlation function.
+
+        .. math::
+
+            \\xi_{2h}(r, z) = \\frac{1}{2\\pi^2} \\int dk\\, k^2\\,
+            P_{2h}(k, z)\\, j_0(kr)
+
+        obtained by an FFTLog transform (:class:`mcfit.P2xi`) of
+        :meth:`pk_2h`, tabulated on this :class:`Pk` instance's internal
+        log-spaced ``k`` grid (:attr:`k_grid`) and interpolated onto the
+        requested ``r``.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+        profile1 : HaloProfile
+            First halo profile object.
+        profile2 : HaloProfile or None
+            Second halo profile object (if None, uses profile1).
+        r : array-like
+            Comoving separation grid in :math:`\\mathrm{Mpc}`. Only reliable
+            well inside the range dual to :attr:`k_grid`; values of ``r`` too
+            close to that range's edges are affected by FFTLog ringing.
+        z : array-like
+            Redshift grid.
+
+        Returns
+        -------
+        xi_2h : array
+            2-halo correlation function (dimensionless), with shape
+            :math:`(N_r, N_z)`, where singleton dimensions get squeezed
+            before return.
+        """
+        r, z = jnp.atleast_1d(r), jnp.atleast_1d(z)
+
+        pk = self.pk_2h(halo_model, profile1, profile2, self.k_grid, z)
+        pk = jnp.reshape(pk, (len(self.k_grid), len(z)))
+
+        r_native, xi_native = self._p2xi(pk)
+        ln_r, ln_r_native = jnp.log(r), jnp.log(r_native)
+
+        # Linear in xi against ln r rather than log-log
+        def interp_col(xi_col):
+            return jnp.interp(ln_r, ln_r_native, xi_col)
+
+        xi = jax.vmap(interp_col, in_axes=1, out_axes=1)(xi_native)
+        return jnp.squeeze(xi)
 
     # ------------------------------------------------------------------
     # Angular power spectrum (Limber projection)
@@ -663,27 +783,13 @@ class Tk:
     Halo model trispectrum T(k_u, k_v, z) in the parallelogram ("covariance")
     configuration k1 = -k2 = k_u, k3 = -k4 = k_v.
 
-    # Momentum conservation k1+k2+k3+k4=0 is automatically satisfied for any
-    # k_u, k_v and any relative angle between the two pairs, since each pair
-    # already sums to zero individually. This is the standard configuration
-    # entering the covariance of the power spectrum,
-    # Cov[P(k), P(k')] ⊃ T(k,-k,k',-k'), and (after angle-averaging over the
-    # residual relative orientation of the two pairs) it reduces the
-    # trispectrum to a function of exactly two wavenumbers, k_u and k_v.
-
-    # All four (1-, 2-, 3- and 4-halo) terms are implemented. The 2-halo and
-    # 3-halo terms need the same angular quadrature over the relative
-    # orientation of the k_u and k_v pairs as the 4-halo term (see the
-    # ``_Pbar_kernel``/``_P3_kernel``/``_P4_kernel``/``_Bpt_kernel`` private
-    # methods, which all share the same underlying ``kr = |k_u + k_v|`` and
-    # :math:`P_{\\mathrm{lin}}(k_r)` computation via ``_kr_pkr``).
-
-    # ``k_u`` and ``k_v`` are exposed as two *independent*, explicit
-    # arguments (rather than a single array reused for both), consistent with
-    # how ``Bk`` exposes k1, k2, k3 directly rather than a reduced
-    # parametrization — this keeps the interface general and
-    # ``jax.grad``/``vmap``-friendly without tying it to a shared tabulation
-    # grid.
+    Momentum conservation k1+k2+k3+k4=0 is automatically satisfied for any
+    k_u, k_v and any relative angle between the two pairs, since each pair
+    already sums to zero individually. This is the standard configuration
+    entering the covariance of the power spectrum,
+    Cov[P(k), P(k')] ⊃ T(k,-k,k',-k'), and (after angle-averaging over the
+    residual relative orientation of the two pairs) it reduces the
+    trispectrum to a function of exactly two wavenumbers, k_u and k_v.
 
     For profiles whose higher moments reduce to simple products of their
     Fourier-space first moments (e.g. matter, tSZ, CMB lensing), the nth-order
