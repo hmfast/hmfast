@@ -596,15 +596,28 @@ class Bk:
         """
         1-halo bispectrum term.
 
+        .. note::
+
+            This implementation is limited to profiles whose 3-point function within a
+            single halo reduces to the product of their (1-point) Fourier-space profiles,
+            i.e. :math:`u_{123}(k_1,k_2,k_3 \\mid M) = u_1(k_1 \\mid M)\\, u_2(k_2 \\mid M)\\,
+            u_3(k_3 \\mid M)`. This holds for matter, tSZ, and CMB lensing, but not in
+            general for profiles with non-trivial intra-halo occupancy statistics
+            (HOD, CIB).
+
         .. math::
 
-            B_{1h}(k_1, k_2, k_3, z) =
-            \\int \\frac{dn}{d\\ln M}\\, u_1(k_1 \\mid M, z)\\,
+            B_{1h}(k_1, k_2, k_3, z) = I_3^0(k_1, k_2, k_3, z)
+
+        where
+
+        .. math::
+
+            I_3^0(k_1, k_2, k_3, z) = \\int \\frac{dn}{d\\ln M}\\, u_1(k_1 \\mid M, z)\\,
             u_2(k_2 \\mid M, z)\\, u_3(k_3 \\mid M, z)\\, d\\ln M
 
-        where :math:`u_i` are the Fourier-space profiles (first moments).
-        For profiles with non-trivial intra-halo occupancy statistics, replace
-        the triple product with a ``_fourier_3pt`` helper.
+        is the unweighted (:math:`\\beta = 0`) triple mass integral and :math:`u_i` are the
+        Fourier-space profiles (first moments).
 
         A low-k suppression factor :math:`1 - e^{-(k_{\\min}/k_{\\mathrm{damp}})^2}`
         is applied at the smallest wavenumber of the triplet.
@@ -668,12 +681,19 @@ class Bk:
 
         .. math::
 
-            B_{2h} = P_{\\mathrm{lin}}(k_1)\\, I^{(1)}_1(k_1)\\, J^{(1)}_{23}(k_2,k_3)
-                   + P_{\\mathrm{lin}}(k_2)\\, I^{(1)}_2(k_2)\\, J^{(1)}_{13}(k_1,k_3)
-                   + P_{\\mathrm{lin}}(k_3)\\, I^{(1)}_3(k_3)\\, J^{(1)}_{12}(k_1,k_2)
+            B_{2h}(k_1, k_2, k_3, z) = P_{\\mathrm{lin}}(k_1)\\, I_1^1(k_1)\\, I_2^1(k_2, k_3)
+            \\;+\\; \\mathrm{cyc}
 
-        where :math:`I^{(1)}_i = \\int dn/d\\ln M\\, b_1 u_i` and
-        :math:`J^{(1)}_{ij} = \\int dn/d\\ln M\\, b_1 u_i u_j`.
+        where "+ cyc" denotes the sum over the two cyclic permutations of :math:`(1,2,3)`, and
+
+        .. math::
+
+            I_1^1(k_i) = \\int \\frac{dn}{d\\ln M}\\, b_1(M)\\, u_i(k_i \\mid M)\\, d\\ln M,
+            \\qquad
+            I_2^1(k_i, k_j) = \\int \\frac{dn}{d\\ln M}\\, b_1(M)\\, u_i(k_i \\mid M)\\,
+            u_j(k_j \\mid M)\\, d\\ln M
+
+        are the standard linearly-biased single- and pair-profile mass integrals.
 
         Parameters
         ----------
@@ -716,14 +736,24 @@ class Bk:
 
         .. math::
 
-            B_{3h} = B_{\\mathrm{tree}}(k_1,k_2,k_3)\\,
-                     I^{(1)}_1 I^{(1)}_2 I^{(1)}_3
-                   + I^{(2)}_1 I^{(1)}_2 I^{(1)}_3 P_2 P_3
-                   + I^{(1)}_1 I^{(2)}_2 I^{(1)}_3 P_1 P_3
-                   + I^{(1)}_1 I^{(1)}_2 I^{(2)}_3 P_1 P_2
+            B_{3h}(k_1, k_2, k_3, z) = B^{\\mathrm{PT}}(k_1, k_2, k_3)\\,
+            I_1^1(k_1)\\, I_1^1(k_2)\\, I_1^1(k_3)
+            \\;+\\; \\Big[\\, I_1^2(k_1)\\, I_1^1(k_2)\\, I_1^1(k_3)\\,
+            P_{\\mathrm{lin}}(k_2)\\, P_{\\mathrm{lin}}(k_3) \\;+\\; \\mathrm{cyc} \\,\\Big]
 
-        :math:`B_{\\mathrm{tree}}` uses the correct SPT F2 kernel
-        (:math:`\\hat k_i \\cdot \\hat k_j = (k_3^2-k_1^2-k_2^2)/(2k_1k_2)`).
+        where :math:`I_1^\\beta(k_i) = \\int dn/d\\ln M\\, b_\\beta(M)\\, u_i(k_i \\mid M)\\, d\\ln M`
+        is the standard mass integral with :math:`\\beta`-th order bias (:math:`\\beta=1` linear,
+        :math:`\\beta=2` quadratic), "+ cyc" denotes the sum over the two cyclic permutations of
+        :math:`(1,2,3)`, and
+
+        .. math::
+
+            B^{\\mathrm{PT}}(k_1, k_2, k_3) = 2\\, F_2(k_1, k_2)\\, P_{\\mathrm{lin}}(k_1)\\,
+            P_{\\mathrm{lin}}(k_2) \\;+\\; \\mathrm{cyc}
+
+        is the tree-level SPT bispectrum, with :math:`F_2` the standard second-order SPT kernel
+        and the pairwise cosines :math:`\\hat k_i \\cdot \\hat k_j = (k_l^2-k_i^2-k_j^2)/(2k_ik_j)`
+        (opposite-side law of cosines, :math:`l` the third index).
 
         Parameters
         ----------
