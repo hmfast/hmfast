@@ -581,6 +581,18 @@ class Bk:
     """
     Halo model bispectrum B(k1, k2, k3, z).
 
+    .. math::
+
+        I_\\mu^{(\\beta)}(k_1, \\dots, k_\\mu, z) = \\int d\\ln M\\,
+        \\frac{dn}{d\\ln M}\\, b_\\beta(M, z) \\prod_{i=1}^{\\mu} u_i(k_i \\mid M, z)
+
+    is the generalised halo-model mass integral (Cooray & Sheth 2002
+    notation) entering every term below: :math:`\\mu` is the number of
+    profiles/wavenumbers in the product, :math:`b_\\beta` is the
+    :math:`\\beta`-th order halo bias (:math:`b_0 = 1` unweighted,
+    :math:`b_1` linear, :math:`b_2` quadratic), and :math:`u_i` are the
+    Fourier-space profiles (first moments).
+
     .. note::
 
         This implementation is limited to profiles whose 3-point function within a
@@ -604,15 +616,9 @@ class Bk:
 
             B_{1h}(k_1, k_2, k_3, z) = I_3^0(k_1, k_2, k_3, z)
 
-        where
-
-        .. math::
-
-            I_3^0(k_1, k_2, k_3, z) = \\int \\frac{dn}{d\\ln M}\\, u_1(k_1 \\mid M, z)\\,
-            u_2(k_2 \\mid M, z)\\, u_3(k_3 \\mid M, z)\\, d\\ln M
-
-        is the unweighted (:math:`\\beta = 0`) triple mass integral and :math:`u_i` are the
-        Fourier-space profiles (first moments).
+        where :math:`I_3^0` is the unweighted (:math:`\\beta=0`) triple mass
+        integral :math:`I_\\mu^{(\\beta)}` defined in the class docstring,
+        with :math:`\\mu=3`.
 
         A low-k suppression factor :math:`1 - e^{-(k_{\\min}/k_{\\mathrm{damp}})^2}`
         is applied at the smallest wavenumber of the triplet.
@@ -680,17 +686,11 @@ class Bk:
             B_{2h}(k_1, k_2, k_3, z) = P_{\\mathrm{lin}}(k_1)\\, I_1^1(k_1)\\, I_2^1(k_2, k_3)
             \\;+\\; 2\\,\\mathrm{cyc.}
 
-        where "+ 2 cyc" denotes the sum over the two cyclic permutations of :math:`(1,2,3)`, and
-
-        .. math::
-
-            \\begin{aligned}
-                I_1^1(k_i) &= \\int \\frac{dn}{d\\ln M}\\, b_1(M)\\, u_i(k_i \\mid M)\\, d\\ln M, \\\\
-                I_2^1(k_i, k_j) &= \\int \\frac{dn}{d\\ln M}\\, b_1(M)\\, u_i(k_i \\mid M)\\,
-                u_j(k_j \\mid M)\\, d\\ln M
-            \\end{aligned}
-
-        are the standard linearly-biased single- and pair-profile mass integrals.
+        where :math:`I_1^1` and :math:`I_2^1` are the linearly-biased
+        (:math:`\\beta=1`) single- and pair-profile mass integrals
+        :math:`I_\\mu^{(\\beta)}` defined in the class docstring, and
+        "+ 2 cyc" denotes the sum over the two cyclic permutations of
+        :math:`(1,2,3)`.
 
         Parameters
         ----------
@@ -741,10 +741,11 @@ class Bk:
                 P_{\\mathrm{lin}}(k_2)\\, P_{\\mathrm{lin}}(k_3) \\;+\\; \\mathrm{cyc} \\,\\Big]
             \\end{aligned}
 
-        where :math:`I_1^\\beta(k_i) = \\int dn/d\\ln M\\, b_\\beta(M)\\, u_i(k_i \\mid M)\\, d\\ln M`
-        is the standard mass integral with :math:`\\beta`-th order bias (:math:`\\beta=1` linear,
-        :math:`\\beta=2` quadratic), "+ 2 cyc" denotes the sum over the two cyclic permutations of
-        :math:`(1,2,3)`, and
+        where :math:`I_1^\\beta(k_i)` is the single-profile mass integral
+        :math:`I_\\mu^{(\\beta)}` defined in the class docstring (with
+        :math:`\\mu=1`; :math:`\\beta=1` linear or :math:`\\beta=2`
+        quadratic bias), "+ 2 cyc" denotes the sum over the two cyclic
+        permutations of :math:`(1,2,3)`, and
 
         .. math::
 
@@ -823,6 +824,23 @@ class Tk:
     residual relative orientation of the two pairs) it reduces the
     trispectrum to a function of exactly two wavenumbers, k_u and k_v.
 
+    .. math::
+
+        I_\\mu^{(\\beta)}(k_1, \\dots, k_\\mu, z) = \\int d\\ln M\\,
+        \\frac{dn}{d\\ln M}\\, b_\\beta(M, z) \\prod_{i=1}^{\\mu} u_i(k_i \\mid M, z)
+
+    is the generalised halo-model mass integral (Cooray & Sheth 2002
+    notation) entering every term below: :math:`\\mu` is the number of
+    profiles/wavenumbers in the product, :math:`b_\\beta` is the
+    :math:`\\beta`-th order halo bias (:math:`b_0 = 1` unweighted,
+    :math:`b_1` linear, :math:`b_2` quadratic), and :math:`u_i` are the
+    Fourier-space profiles (first moments). A wavenumber argument repeated
+    across several :math:`u_i` (e.g. :math:`I_3^1(k_i, k_j, k_j)`) feeds
+    that value to more than one profile. Where two profiles could share a
+    wavenumber, a superscript :math:`(i)` attached to a wavenumber argument,
+    e.g. :math:`k_u^{(i)}`, indicates that argument feeds profile
+    :math:`i`'s Fourier transform :math:`u_i`.
+
     .. note::
 
         This implementation is limited to profiles whose 3- and 4-point
@@ -850,20 +868,9 @@ class Tk:
             T_{1h}(k_u, k_v, z) = I_4^0\\!\\left(k_u^{(1)}, k_u^{(2)},
             k_v^{(3)}, k_v^{(4)}\\right)
 
-        where
-
-        .. math::
-
-            I_4^0\\!\\left(k_u^{(1)}, k_u^{(2)}, k_v^{(3)}, k_v^{(4)}\\right) =
-            \\int \\frac{dn}{d\\ln M}\\, u_1(k_u \\mid M, z)\\, u_2(k_u \\mid M, z)\\,
-            u_3(k_v \\mid M, z)\\, u_4(k_v \\mid M, z)\\, d\\ln M
-
-        is the unweighted (:math:`\\beta = 0`) quadruple mass integral,
-        :math:`u_i` are the Fourier-space profiles (first moments), and a
-        superscript :math:`(i)` attached to a wavenumber argument, e.g.
-        :math:`k_u^{(i)}`, indicates that argument feeds profile :math:`i`'s
-        Fourier transform :math:`u_i` (needed here since two profiles can
-        share the same wavenumber).
+        where :math:`I_4^0` is the unweighted (:math:`\\beta=0`) quadruple
+        mass integral :math:`I_\\mu^{(\\beta)}` defined in the class
+        docstring, with :math:`\\mu=4`.
 
         Parameters
         ----------
@@ -936,17 +943,10 @@ class Tk:
               + I_2^1\\!\\left(k_u^{(1)}, k_v^{(4)}\\right)\\,
                 I_2^1\\!\\left(k_u^{(3)}, k_v^{(2)}\\right) \\Big]
 
-        where
-
-        .. math::
-
-            I_2^1\\!\\left(k_i^{(a)}, k_j^{(b)}\\right) = \\int
-            \\frac{dn}{d\\ln M}\\, b_1(M)\\, u_a(k_i \\mid M)\\, u_b(k_j \\mid M)\\,
-            d\\ln M
-
-        is the standard linearly-biased pair-profile mass integral (see
-        ``_pair_integral``), and :math:`\\bar P` is the relative-angle
-        average of :math:`P_{\\mathrm{lin}}(|{\\bf k}_u+{\\bf k}_v|)` (see
+        where :math:`I_2^1` is the linearly-biased (:math:`\\beta=1`)
+        pair-profile mass integral :math:`I_\\mu^{(\\beta)}` defined in the
+        class docstring, and :math:`\\bar P` is the relative-angle average
+        of :math:`P_{\\mathrm{lin}}(|{\\bf k}_u+{\\bf k}_v|)` (see
         ``_Pbar_kernel``) -- the third possible pairing vanishes because it
         would require :math:`P_{\\mathrm{lin}}(0) = 0`.
 
@@ -964,25 +964,12 @@ class Tk:
             \\end{aligned}
 
         where "+ (1 :math:`\\leftrightarrow` 2)" denotes the additional term
-        obtained by swapping labels 1 and 2 in the preceding term, and
-        similarly for "+ (3 :math:`\\leftrightarrow` 4)",
-
-        .. math::
-
-            I_1^1\\!\\left(k_i^{(a)}\\right) = \\int \\frac{dn}{d\\ln M}\\,
-            b_1(M)\\, u_a(k_i \\mid M)\\, d\\ln M
-
-        is the standard linearly-biased single-profile mass integral, and
-
-        .. math::
-
-            I_3^1\\!\\left(k_i^{(a)}, k_j^{(b)}, k_j^{(c)}\\right) = \\int
-            \\frac{dn}{d\\ln M}\\, b_1(M)\\, u_a(k_i \\mid M)\\, u_b(k_j \\mid M)\\,
-            u_c(k_j \\mid M)\\, d\\ln M
-
-        is the linearly-biased triple-profile mass integral -- profile
-        :math:`a` alone at :math:`k_i`, profiles :math:`b,c` together at
-        :math:`k_j` (see ``_triple_integral``).
+        obtained by swapping labels 1 and 2 in the preceding term, similarly
+        for "+ (3 :math:`\\leftrightarrow` 4)", and :math:`I_1^1`,
+        :math:`I_3^1` are the linearly-biased (:math:`\\beta=1`) single- and
+        triple-profile mass integrals :math:`I_\\mu^{(\\beta)}` defined in
+        the class docstring -- for :math:`I_3^1`, profile :math:`a` alone at
+        :math:`k_i`, profiles :math:`b,c` together at :math:`k_j`.
 
         Parameters
         ----------
@@ -1091,7 +1078,8 @@ class Tk:
 
         where :math:`B^{\\mathrm{PT}}` is the tree-level bispectrum-type
         kernel from ``_Bpt_kernel``, and :math:`I_1^1`, :math:`I_2^1` are the
-        single- and pair-profile mass integrals defined in ``tk_2h``.
+        linearly-biased (:math:`\\beta=1`) single- and pair-profile mass
+        integrals :math:`I_\\mu^{(\\beta)}` defined in the class docstring.
 
         Parameters
         ----------
@@ -1172,8 +1160,9 @@ class Tk:
             I_1^1\\!\\left(k_u^{(1)}\\right)\\, I_1^1\\!\\left(k_u^{(2)}\\right)\\,
             I_1^1\\!\\left(k_v^{(3)}\\right)\\, I_1^1\\!\\left(k_v^{(4)}\\right)
 
-        where :math:`I_1^1` is the single-profile mass integral defined in
-        ``tk_2h`` (see ``HaloModel._I``) and the tree-level trispectrum
+        where :math:`I_1^1` is the linearly-biased (:math:`\\beta=1`)
+        single-profile mass integral :math:`I_\\mu^{(\\beta)}` defined in
+        the class docstring and the tree-level trispectrum
         :math:`T^{\\mathrm{PT}}` for the parallelogram configuration is
         angle-averaged over the relative
         orientation of the :math:`k_u` and :math:`k_v` pairs via a
