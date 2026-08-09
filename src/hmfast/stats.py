@@ -622,8 +622,8 @@ class Bk:
         halo_model : HaloModel
         profile1, profile2, profile3 : HaloProfile
             The three halo profiles at wavenumbers k1, k2, k3 respectively.
-        k1, k2, k3 : float
-            Triangle wavenumbers in :math:`\\mathrm{Mpc}^{-1}`.
+        k1, k2, k3 : float or array-like
+            Triangle wavenumbers in :math:`\\mathrm{Mpc}^{-1}`. Must all be the same size.
         z : array-like
             Redshift grid.
         k_damp : float, default 0.01
@@ -632,8 +632,8 @@ class Bk:
         Returns
         -------
         array
-            1-halo bispectrum in :math:`\\mathrm{Mpc}^6`, where singleton dimensions get squeezed
-            before return.
+            1-halo bispectrum in :math:`\\mathrm{Mpc}^6`, shape :math:`(N_k, N_z)` before
+            singleton dimensions get squeezed before return.
         """
         hm = halo_model
         m, z_arr = hm.m_grid, jnp.atleast_1d(z)
@@ -678,9 +678,9 @@ class Bk:
         .. math::
 
             B_{2h}(k_1, k_2, k_3, z) = P_{\\mathrm{lin}}(k_1)\\, I_1^1(k_1)\\, I_2^1(k_2, k_3)
-            \\;+\\; \\mathrm{cyc}
+            \\;+\\; 2\\,\\mathrm{cyc.}
 
-        where "+ cyc" denotes the sum over the two cyclic permutations of :math:`(1,2,3)`, and
+        where "+ 2 cyc" denotes the sum over the two cyclic permutations of :math:`(1,2,3)`, and
 
         .. math::
 
@@ -696,16 +696,16 @@ class Bk:
         ----------
         halo_model : HaloModel
         profile1, profile2, profile3 : HaloProfile
-        k1, k2, k3 : float
-            Triangle wavenumbers in :math:`\\mathrm{Mpc}^{-1}`.
+        k1, k2, k3 : float or array-like
+            Triangle wavenumbers in :math:`\\mathrm{Mpc}^{-1}`. Must all be the same size.
         z : array-like
             Redshift grid.
 
         Returns
         -------
         array
-            2-halo bispectrum in :math:`\\mathrm{Mpc}^6`, where singleton dimensions get squeezed
-            before return.
+            2-halo bispectrum in :math:`\\mathrm{Mpc}^6`, shape :math:`(N_k, N_z)` before
+            singleton dimensions get squeezed before return.
         """
         hm = halo_model
         z_arr = jnp.atleast_1d(z)
@@ -743,13 +743,13 @@ class Bk:
 
         where :math:`I_1^\\beta(k_i) = \\int dn/d\\ln M\\, b_\\beta(M)\\, u_i(k_i \\mid M)\\, d\\ln M`
         is the standard mass integral with :math:`\\beta`-th order bias (:math:`\\beta=1` linear,
-        :math:`\\beta=2` quadratic), "+ cyc" denotes the sum over the two cyclic permutations of
+        :math:`\\beta=2` quadratic), "+ 2 cyc" denotes the sum over the two cyclic permutations of
         :math:`(1,2,3)`, and
 
         .. math::
 
             B^{\\mathrm{PT}}(k_1, k_2, k_3) = 2\\, F_2(k_1, k_2)\\, P_{\\mathrm{lin}}(k_1)\\,
-            P_{\\mathrm{lin}}(k_2) \\;+\\; \\mathrm{cyc}
+            P_{\\mathrm{lin}}(k_2) \\;+\\; 2\\,\\mathrm{cyc.}
 
         is the tree-level SPT bispectrum and :math:`F_2` is the standard second-order SPT kernel.
 
@@ -757,16 +757,16 @@ class Bk:
         ----------
         halo_model : HaloModel
         profile1, profile2, profile3 : HaloProfile
-        k1, k2, k3 : float
-            Triangle wavenumbers in :math:`\\mathrm{Mpc}^{-1}`.
+        k1, k2, k3 : float or array-like
+            Triangle wavenumbers in :math:`\\mathrm{Mpc}^{-1}`. Must all be the same size.
         z : array-like
             Redshift grid.
 
         Returns
         -------
         array
-            3-halo bispectrum in :math:`\\mathrm{Mpc}^6`, where singleton dimensions get squeezed
-            before return.
+            3-halo bispectrum in :math:`\\mathrm{Mpc}^6`, shape :math:`(N_k, N_z)` before
+            singleton dimensions get squeezed before return.
         """
         hm = halo_model
         z_arr = jnp.atleast_1d(z)
@@ -823,11 +823,18 @@ class Tk:
     residual relative orientation of the two pairs) it reduces the
     trispectrum to a function of exactly two wavenumbers, k_u and k_v.
 
-    For profiles whose higher moments reduce to simple products of their
-    Fourier-space first moments (e.g. matter, tSZ, CMB lensing), the nth-order
-    profile product within a single halo is taken as u1(k1,M)*...*un(kn,M).
-    Profiles with more complex intra-halo occupancy statistics (HOD, CIB) will
-    require a dedicated 3-point and 4-point profile; this is left as a future extension point.
+    .. note::
+
+        This implementation is limited to profiles whose 3- and 4-point
+        functions within a single halo reduce to products of their
+        (1-point) Fourier-space profiles, i.e.
+        :math:`u_{1234}(k_1,k_2,k_3,k_4 \\mid M) = u_1(k_1 \\mid M)\\,
+        u_2(k_2 \\mid M)\\, u_3(k_3 \\mid M)\\, u_4(k_4 \\mid M)` (and
+        similarly for the 3-point sub-clumps entering the 2-halo "13" term).
+        This holds for matter, tSZ, and CMB lensing, but not in general for
+        profiles with non-trivial intra-halo occupancy statistics (HOD,
+        CIB); no dedicated 3-point or 4-point profiles are currently
+        implemented for such tracers.
     """
 
     # ------------------------------------------------------------------
@@ -840,11 +847,23 @@ class Tk:
 
         .. math::
 
-            T_{1h}(k_u, k_v, z) =
+            T_{1h}(k_u, k_v, z) = I_4^0\\!\\left(k_u^{(1)}, k_u^{(2)},
+            k_v^{(3)}, k_v^{(4)}\\right)
+
+        where
+
+        .. math::
+
+            I_4^0\\!\\left(k_u^{(1)}, k_u^{(2)}, k_v^{(3)}, k_v^{(4)}\\right) =
             \\int \\frac{dn}{d\\ln M}\\, u_1(k_u \\mid M, z)\\, u_2(k_u \\mid M, z)\\,
             u_3(k_v \\mid M, z)\\, u_4(k_v \\mid M, z)\\, d\\ln M
 
-        where :math:`u_i` are the Fourier-space profiles (first moments).
+        is the unweighted (:math:`\\beta = 0`) quadruple mass integral,
+        :math:`u_i` are the Fourier-space profiles (first moments), and a
+        superscript :math:`(i)` attached to a wavenumber argument, e.g.
+        :math:`k_u^{(i)}`, indicates that argument feeds profile :math:`i`'s
+        Fourier transform :math:`u_i` (needed here since two profiles can
+        share the same wavenumber).
 
         Parameters
         ----------
@@ -911,28 +930,59 @@ class Tk:
 
         .. math::
 
-            T_{2h}^{(22)}(k_u,k_v,z) = \\bar P(k_u,k_v)\\,\\Big[
-                J^{(1)}_{13}(k_u,k_v)\\, J^{(1)}_{24}(k_u,k_v)
-              + J^{(1)}_{14}(k_u,k_v)\\, J^{(1)}_{32}(k_u,k_v) \\Big]
+            T_{2h}^{(22)}(k_u,k_v,z) = \\bar P(k_u,k_v)\\, \\Big[
+                I_2^1\\!\\left(k_u^{(1)}, k_v^{(3)}\\right)\\,
+                I_2^1\\!\\left(k_u^{(2)}, k_v^{(4)}\\right)
+              + I_2^1\\!\\left(k_u^{(1)}, k_v^{(4)}\\right)\\,
+                I_2^1\\!\\left(k_u^{(3)}, k_v^{(2)}\\right) \\Big]
 
-        where :math:`J^{(1)}_{ab}(k_u,k_v) = \\int dn/d\\ln M\\, b_1\\,
-        u_a(k_u,M)\\, u_b(k_v,M)` (see ``_pair_integral``), and
-        :math:`\\bar P` is the relative-angle average of
-        :math:`P_{\\mathrm{lin}}(|{\\bf k}_u+{\\bf k}_v|)` (see
+        where
+
+        .. math::
+
+            I_2^1\\!\\left(k_i^{(a)}, k_j^{(b)}\\right) = \\int
+            \\frac{dn}{d\\ln M}\\, b_1(M)\\, u_a(k_i \\mid M)\\, u_b(k_j \\mid M)\\,
+            d\\ln M
+
+        is the standard linearly-biased pair-profile mass integral (see
+        ``_pair_integral``), and :math:`\\bar P` is the relative-angle
+        average of :math:`P_{\\mathrm{lin}}(|{\\bf k}_u+{\\bf k}_v|)` (see
         ``_Pbar_kernel``) -- the third possible pairing vanishes because it
         would require :math:`P_{\\mathrm{lin}}(0) = 0`.
 
         .. math::
 
-            T_{2h}^{(13)}(k_u,k_v,z) = P_{\\mathrm{lin}}(k_u)\\,\\Big[
-                I^{(1)}_1(k_u)\\, K^{(1)}_{2;34}(k_u,k_v)
-              + I^{(1)}_2(k_u)\\, K^{(1)}_{1;34}(k_u,k_v) \\Big]
-              + (u_i \\leftrightarrow v_i)
+            \\begin{aligned}
+                T_{2h}^{(13)}(k_u,k_v,z) &= P_{\\mathrm{lin}}(k_u)\\, \\Big[
+                    I_1^1\\!\\left(k_u^{(1)}\\right)\\,
+                    I_3^1\\!\\left(k_u^{(2)}, k_v^{(3)}, k_v^{(4)}\\right)
+                    + (1 \\leftrightarrow 2) \\Big] \\\\
+                &\\quad + P_{\\mathrm{lin}}(k_v)\\, \\Big[
+                    I_1^1\\!\\left(k_v^{(3)}\\right)\\,
+                    I_3^1\\!\\left(k_v^{(4)}, k_u^{(1)}, k_u^{(2)}\\right)
+                    + (3 \\leftrightarrow 4) \\Big]
+            \\end{aligned}
 
-        where :math:`K^{(1)}_{a;bc}(k_1,k_2) = \\int dn/d\\ln M\\, b_1\\,
-        u_a(k_1,M)\\, u_b(k_2,M)\\, u_c(k_2,M)` (see ``_triple_integral``):
-        one profile alone at :math:`k_1`, the other two together at
-        :math:`k_2`.
+        where "+ (1 :math:`\\leftrightarrow` 2)" denotes the additional term
+        obtained by swapping labels 1 and 2 in the preceding term, and
+        similarly for "+ (3 :math:`\\leftrightarrow` 4)",
+
+        .. math::
+
+            I_1^1\\!\\left(k_i^{(a)}\\right) = \\int \\frac{dn}{d\\ln M}\\,
+            b_1(M)\\, u_a(k_i \\mid M)\\, d\\ln M
+
+        is the standard linearly-biased single-profile mass integral, and
+
+        .. math::
+
+            I_3^1\\!\\left(k_i^{(a)}, k_j^{(b)}, k_j^{(c)}\\right) = \\int
+            \\frac{dn}{d\\ln M}\\, b_1(M)\\, u_a(k_i \\mid M)\\, u_b(k_j \\mid M)\\,
+            u_c(k_j \\mid M)\\, d\\ln M
+
+        is the linearly-biased triple-profile mass integral -- profile
+        :math:`a` alone at :math:`k_i`, profiles :math:`b,c` together at
+        :math:`k_j` (see ``_triple_integral``).
 
         Parameters
         ----------
@@ -1027,15 +1077,21 @@ class Tk:
 
         .. math::
 
-            T_{3h}(k_u,k_v,z) = B^{\\mathrm{PT}}(k_u,k_v)\\, \\Big[
-                I^{(1)}_1(k_u) I^{(1)}_3(k_v) J^{(1)}_{24}(k_u,k_v)
-              + I^{(1)}_1(k_u) I^{(1)}_4(k_v) J^{(1)}_{32}(k_u,k_v)
-              + I^{(1)}_3(k_v) I^{(1)}_2(k_u) J^{(1)}_{14}(k_u,k_v)
-              + I^{(1)}_4(k_v) I^{(1)}_2(k_u) J^{(1)}_{31}(k_u,k_v) \\Big]
+            \\begin{aligned}
+                T_{3h}(k_u,k_v,z) = B^{\\mathrm{PT}}(k_u,k_v)\\, \\Big[\\;
+                & I_1^1\\!\\left(k_u^{(1)}\\right)\\, I_1^1\\!\\left(k_v^{(3)}\\right)\\,
+                  I_2^1\\!\\left(k_u^{(2)}, k_v^{(4)}\\right) \\\\
+                +\\;& I_1^1\\!\\left(k_u^{(1)}\\right)\\, I_1^1\\!\\left(k_v^{(4)}\\right)\\,
+                  I_2^1\\!\\left(k_u^{(3)}, k_v^{(2)}\\right) \\\\
+                +\\;& I_1^1\\!\\left(k_v^{(3)}\\right)\\, I_1^1\\!\\left(k_u^{(2)}\\right)\\,
+                  I_2^1\\!\\left(k_u^{(1)}, k_v^{(4)}\\right) \\\\
+                +\\;& I_1^1\\!\\left(k_v^{(4)}\\right)\\, I_1^1\\!\\left(k_u^{(2)}\\right)\\,
+                  I_2^1\\!\\left(k_u^{(3)}, k_v^{(1)}\\right)\\; \\Big]
+            \\end{aligned}
 
         where :math:`B^{\\mathrm{PT}}` is the tree-level bispectrum-type
-        kernel from ``_Bpt_kernel`` and :math:`J^{(1)}_{ab}` is the pair
-        integral from ``_pair_integral``.
+        kernel from ``_Bpt_kernel``, and :math:`I_1^1`, :math:`I_2^1` are the
+        single- and pair-profile mass integrals defined in ``tk_2h``.
 
         Parameters
         ----------
@@ -1113,11 +1169,13 @@ class Tk:
         .. math::
 
             T_{4h}(k_u, k_v, z) = T^{\\mathrm{PT}}(k_u,-k_u,k_v,-k_v)\\,
-            I^{(1)}_1(k_u)\\, I^{(1)}_2(k_u)\\, I^{(1)}_3(k_v)\\, I^{(1)}_4(k_v)
+            I_1^1\\!\\left(k_u^{(1)}\\right)\\, I_1^1\\!\\left(k_u^{(2)}\\right)\\,
+            I_1^1\\!\\left(k_v^{(3)}\\right)\\, I_1^1\\!\\left(k_v^{(4)}\\right)
 
-        where :math:`I^{(1)}_i = \\int dn/d\\ln M\\, b_1\\, u_i` (see
-        ``HaloModel._I``) and the tree-level trispectrum :math:`T^{PT}` for
-        the parallelogram configuration is angle-averaged over the relative
+        where :math:`I_1^1` is the single-profile mass integral defined in
+        ``tk_2h`` (see ``HaloModel._I``) and the tree-level trispectrum
+        :math:`T^{\\mathrm{PT}}` for the parallelogram configuration is
+        angle-averaged over the relative
         orientation of the :math:`k_u` and :math:`k_v` pairs via a
         fixed-order Gauss-Legendre quadrature over :math:`\\theta \\in [0,\\pi]`
         (the "1122" diagram built from ``_F2``/``_mu``/``_ksum`` in
