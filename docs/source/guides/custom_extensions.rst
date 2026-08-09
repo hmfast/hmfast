@@ -8,14 +8,14 @@ components).
 
 The following list shows some of the parent classes you can implement:
 
-- **Tracer**: see the Tracer API documentation: :doc:`api/tracers`.
+- **Tracer**: see the Tracer API documentation: :doc:`/api/tracers`.
 - **Halo profiles**: prefer one of the profile parent classes (examples
   include MatterProfile, CIBProfile, GalaxyHODProfile, PressureProfile,
-  DensityProfile): :doc:`api/halos/profiles`.
-- **Halo mass function**: :doc:`api/halos/massfunc`.
-- **Halo bias**: :doc:`api/halos/bias`.
-- **Concentration relations**: :doc:`api/halos/concentration`.
-- **Subhalo mass function**: :doc:`api/halos/massfunc` (see subhalo classes).
+  DensityProfile): :doc:`/api/halos/profiles`.
+- **Halo mass function**: :doc:`/api/halos/massfunc`.
+- **Halo bias**: :doc:`/api/halos/bias`.
+- **Concentration relations**: :doc:`/api/halos/concentration`.
+- **Subhalo mass function**: :doc:`/api/halos/massfunc` (see subhalo classes).
 
 For JAX `jit`/autodiff compatibility implement your classes as JAX pytrees
 so JAX can traverse array children while treating configuration as static.

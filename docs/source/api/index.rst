@@ -7,5 +7,6 @@ API Reference
 
    hmfast
    cosmology
+   stats
    tracers
    halos/index
