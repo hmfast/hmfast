@@ -581,11 +581,14 @@ class Bk:
     """
     Halo model bispectrum B(k1, k2, k3, z).
 
-    For profiles whose higher moments reduce to simple products of their
-    Fourier-space first moments (e.g. matter, tSZ, CMB lensing), the nth-order
-    profile product within a single halo is taken as u1(k1,M)*...*un(kn,M).
-    Profiles with more complex intra-halo occupancy statistics (HOD, CIB) will
-    require a dedicated 3-point profile; this is left as a future extension point.
+    .. note::
+
+        This implementation is limited to profiles whose 3-point function within a
+        single halo reduces to the product of their (1-point) Fourier-space profiles,
+        i.e. :math:`u_{123}(k_1,k_2,k_3 \\mid M) = u_1(k_1 \\mid M)\\, u_2(k_2 \\mid M)\\,
+        u_3(k_3 \\mid M)`. This holds for matter, tSZ, and CMB lensing, but not in
+        general for profiles with non-trivial intra-halo occupancy statistics
+        (HOD, CIB).
     """
 
     # ------------------------------------------------------------------
@@ -596,14 +599,6 @@ class Bk:
         """
         1-halo bispectrum term.
 
-        .. note::
-
-            This implementation is limited to profiles whose 3-point function within a
-            single halo reduces to the product of their (1-point) Fourier-space profiles,
-            i.e. :math:`u_{123}(k_1,k_2,k_3 \\mid M) = u_1(k_1 \\mid M)\\, u_2(k_2 \\mid M)\\,
-            u_3(k_3 \\mid M)`. This holds for matter, tSZ, and CMB lensing, but not in
-            general for profiles with non-trivial intra-halo occupancy statistics
-            (HOD, CIB).
 
         .. math::
 
@@ -688,10 +683,11 @@ class Bk:
 
         .. math::
 
-            I_1^1(k_i) = \\int \\frac{dn}{d\\ln M}\\, b_1(M)\\, u_i(k_i \\mid M)\\, d\\ln M,
-            \\qquad
-            I_2^1(k_i, k_j) = \\int \\frac{dn}{d\\ln M}\\, b_1(M)\\, u_i(k_i \\mid M)\\,
-            u_j(k_j \\mid M)\\, d\\ln M
+            \\begin{align*}
+                I_1^1(k_i) &= \\int \\frac{dn}{d\\ln M}\\, b_1(M)\\, u_i(k_i \\mid M)\\, d\\ln M, \\\\
+                I_2^1(k_i, k_j) &= \\int \\frac{dn}{d\\ln M}\\, b_1(M)\\, u_i(k_i \\mid M)\\,
+                u_j(k_j \\mid M)\\, d\\ln M
+            \\end{align*}
 
         are the standard linearly-biased single- and pair-profile mass integrals.
 
@@ -736,10 +732,12 @@ class Bk:
 
         .. math::
 
-            B_{3h}(k_1, k_2, k_3, z) = B^{\\mathrm{PT}}(k_1, k_2, k_3)\\,
-            I_1^1(k_1)\\, I_1^1(k_2)\\, I_1^1(k_3)
-            \\;+\\; \\Big[\\, I_1^2(k_1)\\, I_1^1(k_2)\\, I_1^1(k_3)\\,
-            P_{\\mathrm{lin}}(k_2)\\, P_{\\mathrm{lin}}(k_3) \\;+\\; \\mathrm{cyc} \\,\\Big]
+            \\begin{aligned}
+                B_{3h}(k_1, k_2, k_3, z) &= B^{\\mathrm{PT}}(k_1, k_2, k_3)\\,
+                I_1^1(k_1)\\, I_1^1(k_2)\\, I_1^1(k_3) \\\\
+                &\\quad +\\; \\Big[\\, I_1^2(k_1)\\, I_1^1(k_2)\\, I_1^1(k_3)\\,
+                P_{\\mathrm{lin}}(k_2)\\, P_{\\mathrm{lin}}(k_3) \\;+\\; \\mathrm{cyc} \\,\\Big]
+            \\end{aligned}
 
         where :math:`I_1^\\beta(k_i) = \\int dn/d\\ln M\\, b_\\beta(M)\\, u_i(k_i \\mid M)\\, d\\ln M`
         is the standard mass integral with :math:`\\beta`-th order bias (:math:`\\beta=1` linear,
