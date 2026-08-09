@@ -26,7 +26,7 @@ The snippet below shows three core tasks: reading the Hubble parameter, evaluati
    from hmfast.halos.massdef import MassDefinition
    from hmfast.halos.massfunc import T08HaloMassFunction
    from hmfast.tracers import CMBLensingTracer, tSZTracer
-   from hmfast.power import Pk
+   from hmfast.stats import Pk
 
    cosmo = Cosmology(emulator_set="lcdm:v1")
    cosmo = cosmo.update(H0=67.4)

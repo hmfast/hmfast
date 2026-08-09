@@ -1,5 +1,5 @@
 from .halo_model import HaloModel
-from ..power import Pk, Bk, Tk
+from ..stats import Pk, Bk, Tk
 from . import concentration
 from . import massfunc
 from . import bias
