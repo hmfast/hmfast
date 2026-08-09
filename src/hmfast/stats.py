@@ -185,11 +185,14 @@ class Pk:
     Halo model power spectrum P(k, z).
     """
 
-    # FFTLog k grid for xi_1h/xi_2h -- a single class attribute k_grid
-    k_grid = jnp.geomspace(1e-5, 1e3, 256)
+    # FFTLog k grid for xi_1h/xi_2h -- set as default in __init__
+    k_grid = None
 
-    def __init__(self):
-        # Define the P2xi object from mcfit, as we need to instantiate it before it can be used in a jitted function 
+    def __init__(self, k_grid=None):
+        # FFTLog k grid for xi_1h/xi_2h
+        self.k_grid = k_grid if k_grid is not None else jnp.geomspace(1e-5, 1e3, 256)
+
+        # Define the P2xi object from mcfit, as we need to instantiate it before it can be used in a jitted function
         self._p2xi = jax.jit(functools.partial(
             mcfit.P2xi(self.k_grid, lowring=True, backend='jax'),
             axis=0, extrap=False,

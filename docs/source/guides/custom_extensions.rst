@@ -35,7 +35,7 @@ Not physical — only intended as a tiny runnable example users can adapt::
   from hmfast.halos.concentration import Concentration
   from hmfast.halos.profiles.matter import MatterProfile
   from hmfast.tracers.base_tracer import Tracer
-  from hmfast.power import Pk
+  from hmfast.stats import Pk
 
   # Grids used for the example (mass, redshift, multipole)
   m_grid = jnp.geomspace(1e10, 1e15, 105)
