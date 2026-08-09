@@ -632,7 +632,8 @@ class Bk:
         Returns
         -------
         array
-            1-halo bispectrum in :math:`\\mathrm{Mpc}^6`, squeezed.
+            1-halo bispectrum in :math:`\\mathrm{Mpc}^6`, where singleton dimensions get squeezed
+            before return.
         """
         hm = halo_model
         m, z_arr = hm.m_grid, jnp.atleast_1d(z)
@@ -683,11 +684,11 @@ class Bk:
 
         .. math::
 
-            \\begin{align*}
+            \\begin{aligned}
                 I_1^1(k_i) &= \\int \\frac{dn}{d\\ln M}\\, b_1(M)\\, u_i(k_i \\mid M)\\, d\\ln M, \\\\
                 I_2^1(k_i, k_j) &= \\int \\frac{dn}{d\\ln M}\\, b_1(M)\\, u_i(k_i \\mid M)\\,
                 u_j(k_j \\mid M)\\, d\\ln M
-            \\end{align*}
+            \\end{aligned}
 
         are the standard linearly-biased single- and pair-profile mass integrals.
 
@@ -703,7 +704,8 @@ class Bk:
         Returns
         -------
         array
-            2-halo bispectrum in :math:`\\mathrm{Mpc}^6`, squeezed.
+            2-halo bispectrum in :math:`\\mathrm{Mpc}^6`, where singleton dimensions get squeezed
+            before return.
         """
         hm = halo_model
         z_arr = jnp.atleast_1d(z)
@@ -749,9 +751,7 @@ class Bk:
             B^{\\mathrm{PT}}(k_1, k_2, k_3) = 2\\, F_2(k_1, k_2)\\, P_{\\mathrm{lin}}(k_1)\\,
             P_{\\mathrm{lin}}(k_2) \\;+\\; \\mathrm{cyc}
 
-        is the tree-level SPT bispectrum, with :math:`F_2` the standard second-order SPT kernel
-        and the pairwise cosines :math:`\\hat k_i \\cdot \\hat k_j = (k_l^2-k_i^2-k_j^2)/(2k_ik_j)`
-        (opposite-side law of cosines, :math:`l` the third index).
+        is the tree-level SPT bispectrum and :math:`F_2` is the standard second-order SPT kernel.
 
         Parameters
         ----------
@@ -765,7 +765,8 @@ class Bk:
         Returns
         -------
         array
-            3-halo bispectrum in :math:`\\mathrm{Mpc}^6`, squeezed.
+            3-halo bispectrum in :math:`\\mathrm{Mpc}^6`, where singleton dimensions get squeezed
+            before return.
         """
         hm = halo_model
         z_arr = jnp.atleast_1d(z)
