@@ -1038,13 +1038,10 @@ class Tk:
 
         .. math::
 
-            \\begin{aligned}
-                T_{2h}^{(22)}(k_u,k_v,z) = \\bar P(k_u,k_v)\\, \\Big[\\;
-                & I_2^1\\!\\left(k_u \\,|\\, u_1, k_v \\,|\\, v_1\\right)\\,
-                  I_2^1\\!\\left(k_u \\,|\\, u_2, k_v \\,|\\, v_2\\right) \\\\
-                +\\;& I_2^1\\!\\left(k_u \\,|\\, u_1, k_v \\,|\\, v_2\\right)\\,
-                  I_2^1\\!\\left(k_u \\,|\\, v_1, k_v \\,|\\, u_2\\right)\\; \\Big]
-            \\end{aligned}
+            T_{2h}^{(22)}(k_u,k_v,z) = \\bar P(k_u,k_v)\\, \\Big[\\,
+                I_2^1\\!\\left(k_u \\,|\\, u_1, k_v \\,|\\, v_1\\right)\\,
+                I_2^1\\!\\left(k_u \\,|\\, u_2, k_v \\,|\\, v_2\\right)
+                + (v_1 \\leftrightarrow v_2) \\Big]
 
         where :math:`I_2^1` is the linearly-biased (:math:`\\beta=1`)
         pair-profile mass integral :math:`I_\\mu^{(\\beta)}`, and
@@ -1057,11 +1054,11 @@ class Tk:
                 T_{2h}^{(13)}(k_u,k_v,z) &= P_{\\mathrm{lin}}(k_u)\\, \\Big[
                     I_1^1\\!\\left(k_u \\,|\\, u_1\\right)\\,
                     I_3^1\\!\\left(k_u \\,|\\, u_2, k_v \\,|\\, v_1, k_v \\,|\\, v_2\\right)
-                    + 1\\ \\mathrm{perm}\\ (u_1 \\leftrightarrow u_2) \\Big] \\\\
+                    + (u_1 \\leftrightarrow u_2) \\Big] \\\\
                 &\\quad + P_{\\mathrm{lin}}(k_v)\\, \\Big[
                     I_1^1\\!\\left(k_v \\,|\\, v_1\\right)\\,
                     I_3^1\\!\\left(k_v \\,|\\, v_2, k_u \\,|\\, u_1, k_u \\,|\\, u_2\\right)
-                    + 1\\ \\mathrm{perm}\\ (v_1 \\leftrightarrow v_2) \\Big]
+                    + (v_1 \\leftrightarrow v_2) \\Big]
             \\end{aligned}
 
         where :math:`I_1^1`, :math:`I_3^1` are the linearly-biased (:math:`\\beta=1`) 
@@ -1182,18 +1179,12 @@ class Tk:
 
         .. math::
 
-            \\begin{aligned}
-                T_{3h}(k_u,k_v,z) = B^{\\mathrm{PT}}(k_u,k_v)\\, \\Big[\\;
-                & I_1^1\\!\\left(k_u \\,|\\, u_1\\right)\\, I_1^1\\!\\left(k_v \\,|\\, v_1\\right)\\,
-                  I_2^1\\!\\left(k_u \\,|\\, u_2, k_v \\,|\\, v_2\\right) \\\\
-                +\\;& I_1^1\\!\\left(k_u \\,|\\, u_1\\right)\\, I_1^1\\!\\left(k_v \\,|\\, v_2\\right)\\,
-                  I_2^1\\!\\left(k_u \\,|\\, v_1, k_v \\,|\\, u_2\\right) \\\\
-                +\\;& 1\\ \\mathrm{perm}\\ (u_1 \\leftrightarrow u_2)\\; \\Big]
-            \\end{aligned}
+            T_{3h}(k_u,k_v,z) = B^{\\mathrm{PT}}(k_u,k_v)\\, \\Big[\\,
+                I_1^1\\!\\left(k_u \\,|\\, u_1\\right)\\, I_1^1\\!\\left(k_v \\,|\\, v_1\\right)\\,
+                I_2^1\\!\\left(k_u \\,|\\, u_2, k_v \\,|\\, v_2\\right)
+                + (v_1 \\leftrightarrow v_2) + (u_1 \\leftrightarrow u_2) \\Big]
 
-        where "+ 1 perm :math:`(u_1 \\leftrightarrow u_2)`" denotes the two
-        additional terms obtained by swapping labels :math:`u_1` and
-        :math:`u_2` in each of the two preceding terms, :math:`B^{\\mathrm{PT}}`
+        where :math:`B^{\\mathrm{PT}}`
         is the tree-level bispectrum-type kernel, and :math:`I_1^1`,
         :math:`I_2^1` are the linearly-biased (:math:`\\beta=1`) single- and
         pair-profile mass integrals :math:`I_\\mu^{(\\beta)}`.
@@ -1294,10 +1285,7 @@ class Tk:
         tree-level trispectrum :math:`T^{\\mathrm{PT}}` for the
         parallelogram configuration is
         angle-averaged over the relative
-        orientation of the :math:`k_u` and :math:`k_v` pairs via a
-        fixed-order Gauss-Legendre quadrature over :math:`\\theta \\in [0,\\pi]`
-        (the "1122" diagram built from the SPT kernels; the "1113" diagram
-        from a closed-form kernel), following Eq. 30 of Takada & Hu (2013).
+        orientation of the :math:`k_u` and :math:`k_v` pairs.
 
         Parameters
         ----------
