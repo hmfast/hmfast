@@ -56,20 +56,25 @@ def _X3(k, kp):
     Closed-form, angle-averaged tree-level F3-type kernel entering the
     "1113" diagram of the 4-halo trispectrum, following Eq. 30 of
     Takada & Hu (2013). Depends only on the ratio r = kp/k.
-    """
-    r = (kp / k)[:, None]
-    cth = _TRISPEC_COS_THETA[None, :]
-    wgt = _TRISPEC_THETA_WEIGHT[None, :]
 
-    kr = _ksum(k[:, None], kp[:, None], cth)
+    ``k``, ``kp`` : (Nk,), (Nkp,) independent arrays, broadcast into an
+    (Nk, Nkp) grid of pairs. Returns an (Nk, Nkp) array, not squeezed --
+    this is only ever used as an internal building block of ``Tk.tk_4h``.
+    """
+    r = kp[None, :] / k[:, None]              # (Nk, Nkp)
+    cth = _TRISPEC_COS_THETA[None, None, :]   # (1, 1, N_theta)
+    wgt = _TRISPEC_THETA_WEIGHT[None, None, :]
+
+    r_b = r[:, :, None]  # (Nk, Nkp, 1)
+    kr = _ksum(k[:, None, None], kp[None, :, None], cth)  # (Nk, Nkp, N_theta)
     intd = (
-        (5.0 * r + (7.0 - 2.0 * r ** 2) * cth) / (1.0 + r ** 2 + 2.0 * r * cth)
-        * (3.0 / 7.0 * r + 0.5 * (1.0 + r ** 2) * cth + 4.0 / 7.0 * r * cth ** 2)
+        (5.0 * r_b + (7.0 - 2.0 * r_b ** 2) * cth) / (1.0 + r_b ** 2 + 2.0 * r_b * cth)
+        * (3.0 / 7.0 * r_b + 0.5 * (1.0 + r_b ** 2) * cth + 4.0 / 7.0 * r_b * cth ** 2)
     )
     intd = jnp.where(kr == 0.0, 0.0, intd)
 
-    isotropized = jnp.sum(intd * wgt, axis=1)
-    return -7.0 / 4.0 * (1.0 + jnp.squeeze(r, axis=1) ** 2) + isotropized
+    isotropized = jnp.sum(intd * wgt, axis=2)  # (Nk, Nkp)
+    return -7.0 / 4.0 * (1.0 + r ** 2) + isotropized
 
 
 
@@ -80,17 +85,28 @@ def _X3(k, kp):
 # Shared across Bk and Tk (not tied to either class's state), so kept at
 # module level rather than duplicated as a private method on each.
 
-def _pair_integral(halo_model, p1, p2, k1, k2, z):
+def _pair_integral(halo_model, p1, p2, k1, k2, z, outer=False):
     """
     ∫ dn/dlnM * b1(M) * p1.fourier(k1,M,z) * p2.fourier(k2,M,z) dlnM
 
     Pair integral with first-order halo bias included.
-    Used as a building block for ``Bk.bk_2h`` and
-    the halo-model trispectrum's 2h/3h terms.
+    Used as a building block for ``Bk.bk_2h`` (``outer=False``: ``k1``
+    and ``k2`` share a single batch axis, paired elementwise across a set
+    of triangles) and the halo-model trispectrum's 2h/3h terms
+    (``outer=True``: ``k1`` and ``k2`` are independent and broadcast into
+    an (N1, N2) grid).
 
     Future generalisation: replace ``u1 * u2`` with a ``_fourier_2pt``
     variant that handles different k values when specialised 2-point kernels
     (HOD, CIB) are needed.
+
+    Returns
+    -------
+    array
+        ``outer=False``: shape (Nk, Nz), singleton dimensions squeezed.
+        ``outer=True``: shape (N1, N2, Nz), not squeezed -- this branch is
+        only ever used as an internal building block of ``Tk.tk_2h``/
+        ``Tk.tk_3h``.
     """
     hm = halo_model
     m, z_arr = hm.m_grid, jnp.atleast_1d(z)
@@ -112,21 +128,42 @@ def _pair_integral(halo_model, p1, p2, k1, k2, z):
     u1 = jnp.reshape(p1.fourier(hm, k1s, m, z_arr), (len(k1s), len(m), len(z_arr)))
     u2 = jnp.reshape(p2.fourier(hm, k2s, m, z_arr), (len(k2s), len(m), len(z_arr)))
 
-    integral = jnp.sum(u1 * u2 * total_weights[None, :, :], axis=1)  # (Nk, Nz)
-
     n_min, b1_min, _ = hm._counter_terms(z_arr)
-    correction = n_min[None, :] * b1_min[None, :] * u1[:, 0, :] * u2[:, 0, :]
 
+    if outer:
+        u1e = u1[:, None, :, :]  # (N1, 1, Nm, Nz)
+        u2e = u2[None, :, :, :]  # (1, N2, Nm, Nz)
+        integral = jnp.sum(u1e * u2e * total_weights[None, None, :, :], axis=2)  # (N1, N2, Nz)
+        correction = (
+            n_min[None, None, :] * b1_min[None, None, :]
+            * u1[:, None, 0, :] * u2[None, :, 0, :]
+        )
+        return integral + hm.hm_consistency * correction
+
+    integral = jnp.sum(u1 * u2 * total_weights[None, :, :], axis=1)  # (Nk, Nz)
+    correction = n_min[None, :] * b1_min[None, :] * u1[:, 0, :] * u2[:, 0, :]
     return jnp.squeeze(integral + hm.hm_consistency * correction)
 
 
-def _triple_integral(halo_model, p_single, p_pair1, p_pair2, k_single, k_pair, z):
+def _triple_integral(halo_model, p_single, p_pair1, p_pair2, k_single, k_pair, z, outer=False):
     """
     ∫ dn/dlnM * b1(M) * p_single(k_single,M) * p_pair1(k_pair,M) * p_pair2(k_pair,M) dlnM
 
     Triple integral with first-order halo bias, generalising ``_pair_integral``
     to a "1x2" moment: one profile alone at ``k_single``, the other two both
     at ``k_pair``. Needed by the trispectrum's 2-halo "13" term.
+
+    ``outer=False`` (default) pairs ``k_single``/``k_pair`` elementwise,
+    sharing a single batch axis. ``outer=True`` broadcasts them into an
+    independent (N_single, N_pair) grid, as needed by ``Tk.tk_2h``.
+
+    Returns
+    -------
+    array
+        ``outer=False``: shape (Nk, Nz), singleton dimensions squeezed.
+        ``outer=True``: shape (N_single, N_pair, Nz), not squeezed -- this
+        branch is only ever used as an internal building block of
+        ``Tk.tk_2h``.
     """
     hm = halo_model
     m, z_arr = hm.m_grid, jnp.atleast_1d(z)
@@ -149,11 +186,20 @@ def _triple_integral(halo_model, p_single, p_pair1, p_pair2, k_single, k_pair, z
     u_p1 = jnp.reshape(p_pair1.fourier(hm, k_p, m, z_arr), (len(k_p), len(m), len(z_arr)))
     u_p2 = jnp.reshape(p_pair2.fourier(hm, k_p, m, z_arr), (len(k_p), len(m), len(z_arr)))
 
-    integral = jnp.sum(u_s * u_p1 * u_p2 * total_weights[None, :, :], axis=1)  # (Nk, Nz)
-
     n_min, b1_min, _ = hm._counter_terms(z_arr)
-    correction = n_min[None, :] * b1_min[None, :] * u_s[:, 0, :] * u_p1[:, 0, :] * u_p2[:, 0, :]
 
+    if outer:
+        u_se = u_s[:, None, :, :]            # (Ns, 1, Nm, Nz)
+        u_pe = (u_p1 * u_p2)[None, :, :, :]  # (1, Np, Nm, Nz)
+        integral = jnp.sum(u_se * u_pe * total_weights[None, None, :, :], axis=2)  # (Ns, Np, Nz)
+        correction = (
+            n_min[None, None, :] * b1_min[None, None, :]
+            * u_s[:, None, 0, :] * u_p1[None, :, 0, :] * u_p2[None, :, 0, :]
+        )
+        return integral + hm.hm_consistency * correction
+
+    integral = jnp.sum(u_s * u_p1 * u_p2 * total_weights[None, :, :], axis=1)  # (Nk, Nz)
+    correction = n_min[None, :] * b1_min[None, :] * u_s[:, 0, :] * u_p1[:, 0, :] * u_p2[:, 0, :]
     return jnp.squeeze(integral + hm.hm_consistency * correction)
 
 
@@ -165,14 +211,19 @@ def _kr_pkr(hm, k, kp, z_arr):
     and reusing it avoids repeating the (relatively expensive) emulator
     evaluation of :math:`P_{\\mathrm{lin}}` across the 2h, 3h and 4h terms.
 
-    ``k``, ``kp`` : (N,) arrays. Returns ``(k_b, kp_b, kr, pkr)`` with
-    ``k_b``, ``kp_b`` of shape (N,1) and ``kr``, ``pkr`` of shape
-    (N, N_theta).
+    ``k``, ``kp`` : (Nk,), (Nkp,) independent arrays, broadcast into an
+    (Nk, Nkp) grid of pairs. Returns ``(k_b, kp_b, kr, pkr)`` with ``k_b``
+    of shape (Nk,1,1), ``kp_b`` of shape (1,Nkp,1), ``kr`` of shape
+    (Nk,Nkp,N_theta), and ``pkr`` of shape (Nk,Nkp,N_theta,Nz).
     """
-    k_b, kp_b = k[:, None], kp[:, None]
-    cth = _TRISPEC_COS_THETA[None, :]
-    kr = _ksum(k_b, kp_b, cth)
-    pkr = jnp.reshape(hm.cosmology.pk(kr.flatten(), z_arr, linear=True), kr.shape)
+    k_b, kp_b = k[:, None, None], kp[None, :, None]
+    cth = _TRISPEC_COS_THETA[None, None, :]
+    kr = _ksum(k_b, kp_b, cth)  # (Nk, Nkp, N_theta)
+    nz = len(z_arr)
+    pkr = jnp.reshape(
+        hm.cosmology.pk(kr.flatten(), z_arr, linear=True),
+        kr.shape + (nz,),
+    )
     return k_b, kp_b, kr, pkr
 
 
@@ -863,6 +914,12 @@ class Tk:
     residual relative orientation of the two pairs) it reduces the
     trispectrum to a function of exactly two wavenumbers, k_u and k_v.
 
+    ``k_u`` and ``k_v`` need not be the same length: each term below
+    broadcasts them into an independent (N_u, N_v) grid of pairs, one
+    trispectrum value per (k_u, k_v) combination. Passing equal, identical
+    arrays for both (``k_u = k_v = k``) gives the full (N_k, N_k) grid for
+    that shared array.
+
     .. math::
 
         T(k_u, k_v, z) = T_{1h} + T_{2h} + T_{3h} + T_{4h}
@@ -920,9 +977,11 @@ class Tk:
         Parameters
         ----------
         halo_model : HaloModel
-        k_u, k_v : float
-            The two independent wavenumbers of the parallelogram
-            configuration, in :math:`\\mathrm{Mpc}^{-1}`.
+        k_u, k_v : float or array-like
+            Independent wavenumber grids of the parallelogram
+            configuration, in :math:`\\mathrm{Mpc}^{-1}`. Need not be the
+            same length -- the two are broadcast into an (N_u, N_v) grid,
+            one trispectrum value per combination.
         z : array-like
             Redshift grid.
         profile1 : HaloProfile
@@ -936,7 +995,9 @@ class Tk:
         Returns
         -------
         array
-            1-halo trispectrum in :math:`\\mathrm{Mpc}^9`, squeezed.
+            1-halo trispectrum in :math:`\\mathrm{Mpc}^9`, with shape
+            :math:`(N_u, N_v, N_z)`, where singleton dimensions are
+            squeezed before return.
         """
         hm = halo_model
         profile2 = profile2 if profile2 is not None else profile1
@@ -959,11 +1020,15 @@ class Tk:
         u3 = jnp.reshape(profile3.fourier(hm, k_vs, m, z_arr), (len(k_vs), len(m), len(z_arr)))
         u4 = jnp.reshape(profile4.fourier(hm, k_vs, m, z_arr), (len(k_vs), len(m), len(z_arr)))
 
-        quad = u1 * u2 * u3 * u4  # (N, Nm, Nz)
-        tk1h = jnp.sum(quad * total_weights[None, :, :], axis=1)  # (N, Nz)
+        u12 = (u1 * u2)[:, None, :, :]  # (Nu, 1, Nm, Nz)
+        u34 = (u3 * u4)[None, :, :, :]  # (1, Nv, Nm, Nz)
+        tk1h = jnp.sum(u12 * u34 * total_weights[None, None, :, :], axis=2)  # (Nu, Nv, Nz)
 
         n_min, _, _ = hm._counter_terms(z_arr)
-        correction = n_min[None, :] * u1[:, 0, :] * u2[:, 0, :] * u3[:, 0, :] * u4[:, 0, :]
+        correction = (
+            n_min[None, None, :]
+            * u1[:, None, 0, :] * u2[:, None, 0, :] * u3[None, :, 0, :] * u4[None, :, 0, :]
+        )
         tk1h = tk1h + hm.hm_consistency * correction
 
         return jnp.squeeze(tk1h)
@@ -976,11 +1041,15 @@ class Tk:
         """
         Angle-averaged isotropized linear power spectrum
         :math:`\\bar P(k,k') = \\langle P_{\\mathrm{lin}}(|{\\bf k}+{\\bf k}'|)\\rangle_\\theta`
-        entering the "22" diagram of the 2-halo trispectrum term.\
+        entering the "22" diagram of the 2-halo trispectrum term.
+
+        ``k``, ``kp`` : (Nk,), (Nkp,) independent arrays. Returns an
+        (Nk, Nkp, Nz) array, not squeezed -- this is only ever used as an
+        internal building block of ``tk_2h``.
         """
         _, _, _, pkr = _kr_pkr(hm, k, kp, z_arr)
-        wgt = _TRISPEC_THETA_WEIGHT[None, :]
-        return jnp.sum(pkr * wgt, axis=1)
+        wgt = _TRISPEC_THETA_WEIGHT[None, None, :, None]
+        return jnp.sum(pkr * wgt, axis=2)
 
     def tk_2h(self, halo_model, k_u, k_v, z, profile1, profile2=None, profile3=None, profile4=None):
         """
@@ -1025,9 +1094,11 @@ class Tk:
         Parameters
         ----------
         halo_model : HaloModel
-        k_u, k_v : float
-            The two independent wavenumbers of the parallelogram
-            configuration, in :math:`\\mathrm{Mpc}^{-1}`.
+        k_u, k_v : float or array-like
+            Independent wavenumber grids of the parallelogram
+            configuration, in :math:`\\mathrm{Mpc}^{-1}`. Need not be the
+            same length -- the two are broadcast into an (N_u, N_v) grid,
+            one trispectrum value per combination.
         z : array-like
             Redshift grid.
         profile1 : HaloProfile
@@ -1040,7 +1111,9 @@ class Tk:
         Returns
         -------
         array
-            2-halo trispectrum in :math:`\\mathrm{Mpc}^9`, squeezed.
+            2-halo trispectrum in :math:`\\mathrm{Mpc}^9`, with shape
+            :math:`(N_u, N_v, N_z)`, where singleton dimensions are
+            squeezed before return.
         """
         hm = halo_model
         profile2 = profile2 if profile2 is not None else profile1
@@ -1048,34 +1121,39 @@ class Tk:
         profile4 = profile4 if profile4 is not None else profile2
         z_arr = jnp.atleast_1d(z)
         k_us, k_vs = jnp.atleast_1d(k_u), jnp.atleast_1d(k_v)
+        nu, nv, nz = len(k_us), len(k_vs), len(z_arr)
 
         # "22" diagram: two halos, each hosting a pair of legs.
-        Pbar = self._Pbar_kernel(hm, k_us, k_vs, z_arr)
+        Pbar = self._Pbar_kernel(hm, k_us, k_vs, z_arr)  # (Nu, Nv, Nz)
         pair_a = (
-            _pair_integral(hm, profile1, profile3, k_u, k_v, z)
-            * _pair_integral(hm, profile2, profile4, k_u, k_v, z)
+            _pair_integral(hm, profile1, profile3, k_u, k_v, z, outer=True)
+            * _pair_integral(hm, profile2, profile4, k_u, k_v, z, outer=True)
         )
         pair_b = (
-            _pair_integral(hm, profile1, profile4, k_u, k_v, z)
-            * _pair_integral(hm, profile3, profile2, k_u, k_v, z)
+            _pair_integral(hm, profile1, profile4, k_u, k_v, z, outer=True)
+            * _pair_integral(hm, profile3, profile2, k_u, k_v, z, outer=True)
         )
-        tk_22 = Pbar * (pair_a + pair_b)
+        tk_22 = Pbar * (pair_a + pair_b)  # (Nu, Nv, Nz)
 
         # "13" diagram: one leg alone in a halo, the other three together.
-        P_u = jnp.squeeze(hm.cosmology.pk(k_us, z_arr, linear=True))
-        P_v = jnp.squeeze(hm.cosmology.pk(k_vs, z_arr, linear=True))
+        P_u = jnp.reshape(hm.cosmology.pk(k_us, z_arr, linear=True), (nu, 1, nz))
+        P_v = jnp.reshape(hm.cosmology.pk(k_vs, z_arr, linear=True), (1, nv, nz))
 
-        I1u = hm._I(profile1, k_u, z, bias_order=1)
-        I2u = hm._I(profile2, k_u, z, bias_order=1)
-        I3v = hm._I(profile3, k_v, z, bias_order=1)
-        I4v = hm._I(profile4, k_v, z, bias_order=1)
+        I1u = jnp.reshape(hm._I(profile1, k_u, z, bias_order=1), (nu, 1, nz))
+        I2u = jnp.reshape(hm._I(profile2, k_u, z, bias_order=1), (nu, 1, nz))
+        I3v = jnp.reshape(hm._I(profile3, k_v, z, bias_order=1), (1, nv, nz))
+        I4v = jnp.reshape(hm._I(profile4, k_v, z, bias_order=1), (1, nv, nz))
 
-        K_u2 = _triple_integral(hm, profile2, profile3, profile4, k_u, k_v, z)
-        K_u1 = _triple_integral(hm, profile1, profile3, profile4, k_u, k_v, z)
-        K_v4 = _triple_integral(hm, profile4, profile1, profile2, k_v, k_u, z)
-        K_v3 = _triple_integral(hm, profile3, profile1, profile2, k_v, k_u, z)
+        K_u2 = _triple_integral(hm, profile2, profile3, profile4, k_u, k_v, z, outer=True)
+        K_u1 = _triple_integral(hm, profile1, profile3, profile4, k_u, k_v, z, outer=True)
+        K_v4 = jnp.swapaxes(
+            _triple_integral(hm, profile4, profile1, profile2, k_v, k_u, z, outer=True), 0, 1
+        )
+        K_v3 = jnp.swapaxes(
+            _triple_integral(hm, profile3, profile1, profile2, k_v, k_u, z, outer=True), 0, 1
+        )
 
-        tk_13 = P_u * (I1u * K_u2 + I2u * K_u1) + P_v * (I3v * K_v4 + I4v * K_v3)
+        tk_13 = P_u * (I1u * K_u2 + I2u * K_u1) + P_v * (I3v * K_v4 + I4v * K_v3)  # (Nu, Nv, Nz)
 
         return jnp.squeeze(tk_22 + tk_13)
 
@@ -1090,11 +1168,15 @@ class Tk:
         tree-level bispectrum-type kernel of the 3-halo trispectrum term,
         built from the SPT kernels evaluated between leg ``k`` and the
         vector sum ``kr = |k + kp|``.
+
+        ``k``, ``kp`` : (Nk,), (Nkp,) independent arrays. Returns an
+        (Nk, Nkp, Nz) array, not squeezed -- this is only ever used as an
+        internal building block of ``tk_3h``.
         """
         k_b, kp_b, kr, pkr = _kr_pkr(hm, k, kp, z_arr)
-        wgt = _TRISPEC_THETA_WEIGHT[None, :]
+        wgt = _TRISPEC_THETA_WEIGHT[None, None, :]
         f2_kkp = jnp.where(kr == 0.0, 13.0 / 28.0, _F2(k_b, kr, _mu(k_b, kr, kp_b)))
-        return jnp.sum(pkr * f2_kkp * wgt, axis=1)
+        return jnp.sum(pkr * (f2_kkp * wgt)[..., None], axis=2)
 
     def _Bpt_kernel(self, hm, k, kp, z_arr):
         """
@@ -1106,11 +1188,16 @@ class Tk:
             B^{\\mathrm{PT}}(k,k') = \\frac{12}{7} P_{\\mathrm{lin}}(k)
             P_{\\mathrm{lin}}(k') + 2\\big[P_{\\mathrm{lin}}(k)\\, P_3(k,k')
             + P_{\\mathrm{lin}}(k')\\, P_3(k',k)\\big]
+
+        ``k``, ``kp`` : (Nk,), (Nkp,) independent arrays. Returns an
+        (Nk, Nkp, Nz) array, not squeezed -- this is only ever used as an
+        internal building block of ``tk_3h``.
         """
-        P_k = jnp.squeeze(hm.cosmology.pk(k, z_arr, linear=True))
-        P_kp = jnp.squeeze(hm.cosmology.pk(kp, z_arr, linear=True))
+        nk, nkp, nz = len(k), len(kp), len(z_arr)
+        P_k = jnp.reshape(hm.cosmology.pk(k, z_arr, linear=True), (nk, 1, nz))
+        P_kp = jnp.reshape(hm.cosmology.pk(kp, z_arr, linear=True), (1, nkp, nz))
         P3_kkp = self._P3_kernel(hm, k, kp, z_arr)
-        P3_kpk = self._P3_kernel(hm, kp, k, z_arr)
+        P3_kpk = jnp.swapaxes(self._P3_kernel(hm, kp, k, z_arr), 0, 1)
         return 12.0 / 7.0 * P_k * P_kp + 2.0 * (P_k * P3_kkp + P_kp * P3_kpk)
 
     def tk_3h(self, halo_model, k_u, k_v, z, profile1, profile2=None, profile3=None, profile4=None):
@@ -1139,9 +1226,11 @@ class Tk:
         Parameters
         ----------
         halo_model : HaloModel
-        k_u, k_v : float
-            The two independent wavenumbers of the parallelogram
-            configuration, in :math:`\\mathrm{Mpc}^{-1}`.
+        k_u, k_v : float or array-like
+            Independent wavenumber grids of the parallelogram
+            configuration, in :math:`\\mathrm{Mpc}^{-1}`. Need not be the
+            same length -- the two are broadcast into an (N_u, N_v) grid,
+            one trispectrum value per combination.
         z : array-like
             Redshift grid.
         profile1 : HaloProfile
@@ -1154,7 +1243,9 @@ class Tk:
         Returns
         -------
         array
-            3-halo trispectrum in :math:`\\mathrm{Mpc}^9`, squeezed.
+            3-halo trispectrum in :math:`\\mathrm{Mpc}^9`, with shape
+            :math:`(N_u, N_v, N_z)`, where singleton dimensions are
+            squeezed before return.
         """
         hm = halo_model
         profile2 = profile2 if profile2 is not None else profile1
@@ -1162,18 +1253,19 @@ class Tk:
         profile4 = profile4 if profile4 is not None else profile2
         z_arr = jnp.atleast_1d(z)
         k_us, k_vs = jnp.atleast_1d(k_u), jnp.atleast_1d(k_v)
+        nu, nv, nz = len(k_us), len(k_vs), len(z_arr)
 
-        Bpt = self._Bpt_kernel(hm, k_us, k_vs, z_arr)
+        Bpt = self._Bpt_kernel(hm, k_us, k_vs, z_arr)  # (Nu, Nv, Nz)
 
-        I1u = hm._I(profile1, k_u, z, bias_order=1)
-        I2u = hm._I(profile2, k_u, z, bias_order=1)
-        I3v = hm._I(profile3, k_v, z, bias_order=1)
-        I4v = hm._I(profile4, k_v, z, bias_order=1)
+        I1u = jnp.reshape(hm._I(profile1, k_u, z, bias_order=1), (nu, 1, nz))
+        I2u = jnp.reshape(hm._I(profile2, k_u, z, bias_order=1), (nu, 1, nz))
+        I3v = jnp.reshape(hm._I(profile3, k_v, z, bias_order=1), (1, nv, nz))
+        I4v = jnp.reshape(hm._I(profile4, k_v, z, bias_order=1), (1, nv, nz))
 
-        J24 = _pair_integral(hm, profile2, profile4, k_u, k_v, z)
-        J32 = _pair_integral(hm, profile3, profile2, k_u, k_v, z)
-        J14 = _pair_integral(hm, profile1, profile4, k_u, k_v, z)
-        J31 = _pair_integral(hm, profile3, profile1, k_u, k_v, z)
+        J24 = _pair_integral(hm, profile2, profile4, k_u, k_v, z, outer=True)
+        J32 = _pair_integral(hm, profile3, profile2, k_u, k_v, z, outer=True)
+        J14 = _pair_integral(hm, profile1, profile4, k_u, k_v, z, outer=True)
+        J31 = _pair_integral(hm, profile3, profile1, k_u, k_v, z, outer=True)
 
         tk3h = Bpt * (
             I1u * I3v * J24
@@ -1195,19 +1287,21 @@ class Tk:
         between leg ``k`` and the vector sum ``kr = |k + kp|``, following
         Eq. 30 of Takada & Hu (2013).
 
-        ``k``, ``kp`` : (N,) arrays — the two leg magnitudes for this ordering.
-        Returns ``(P4A, P4X)``, each of shape (N, Nz).
+        ``k``, ``kp`` : (Nk,), (Nkp,) independent arrays — the two leg
+        magnitudes for this ordering. Returns ``(P4A, P4X)``, each of shape
+        (Nk, Nkp, Nz), not squeezed -- this is only ever used as an
+        internal building block of ``tk_4h``.
         """
         k_b, kp_b, kr, pkr = _kr_pkr(hm, k, kp, z_arr)
-        wgt = _TRISPEC_THETA_WEIGHT[None, :]
+        wgt = _TRISPEC_THETA_WEIGHT[None, None, :]
 
         # F2 between leg k (or kp) and the (negative of the) internal
         # propagator -kr, whose opposite side is the other leg (kp or k).
         f2_kkp = jnp.where(kr == 0.0, 13.0 / 28.0, _F2(k_b, kr, _mu(k_b, kr, kp_b)))
         f2_kpk = jnp.where(kr == 0.0, 13.0 / 28.0, _F2(kp_b, kr, _mu(kp_b, kr, k_b)))
 
-        P4A = jnp.sum(pkr * f2_kkp ** 2 * wgt, axis=1)
-        P4X = jnp.sum(pkr * f2_kkp * f2_kpk * wgt, axis=1)
+        P4A = jnp.sum(pkr * (f2_kkp ** 2 * wgt)[..., None], axis=2)
+        P4X = jnp.sum(pkr * (f2_kkp * f2_kpk * wgt)[..., None], axis=2)
         return P4A, P4X
 
     def tk_4h(self, halo_model, k_u, k_v, z, profile1, profile2=None, profile3=None, profile4=None):
@@ -1233,9 +1327,11 @@ class Tk:
         Parameters
         ----------
         halo_model : HaloModel
-        k_u, k_v : float
-            The two independent wavenumbers of the parallelogram
-            configuration, in :math:`\\mathrm{Mpc}^{-1}`.
+        k_u, k_v : float or array-like
+            Independent wavenumber grids of the parallelogram
+            configuration, in :math:`\\mathrm{Mpc}^{-1}`. Need not be the
+            same length -- the two are broadcast into an (N_u, N_v) grid,
+            one trispectrum value per combination.
         z : array-like
             Redshift grid.
         profile1 : HaloProfile
@@ -1248,7 +1344,9 @@ class Tk:
         Returns
         -------
         array
-            4-halo trispectrum in :math:`\\mathrm{Mpc}^9`, squeezed.
+            4-halo trispectrum in :math:`\\mathrm{Mpc}^9`, with shape
+            :math:`(N_u, N_v, N_z)`, where singleton dimensions are
+            squeezed before return.
         """
         hm = halo_model
         profile2 = profile2 if profile2 is not None else profile1
@@ -1257,29 +1355,31 @@ class Tk:
         z_arr = jnp.atleast_1d(z)
 
         k_us, k_vs = jnp.atleast_1d(k_u), jnp.atleast_1d(k_v)
+        nu, nv, nz = len(k_us), len(k_vs), len(z_arr)
 
-        P_u = jnp.squeeze(hm.cosmology.pk(k_us, z_arr, linear=True))
-        P_v = jnp.squeeze(hm.cosmology.pk(k_vs, z_arr, linear=True))
+        P_u = jnp.reshape(hm.cosmology.pk(k_us, z_arr, linear=True), (nu, 1, nz))
+        P_v = jnp.reshape(hm.cosmology.pk(k_vs, z_arr, linear=True), (1, nv, nz))
 
         # "1113" diagram (tree-level F3-type kernel), symmetrized k_u <-> k_v
-        X_uv = _X3(k_us, k_vs)
-        X_vu = _X3(k_vs, k_us)
+        X_uv = _X3(k_us, k_vs)[:, :, None]                            # (Nu, Nv, 1)
+        X_vu = jnp.swapaxes(_X3(k_vs, k_us), 0, 1)[:, :, None]        # (Nu, Nv, 1)
         t1113 = 4.0 / 9.0 * P_u ** 2 * P_v * X_uv + 4.0 / 9.0 * P_v ** 2 * P_u * X_vu
 
         # "1122" diagram (two F2-type vertices), symmetrized k_u <-> k_v
-        P4A_uv, P4X_uv = self._P4_kernel(hm, k_us, k_vs, z_arr)
-        P4A_vu, P4X_vu = self._P4_kernel(hm, k_vs, k_us, z_arr)
+        P4A_uv, P4X_uv = self._P4_kernel(hm, k_us, k_vs, z_arr)  # (Nu, Nv, Nz)
+        P4A_vu, P4X_vu = self._P4_kernel(hm, k_vs, k_us, z_arr)  # (Nv, Nu, Nz)
+        P4A_vu, P4X_vu = jnp.swapaxes(P4A_vu, 0, 1), jnp.swapaxes(P4X_vu, 0, 1)
         t1122 = (
             8.0 * (P_u ** 2 * P4A_uv + P_u * P_v * P4X_uv)
             + 8.0 * (P_v ** 2 * P4A_vu + P_v * P_u * P4X_vu)
         )
 
-        T_pt = t1113 + t1122
+        T_pt = t1113 + t1122  # (Nu, Nv, Nz)
 
-        I1 = hm._I(profile1, k_u, z, bias_order=1)
-        I2 = hm._I(profile2, k_u, z, bias_order=1)
-        I3 = hm._I(profile3, k_v, z, bias_order=1)
-        I4 = hm._I(profile4, k_v, z, bias_order=1)
+        I1 = jnp.reshape(hm._I(profile1, k_u, z, bias_order=1), (nu, 1, nz))
+        I2 = jnp.reshape(hm._I(profile2, k_u, z, bias_order=1), (nu, 1, nz))
+        I3 = jnp.reshape(hm._I(profile3, k_v, z, bias_order=1), (1, nv, nz))
+        I4 = jnp.reshape(hm._I(profile4, k_v, z, bias_order=1), (1, nv, nz))
 
         return jnp.squeeze(T_pt * I1 * I2 * I3 * I4)
 
