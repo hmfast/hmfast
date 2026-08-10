@@ -221,7 +221,7 @@ class Pk:
     # 1-halo term
     # ------------------------------------------------------------------
 
-    def pk_1h(self, halo_model, profile1, profile2, k, z, k_damp=0.01):
+    def pk_1h(self, halo_model, k, z, profile1, profile2=None, k_damp=0.01):
         """
         Compute the 1-halo contribution to the 3D power spectrum.
 
@@ -237,14 +237,14 @@ class Pk:
         Parameters
         ----------
         halo_model : HaloModel
-        profile1 : HaloProfile
-            First halo profile object.
-        profile2 : HaloProfile or None
-            Second halo profile object (if None, uses profile1).
         k : array-like
             Wavenumber grid in :math:`\\mathrm{Mpc}^{-1}`.
         z : array-like
             Redshift grid.
+        profile1 : HaloProfile
+            First halo profile object.
+        profile2 : HaloProfile or None, default None
+            Second halo profile object. If None, defaults to profile1.
         k_damp : float, default 0.01
             Damping wavenumber in :math:`\\mathrm{Mpc}^{-1}` for the low-k suppression factor.
 
@@ -296,7 +296,7 @@ class Pk:
     # 2-halo term
     # ------------------------------------------------------------------
 
-    def pk_2h(self, halo_model, profile1, profile2, k, z):
+    def pk_2h(self, halo_model, k, z, profile1, profile2=None):
         """
         Compute the 2-halo contribution to the 3D power spectrum.
 
@@ -312,14 +312,14 @@ class Pk:
         Parameters
         ----------
         halo_model : HaloModel
-        profile1 : HaloProfile
-            First halo profile object.
-        profile2 : HaloProfile or None
-            Second halo profile object (if None, uses profile1).
         k : array-like
             Wavenumber grid in :math:`\\mathrm{Mpc}^{-1}`.
         z : array-like
             Redshift grid.
+        profile1 : HaloProfile
+            First halo profile object.
+        profile2 : HaloProfile or None, default None
+            Second halo profile object. If None, defaults to profile1.
 
         Returns
         -------
@@ -374,7 +374,7 @@ class Pk:
     # Correlation function (FFTLog transform of pk_1h / pk_2h)
     # ------------------------------------------------------------------
 
-    def xi_1h(self, halo_model, profile1, profile2, r, z, k_damp=0.01):
+    def xi_1h(self, halo_model, r, z, profile1, profile2=None, k_damp=0.01):
         """
         Compute the 1-halo contribution to the 3D correlation function.
 
@@ -391,16 +391,16 @@ class Pk:
         Parameters
         ----------
         halo_model : HaloModel
-        profile1 : HaloProfile
-            First halo profile object.
-        profile2 : HaloProfile or None
-            Second halo profile object (if None, uses profile1).
         r : array-like
             Comoving separation grid in :math:`\\mathrm{Mpc}`. Only reliable
             well inside the range dual to :attr:`k_grid`; values of ``r`` too
             close to that range's edges are affected by FFTLog ringing.
         z : array-like
             Redshift grid.
+        profile1 : HaloProfile
+            First halo profile object.
+        profile2 : HaloProfile or None, default None
+            Second halo profile object. If None, defaults to profile1.
         k_damp : float, default 0.01
             Damping wavenumber in :math:`\\mathrm{Mpc}^{-1}`, passed through
             to :meth:`pk_1h`.
@@ -414,7 +414,7 @@ class Pk:
         """
         r, z = jnp.atleast_1d(r), jnp.atleast_1d(z)
 
-        pk = self.pk_1h(halo_model, profile1, profile2, self.k_grid, z, k_damp=k_damp)
+        pk = self.pk_1h(halo_model, self.k_grid, z, profile1, profile2, k_damp=k_damp)
         pk = jnp.reshape(pk, (len(self.k_grid), len(z)))
 
         r_native, xi_native = self._p2xi(pk)
@@ -427,7 +427,7 @@ class Pk:
         xi = jax.vmap(interp_col, in_axes=1, out_axes=1)(xi_native)
         return jnp.squeeze(xi)
 
-    def xi_2h(self, halo_model, profile1, profile2, r, z):
+    def xi_2h(self, halo_model, r, z, profile1, profile2=None):
         """
         Compute the 2-halo contribution to the 3D correlation function.
 
@@ -444,16 +444,16 @@ class Pk:
         Parameters
         ----------
         halo_model : HaloModel
-        profile1 : HaloProfile
-            First halo profile object.
-        profile2 : HaloProfile or None
-            Second halo profile object (if None, uses profile1).
         r : array-like
             Comoving separation grid in :math:`\\mathrm{Mpc}`. Only reliable
             well inside the range dual to :attr:`k_grid`; values of ``r`` too
             close to that range's edges are affected by FFTLog ringing.
         z : array-like
             Redshift grid.
+        profile1 : HaloProfile
+            First halo profile object.
+        profile2 : HaloProfile or None, default None
+            Second halo profile object. If None, defaults to profile1.
 
         Returns
         -------
@@ -464,7 +464,7 @@ class Pk:
         """
         r, z = jnp.atleast_1d(r), jnp.atleast_1d(z)
 
-        pk = self.pk_2h(halo_model, profile1, profile2, self.k_grid, z)
+        pk = self.pk_2h(halo_model, self.k_grid, z, profile1, profile2)
         pk = jnp.reshape(pk, (len(self.k_grid), len(z)))
 
         r_native, xi_native = self._p2xi(pk)
@@ -519,7 +519,7 @@ class Pk:
         def get_pk_slice(zi):
             chi_i = hm.cosmology.angular_diameter_distance(zi) * (1 + zi)
             ki = (l + 0.5) / chi_i
-            pk = self.pk_1h(hm, tracer1.profile, tracer2.profile, k=ki, z=jnp.atleast_1d(zi), k_damp=k_damp)
+            pk = self.pk_1h(hm, k=ki, z=jnp.atleast_1d(zi), profile1=tracer1.profile, profile2=tracer2.profile, k_damp=k_damp)
             return pk.flatten()
 
         # Get the halo model pk_1h, the kernels, and the Limber weight c/(H chi^2)
@@ -571,7 +571,7 @@ class Pk:
             # Map l to k using the Limber approximation and then get the pk_2h
             chi_i = hm.cosmology.angular_diameter_distance(zi) * (1 + zi)
             ki = (l + 0.5) / chi_i
-            return self.pk_2h(hm, tracer1.profile, tracer2.profile, k=ki, z=jnp.atleast_1d(zi)).flatten()
+            return self.pk_2h(hm, k=ki, z=jnp.atleast_1d(zi), profile1=tracer1.profile, profile2=tracer2.profile).flatten()
 
         # Map over redshift to get P(k=l/chi, z)
         P_2h_grid = jax.vmap(get_pk_slice)(z)
@@ -630,7 +630,7 @@ class Bk:
     # 1-halo term
     # ------------------------------------------------------------------
 
-    def bk_1h(self, halo_model, profile1, profile2, profile3, k1, k2, k3, z, k_damp=0.01):
+    def bk_1h(self, halo_model, k1, k2, k3, z, profile1, profile2=None, profile3=None, k_damp=0.01):
         """
         1-halo bispectrum term.
 
@@ -648,12 +648,15 @@ class Bk:
         Parameters
         ----------
         halo_model : HaloModel
-        profile1, profile2, profile3 : HaloProfile
-            The three halo profiles at wavenumbers k1, k2, k3 respectively.
         k1, k2, k3 : float or array-like
             Triangle wavenumbers in :math:`\\mathrm{Mpc}^{-1}`. Must all be the same size.
         z : array-like
             Redshift grid.
+        profile1 : HaloProfile
+            Halo profile at wavenumber k1.
+        profile2, profile3 : HaloProfile or None, default None
+            Halo profiles at wavenumbers k2, k3 respectively. Each defaults
+            to profile1 if None.
         k_damp : float, default 0.01
             Damping wavenumber for the low-k suppression.
 
@@ -664,6 +667,8 @@ class Bk:
             singleton dimensions get squeezed before return.
         """
         hm = halo_model
+        profile2 = profile2 if profile2 is not None else profile1
+        profile3 = profile3 if profile3 is not None else profile1
         m, z_arr = hm.m_grid, jnp.atleast_1d(z)
         logm = jnp.log(m)
         dm = jnp.diff(logm)
@@ -699,7 +704,7 @@ class Bk:
     # 2-halo term
     # ------------------------------------------------------------------
 
-    def bk_2h(self, halo_model, profile1, profile2, profile3, k1, k2, k3, z):
+    def bk_2h(self, halo_model, k1, k2, k3, z, profile1, profile2=None, profile3=None):
         """
         2-halo bispectrum term.
 
@@ -717,11 +722,15 @@ class Bk:
         Parameters
         ----------
         halo_model : HaloModel
-        profile1, profile2, profile3 : HaloProfile
         k1, k2, k3 : float or array-like
             Triangle wavenumbers in :math:`\\mathrm{Mpc}^{-1}`. Must all be the same size.
         z : array-like
             Redshift grid.
+        profile1 : HaloProfile
+            Halo profile at wavenumber k1.
+        profile2, profile3 : HaloProfile or None, default None
+            Halo profiles at wavenumbers k2, k3 respectively. Each defaults
+            to profile1 if None.
 
         Returns
         -------
@@ -730,6 +739,8 @@ class Bk:
             singleton dimensions get squeezed before return.
         """
         hm = halo_model
+        profile2 = profile2 if profile2 is not None else profile1
+        profile3 = profile3 if profile3 is not None else profile1
         z_arr = jnp.atleast_1d(z)
 
         I1 = hm._I(profile1, k1, z, bias_order=1)
@@ -750,7 +761,7 @@ class Bk:
     # 3-halo term
     # ------------------------------------------------------------------
 
-    def bk_3h(self, halo_model, profile1, profile2, profile3, k1, k2, k3, z):
+    def bk_3h(self, halo_model, k1, k2, k3, z, profile1, profile2=None, profile3=None):
         """
         3-halo bispectrum term.
 
@@ -779,11 +790,15 @@ class Bk:
         Parameters
         ----------
         halo_model : HaloModel
-        profile1, profile2, profile3 : HaloProfile
         k1, k2, k3 : float or array-like
             Triangle wavenumbers in :math:`\\mathrm{Mpc}^{-1}`. Must all be the same size.
         z : array-like
             Redshift grid.
+        profile1 : HaloProfile
+            Halo profile at wavenumber k1.
+        profile2, profile3 : HaloProfile or None, default None
+            Halo profiles at wavenumbers k2, k3 respectively. Each defaults
+            to profile1 if None.
 
         Returns
         -------
@@ -792,6 +807,8 @@ class Bk:
             singleton dimensions get squeezed before return.
         """
         hm = halo_model
+        profile2 = profile2 if profile2 is not None else profile1
+        profile3 = profile3 if profile3 is not None else profile1
         z_arr = jnp.atleast_1d(z)
 
         I1_b1 = hm._I(profile1, k1, z, bias_order=1)
@@ -888,7 +905,7 @@ class Tk:
     # 1-halo term
     # ------------------------------------------------------------------
 
-    def tk_1h(self, halo_model, profile1, profile2, profile3, profile4, k_u, k_v, z):
+    def tk_1h(self, halo_model, k_u, k_v, z, profile1, profile2=None, profile3=None, profile4=None):
         """
         1-halo trispectrum term.
 
@@ -903,15 +920,18 @@ class Tk:
         Parameters
         ----------
         halo_model : HaloModel
-        profile1, profile2 : HaloProfile
-            Profiles at wavenumber ``k_u`` (the :math:`u_1, u_2` pair).
-        profile3, profile4 : HaloProfile
-            Profiles at wavenumber ``k_v`` (the :math:`v_1, v_2` pair).
         k_u, k_v : float
             The two independent wavenumbers of the parallelogram
             configuration, in :math:`\\mathrm{Mpc}^{-1}`.
         z : array-like
             Redshift grid.
+        profile1 : HaloProfile
+            First profile at wavenumber ``k_u`` (the :math:`u_1` leg).
+        profile2, profile3, profile4 : HaloProfile or None, default None
+            Second profile at ``k_u`` (:math:`u_2`) and the two profiles at
+            ``k_v`` (:math:`v_1, v_2`), respectively. If None, profile2 and
+            profile3 default to profile1, and profile4 defaults to
+            (the resolved) profile2.
 
         Returns
         -------
@@ -919,6 +939,9 @@ class Tk:
             1-halo trispectrum in :math:`\\mathrm{Mpc}^9`, squeezed.
         """
         hm = halo_model
+        profile2 = profile2 if profile2 is not None else profile1
+        profile3 = profile3 if profile3 is not None else profile1
+        profile4 = profile4 if profile4 is not None else profile2
         m, z_arr = hm.m_grid, jnp.atleast_1d(z)
         logm = jnp.log(m)
         dm = jnp.diff(logm)
@@ -959,7 +982,7 @@ class Tk:
         wgt = _TRISPEC_THETA_WEIGHT[None, :]
         return jnp.sum(pkr * wgt, axis=1)
 
-    def tk_2h(self, halo_model, profile1, profile2, profile3, profile4, k_u, k_v, z):
+    def tk_2h(self, halo_model, k_u, k_v, z, profile1, profile2=None, profile3=None, profile4=None):
         """
         2-halo trispectrum term (sum of the "22" and "13" diagrams).
 
@@ -1002,15 +1025,17 @@ class Tk:
         Parameters
         ----------
         halo_model : HaloModel
-        profile1, profile2 : HaloProfile
-            Profiles at wavenumber ``k_u``.
-        profile3, profile4 : HaloProfile
-            Profiles at wavenumber ``k_v``.
         k_u, k_v : float
             The two independent wavenumbers of the parallelogram
             configuration, in :math:`\\mathrm{Mpc}^{-1}`.
         z : array-like
             Redshift grid.
+        profile1 : HaloProfile
+            First profile at wavenumber ``k_u``.
+        profile2, profile3, profile4 : HaloProfile or None, default None
+            Second profile at ``k_u``, and the two profiles at ``k_v``,
+            respectively. If None, profile2 and profile3 default to
+            profile1, and profile4 defaults to (the resolved) profile2.
 
         Returns
         -------
@@ -1018,6 +1043,9 @@ class Tk:
             2-halo trispectrum in :math:`\\mathrm{Mpc}^9`, squeezed.
         """
         hm = halo_model
+        profile2 = profile2 if profile2 is not None else profile1
+        profile3 = profile3 if profile3 is not None else profile1
+        profile4 = profile4 if profile4 is not None else profile2
         z_arr = jnp.atleast_1d(z)
         k_us, k_vs = jnp.atleast_1d(k_u), jnp.atleast_1d(k_v)
 
@@ -1086,7 +1114,7 @@ class Tk:
         P3_kpk = self._P3_kernel(hm, kp, k, z_arr)
         return 12.0 / 7.0 * P_k * P_kp + 2.0 * (P_k * P3_kkp + P_kp * P3_kpk)
 
-    def tk_3h(self, halo_model, profile1, profile2, profile3, profile4, k_u, k_v, z):
+    def tk_3h(self, halo_model, k_u, k_v, z, profile1, profile2=None, profile3=None, profile4=None):
         """
         3-halo trispectrum term.
 
@@ -1112,15 +1140,17 @@ class Tk:
         Parameters
         ----------
         halo_model : HaloModel
-        profile1, profile2 : HaloProfile
-            Profiles at wavenumber ``k_u``.
-        profile3, profile4 : HaloProfile
-            Profiles at wavenumber ``k_v``.
         k_u, k_v : float
             The two independent wavenumbers of the parallelogram
             configuration, in :math:`\\mathrm{Mpc}^{-1}`.
         z : array-like
             Redshift grid.
+        profile1 : HaloProfile
+            First profile at wavenumber ``k_u``.
+        profile2, profile3, profile4 : HaloProfile or None, default None
+            Second profile at ``k_u``, and the two profiles at ``k_v``,
+            respectively. If None, profile2 and profile3 default to
+            profile1, and profile4 defaults to (the resolved) profile2.
 
         Returns
         -------
@@ -1128,6 +1158,9 @@ class Tk:
             3-halo trispectrum in :math:`\\mathrm{Mpc}^9`, squeezed.
         """
         hm = halo_model
+        profile2 = profile2 if profile2 is not None else profile1
+        profile3 = profile3 if profile3 is not None else profile1
+        profile4 = profile4 if profile4 is not None else profile2
         z_arr = jnp.atleast_1d(z)
         k_us, k_vs = jnp.atleast_1d(k_u), jnp.atleast_1d(k_v)
 
@@ -1178,7 +1211,7 @@ class Tk:
         P4X = jnp.sum(pkr * f2_kkp * f2_kpk * wgt, axis=1)
         return P4A, P4X
 
-    def tk_4h(self, halo_model, profile1, profile2, profile3, profile4, k_u, k_v, z):
+    def tk_4h(self, halo_model, k_u, k_v, z, profile1, profile2=None, profile3=None, profile4=None):
         """
         4-halo (tree-level) trispectrum term.
 
@@ -1202,15 +1235,17 @@ class Tk:
         Parameters
         ----------
         halo_model : HaloModel
-        profile1, profile2 : HaloProfile
-            Profiles at wavenumber ``k_u``.
-        profile3, profile4 : HaloProfile
-            Profiles at wavenumber ``k_v``.
         k_u, k_v : float
             The two independent wavenumbers of the parallelogram
             configuration, in :math:`\\mathrm{Mpc}^{-1}`.
         z : array-like
             Redshift grid.
+        profile1 : HaloProfile
+            First profile at wavenumber ``k_u``.
+        profile2, profile3, profile4 : HaloProfile or None, default None
+            Second profile at ``k_u``, and the two profiles at ``k_v``,
+            respectively. If None, profile2 and profile3 default to
+            profile1, and profile4 defaults to (the resolved) profile2.
 
         Returns
         -------
@@ -1218,6 +1253,9 @@ class Tk:
             4-halo trispectrum in :math:`\\mathrm{Mpc}^9`, squeezed.
         """
         hm = halo_model
+        profile2 = profile2 if profile2 is not None else profile1
+        profile3 = profile3 if profile3 is not None else profile1
+        profile4 = profile4 if profile4 is not None else profile2
         z_arr = jnp.atleast_1d(z)
 
         k_us, k_vs = jnp.atleast_1d(k_u), jnp.atleast_1d(k_v)
