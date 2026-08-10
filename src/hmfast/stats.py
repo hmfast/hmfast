@@ -245,7 +245,7 @@ class Pk:
     .. math::
 
         I_\\mu^{(\\beta)}(k_1, \\dots, k_\\mu, z) = \\int d\\ln M\\,
-        \\frac{dn}{d\\ln M}\\, b_\\beta(M, z) \\prod_{i=1}^{\\mu} u_i(k_i \\mid M, z)
+        \\frac{dn}{d\\ln M}\\, b_\\beta(M, z) \\prod_{i=1}^{\\mu} u_i(k_i \\,|\\, M, z)
 
     where :math:`\\mu` is the number of profiles/wavenumbers in the
     product, :math:`b_\\beta` is the :math:`\\beta`-th order halo bias
@@ -657,7 +657,7 @@ class Bk:
     .. math::
 
         I_\\mu^{(\\beta)}(k_1, \\dots, k_\\mu, z) = \\int d\\ln M\\,
-        \\frac{dn}{d\\ln M}\\, b_\\beta(M, z) \\prod_{i=1}^{\\mu} u_i(k_i \\mid M, z)
+        \\frac{dn}{d\\ln M}\\, b_\\beta(M, z) \\prod_{i=1}^{\\mu} u_i(k_i \\,|\\, M, z)
 
     where :math:`\\mu` is the number of profiles/wavenumbers in the
     product, :math:`b_\\beta` is the :math:`\\beta`-th order halo bias
@@ -670,8 +670,8 @@ class Bk:
 
         This implementation is limited to profiles whose 3-point function
         within a single halo reduces to the product of their (1-point)
-        Fourier-space profiles, i.e. :math:`u_{123}(k_1,k_2,k_3 \\mid M) =
-        u_1(k_1 \\mid M)\\, u_2(k_2 \\mid M)\\, u_3(k_3 \\mid M)`. This holds
+        Fourier-space profiles, i.e. :math:`u_{123}(k_1,k_2,k_3 \\,|\\, M) =
+        u_1(k_1 \\,|\\, M)\\, u_2(k_2 \\,|\\, M)\\, u_3(k_3 \\,|\\, M)`. This holds
         for matter density and electron pressure/density profiles, but
         not in general for profiles with non-trivial intra-halo occupancy
         statistics such as HOD or CIB.
@@ -906,20 +906,6 @@ class Tk:
     Halo model trispectrum T(k_u, k_v, z) in the parallelogram ("covariance")
     configuration k1 = -k2 = k_u, k3 = -k4 = k_v.
 
-    Momentum conservation k1+k2+k3+k4=0 is automatically satisfied for any
-    k_u, k_v and any relative angle between the two pairs, since each pair
-    already sums to zero individually. This is the standard configuration
-    entering the covariance of the power spectrum,
-    Cov[P(k), P(k')] ⊃ T(k,-k,k',-k'), and (after angle-averaging over the
-    residual relative orientation of the two pairs) it reduces the
-    trispectrum to a function of exactly two wavenumbers, k_u and k_v.
-
-    ``k_u`` and ``k_v`` need not be the same length: each term below
-    broadcasts them into an independent (N_u, N_v) grid of pairs, one
-    trispectrum value per (k_u, k_v) combination. Passing equal, identical
-    arrays for both (``k_u = k_v = k``) gives the full (N_k, N_k) grid for
-    that shared array.
-
     .. math::
 
         T(k_u, k_v, z) = T_{1h} + T_{2h} + T_{3h} + T_{4h}
@@ -930,18 +916,13 @@ class Tk:
     .. math::
 
         I_\\mu^{(\\beta)}(k_1, \\dots, k_\\mu, z) = \\int d\\ln M\\,
-        \\frac{dn}{d\\ln M}\\, b_\\beta(M, z) \\prod_{i=1}^{\\mu} u_i(k_i \\mid M, z)
+        \\frac{dn}{d\\ln M}\\, b_\\beta(M, z) \\prod_{i=1}^{\\mu} u_i(k_i \\,|\\, M, z)
 
     where :math:`\\mu` is the number of
     profiles/wavenumbers in the product, :math:`b_\\beta` is the
     :math:`\\beta`-th order halo bias (:math:`b_0 = 1` unweighted,
     :math:`b_1` linear, :math:`b_2` quadratic), and :math:`u_i` are the
-    Fourier-space profiles (first moments). A wavenumber argument repeated
-    across several :math:`u_i` (e.g. :math:`I_3^1(k_i, k_j, k_j)`) feeds
-    that value to more than one profile; where two profiles could share a
-    wavenumber, a superscript :math:`(i)` on a wavenumber argument, e.g.
-    :math:`k_u^{(i)}`, indicates that argument feeds profile :math:`i`'s
-    Fourier transform :math:`u_i`. See :meth:`tk_1h`, :meth:`tk_2h`,
+    Fourier-space profiles (first moments). See :meth:`tk_1h`, :meth:`tk_2h`,
     :meth:`tk_3h` and :meth:`tk_4h` for how each term is assembled from
     :math:`I_\\mu^{(\\beta)}`.
 
@@ -950,8 +931,8 @@ class Tk:
         This implementation is limited to profiles whose 3- and 4-point
         functions within a single halo reduce to products of their
         (1-point) Fourier-space profiles, i.e.
-        :math:`u_{1234}(k_1,k_2,k_3,k_4 \\mid M) = u_1(k_1 \\mid M)\\,
-        u_2(k_2 \\mid M)\\, u_3(k_3 \\mid M)\\, u_4(k_4 \\mid M)` (and
+        :math:`u_{1234}(k_1,k_2,k_3,k_4 \\,|\\, M) = u_1(k_1 \\,|\\, M)\\,
+        u_2(k_2 \\,|\\, M)\\, u_3(k_3 \\,|\\, M)\\, u_4(k_4 \\,|\\, M)` (and
         similarly for the 3-point sub-clumps entering the 2-halo "13" term).
         This holds for matter density and electron pressure/density profiles, 
         but not in general for profiles with non-trivial 
@@ -968,8 +949,8 @@ class Tk:
 
         .. math::
 
-            T_{1h}(k_u, k_v, z) = I_4^0\\!\\left(k_u \\mid u_1,\\, k_u \\mid u_2,
-            \\, k_v \\mid v_1,\\, k_v \\mid v_2\\right)
+            T_{1h}(k_u, k_v, z) = I_4^0\\!\\left(k_u \\,|\\, u_1,\\, k_u \\,|\\, u_2,
+            \\, k_v \\,|\\, v_1,\\, k_v \\,|\\, v_2\\right)
 
         where :math:`I_4^0` is the unweighted (:math:`\\beta=0`) quadruple
         mass integral :math:`I_\\mu^{(\\beta)}` with :math:`\\mu=4`.
@@ -980,7 +961,7 @@ class Tk:
         k_u, k_v : float or array-like
             Independent wavenumber grids of the parallelogram
             configuration, in :math:`\\mathrm{Mpc}^{-1}`. Need not be the
-            same length -- the two are broadcast into an (N_u, N_v) grid,
+            same length; the two are broadcast into an (N_u, N_v) grid,
             one trispectrum value per combination.
         z : array-like
             Redshift grid.
@@ -1057,40 +1038,34 @@ class Tk:
 
         .. math::
 
-            T_{2h}^{(22)}(k_u,k_v,z) = \\bar P(k_u,k_v)\\, \\Big[
-                I_2^1\\!\\left(k_u \\mid u_1, k_v \\mid v_1\\right)\\,
-                I_2^1\\!\\left(k_u \\mid u_2, k_v \\mid v_2\\right)
-              + I_2^1\\!\\left(k_u \\mid u_1, k_v \\mid v_2\\right)\\,
-                I_2^1\\!\\left(k_u \\mid v_1, k_v \\mid u_2\\right) \\Big]
+            \\begin{aligned}
+                T_{2h}^{(22)}(k_u,k_v,z) = \\bar P(k_u,k_v)\\, \\Big[\\;
+                & I_2^1\\!\\left(k_u \\,|\\, u_1, k_v \\,|\\, v_1\\right)\\,
+                  I_2^1\\!\\left(k_u \\,|\\, u_2, k_v \\,|\\, v_2\\right) \\\\
+                +\\;& I_2^1\\!\\left(k_u \\,|\\, u_1, k_v \\,|\\, v_2\\right)\\,
+                  I_2^1\\!\\left(k_u \\,|\\, v_1, k_v \\,|\\, u_2\\right)\\; \\Big]
+            \\end{aligned}
 
         where :math:`I_2^1` is the linearly-biased (:math:`\\beta=1`)
         pair-profile mass integral :math:`I_\\mu^{(\\beta)}`, and
         :math:`\\bar P` is the relative-angle average
-        of :math:`P_{\\mathrm{lin}}(|{\\bf k}_u+{\\bf k}_v|)` -- the third
-        possible pairing vanishes because it would require
-        :math:`P_{\\mathrm{lin}}(0) = 0`.
+        of :math:`P_{\\mathrm{lin}}(|{\\bf k}_u+{\\bf k}_v|)`.
 
         .. math::
 
             \\begin{aligned}
                 T_{2h}^{(13)}(k_u,k_v,z) &= P_{\\mathrm{lin}}(k_u)\\, \\Big[
-                    I_1^1\\!\\left(k_u \\mid u_1\\right)\\,
-                    I_3^1\\!\\left(k_u \\mid u_2, k_v \\mid v_1, k_v \\mid v_2\\right)
+                    I_1^1\\!\\left(k_u \\,|\\, u_1\\right)\\,
+                    I_3^1\\!\\left(k_u \\,|\\, u_2, k_v \\,|\\, v_1, k_v \\,|\\, v_2\\right)
                     + 1\\ \\mathrm{perm}\\ (u_1 \\leftrightarrow u_2) \\Big] \\\\
                 &\\quad + P_{\\mathrm{lin}}(k_v)\\, \\Big[
-                    I_1^1\\!\\left(k_v \\mid v_1\\right)\\,
-                    I_3^1\\!\\left(k_v \\mid v_2, k_u \\mid u_1, k_u \\mid u_2\\right)
+                    I_1^1\\!\\left(k_v \\,|\\, v_1\\right)\\,
+                    I_3^1\\!\\left(k_v \\,|\\, v_2, k_u \\,|\\, u_1, k_u \\,|\\, u_2\\right)
                     + 1\\ \\mathrm{perm}\\ (v_1 \\leftrightarrow v_2) \\Big]
             \\end{aligned}
 
-        where "+ 1 perm :math:`(u_1 \\leftrightarrow u_2)`" denotes the
-        additional term obtained by swapping labels :math:`u_1` and
-        :math:`u_2` in the preceding term, similarly for "+ 1 perm
-        :math:`(v_1 \\leftrightarrow v_2)`", and :math:`I_1^1`,
-        :math:`I_3^1` are the linearly-biased (:math:`\\beta=1`) single- and
-        triple-profile mass integrals :math:`I_\\mu^{(\\beta)}` -- for
-        :math:`I_3^1`, one profile alone at :math:`k_i`, the other two
-        together at :math:`k_j`.
+        where :math:`I_1^1`, :math:`I_3^1` are the linearly-biased (:math:`\\beta=1`) 
+        single- and triple-profile mass integrals :math:`I_\\mu^{(\\beta)}`.
 
         Parameters
         ----------
@@ -1209,10 +1184,10 @@ class Tk:
 
             \\begin{aligned}
                 T_{3h}(k_u,k_v,z) = B^{\\mathrm{PT}}(k_u,k_v)\\, \\Big[\\;
-                & I_1^1\\!\\left(k_u \\mid u_1\\right)\\, I_1^1\\!\\left(k_v \\mid v_1\\right)\\,
-                  I_2^1\\!\\left(k_u \\mid u_2, k_v \\mid v_2\\right) \\\\
-                +\\;& I_1^1\\!\\left(k_u \\mid u_1\\right)\\, I_1^1\\!\\left(k_v \\mid v_2\\right)\\,
-                  I_2^1\\!\\left(k_u \\mid v_1, k_v \\mid u_2\\right) \\\\
+                & I_1^1\\!\\left(k_u \\,|\\, u_1\\right)\\, I_1^1\\!\\left(k_v \\,|\\, v_1\\right)\\,
+                  I_2^1\\!\\left(k_u \\,|\\, u_2, k_v \\,|\\, v_2\\right) \\\\
+                +\\;& I_1^1\\!\\left(k_u \\,|\\, u_1\\right)\\, I_1^1\\!\\left(k_v \\,|\\, v_2\\right)\\,
+                  I_2^1\\!\\left(k_u \\,|\\, v_1, k_v \\,|\\, u_2\\right) \\\\
                 +\\;& 1\\ \\mathrm{perm}\\ (u_1 \\leftrightarrow u_2)\\; \\Big]
             \\end{aligned}
 
@@ -1311,8 +1286,8 @@ class Tk:
         .. math::
 
             T_{4h}(k_u, k_v, z) = T^{\\mathrm{PT}}(k_u,-k_u,k_v,-k_v)\\,
-            I_1^1\\!\\left(k_u \\mid u_1\\right)\\, I_1^1\\!\\left(k_u \\mid u_2\\right)\\,
-            I_1^1\\!\\left(k_v \\mid v_1\\right)\\, I_1^1\\!\\left(k_v \\mid v_2\\right)
+            I_1^1\\!\\left(k_u \\,|\\, u_1\\right)\\, I_1^1\\!\\left(k_u \\,|\\, u_2\\right)\\,
+            I_1^1\\!\\left(k_v \\,|\\, v_1\\right)\\, I_1^1\\!\\left(k_v \\,|\\, v_2\\right)
 
         where :math:`I_1^1` is the linearly-biased (:math:`\\beta=1`)
         single-profile mass integral :math:`I_\\mu^{(\\beta)}` and the
