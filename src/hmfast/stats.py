@@ -968,8 +968,8 @@ class Tk:
 
         .. math::
 
-            T_{1h}(k_u, k_v, z) = I_4^0\\!\\left(k_u^{(1)}, k_u^{(2)},
-            k_v^{(3)}, k_v^{(4)}\\right)
+            T_{1h}(k_u, k_v, z) = I_4^0\\!\\left(k_u \\mid u_1,\\, k_u \\mid u_2,
+            \\, k_v \\mid v_1,\\, k_v \\mid v_2\\right)
 
         where :math:`I_4^0` is the unweighted (:math:`\\beta=0`) quadruple
         mass integral :math:`I_\\mu^{(\\beta)}` with :math:`\\mu=4`.
@@ -1058,10 +1058,10 @@ class Tk:
         .. math::
 
             T_{2h}^{(22)}(k_u,k_v,z) = \\bar P(k_u,k_v)\\, \\Big[
-                I_2^1\\!\\left(k_u^{(1)}, k_v^{(3)}\\right)\\,
-                I_2^1\\!\\left(k_u^{(2)}, k_v^{(4)}\\right)
-              + I_2^1\\!\\left(k_u^{(1)}, k_v^{(4)}\\right)\\,
-                I_2^1\\!\\left(k_u^{(3)}, k_v^{(2)}\\right) \\Big]
+                I_2^1\\!\\left(k_u \\mid u_1, k_v \\mid v_1\\right)\\,
+                I_2^1\\!\\left(k_u \\mid u_2, k_v \\mid v_2\\right)
+              + I_2^1\\!\\left(k_u \\mid u_1, k_v \\mid v_2\\right)\\,
+                I_2^1\\!\\left(k_u \\mid v_1, k_v \\mid u_2\\right) \\Big]
 
         where :math:`I_2^1` is the linearly-biased (:math:`\\beta=1`)
         pair-profile mass integral :math:`I_\\mu^{(\\beta)}`, and
@@ -1074,22 +1074,23 @@ class Tk:
 
             \\begin{aligned}
                 T_{2h}^{(13)}(k_u,k_v,z) &= P_{\\mathrm{lin}}(k_u)\\, \\Big[
-                    I_1^1\\!\\left(k_u^{(1)}\\right)\\,
-                    I_3^1\\!\\left(k_u^{(2)}, k_v^{(3)}, k_v^{(4)}\\right)
-                    + (1 \\leftrightarrow 2) \\Big] \\\\
+                    I_1^1\\!\\left(k_u \\mid u_1\\right)\\,
+                    I_3^1\\!\\left(k_u \\mid u_2, k_v \\mid v_1, k_v \\mid v_2\\right)
+                    + 1\\ \\mathrm{perm}\\ (u_1 \\leftrightarrow u_2) \\Big] \\\\
                 &\\quad + P_{\\mathrm{lin}}(k_v)\\, \\Big[
-                    I_1^1\\!\\left(k_v^{(3)}\\right)\\,
-                    I_3^1\\!\\left(k_v^{(4)}, k_u^{(1)}, k_u^{(2)}\\right)
-                    + (3 \\leftrightarrow 4) \\Big]
+                    I_1^1\\!\\left(k_v \\mid v_1\\right)\\,
+                    I_3^1\\!\\left(k_v \\mid v_2, k_u \\mid u_1, k_u \\mid u_2\\right)
+                    + 1\\ \\mathrm{perm}\\ (v_1 \\leftrightarrow v_2) \\Big]
             \\end{aligned}
 
-        where "+ (1 :math:`\\leftrightarrow` 2)" denotes the additional term
-        obtained by swapping labels 1 and 2 in the preceding term, similarly
-        for "+ (3 :math:`\\leftrightarrow` 4)", and :math:`I_1^1`,
+        where "+ 1 perm :math:`(u_1 \\leftrightarrow u_2)`" denotes the
+        additional term obtained by swapping labels :math:`u_1` and
+        :math:`u_2` in the preceding term, similarly for "+ 1 perm
+        :math:`(v_1 \\leftrightarrow v_2)`", and :math:`I_1^1`,
         :math:`I_3^1` are the linearly-biased (:math:`\\beta=1`) single- and
         triple-profile mass integrals :math:`I_\\mu^{(\\beta)}` -- for
-        :math:`I_3^1`, profile :math:`a` alone at :math:`k_i`, profiles
-        :math:`b,c` together at :math:`k_j`.
+        :math:`I_3^1`, one profile alone at :math:`k_i`, the other two
+        together at :math:`k_j`.
 
         Parameters
         ----------
@@ -1208,20 +1209,19 @@ class Tk:
 
             \\begin{aligned}
                 T_{3h}(k_u,k_v,z) = B^{\\mathrm{PT}}(k_u,k_v)\\, \\Big[\\;
-                & I_1^1\\!\\left(k_u^{(1)}\\right)\\, I_1^1\\!\\left(k_v^{(3)}\\right)\\,
-                  I_2^1\\!\\left(k_u^{(2)}, k_v^{(4)}\\right) \\\\
-                +\\;& I_1^1\\!\\left(k_u^{(1)}\\right)\\, I_1^1\\!\\left(k_v^{(4)}\\right)\\,
-                  I_2^1\\!\\left(k_u^{(3)}, k_v^{(2)}\\right) \\\\
-                +\\;& I_1^1\\!\\left(k_v^{(3)}\\right)\\, I_1^1\\!\\left(k_u^{(2)}\\right)\\,
-                  I_2^1\\!\\left(k_u^{(1)}, k_v^{(4)}\\right) \\\\
-                +\\;& I_1^1\\!\\left(k_v^{(4)}\\right)\\, I_1^1\\!\\left(k_u^{(2)}\\right)\\,
-                  I_2^1\\!\\left(k_u^{(3)}, k_v^{(1)}\\right)\\; \\Big]
+                & I_1^1\\!\\left(k_u \\mid u_1\\right)\\, I_1^1\\!\\left(k_v \\mid v_1\\right)\\,
+                  I_2^1\\!\\left(k_u \\mid u_2, k_v \\mid v_2\\right) \\\\
+                +\\;& I_1^1\\!\\left(k_u \\mid u_1\\right)\\, I_1^1\\!\\left(k_v \\mid v_2\\right)\\,
+                  I_2^1\\!\\left(k_u \\mid v_1, k_v \\mid u_2\\right) \\\\
+                +\\;& 1\\ \\mathrm{perm}\\ (u_1 \\leftrightarrow u_2)\\; \\Big]
             \\end{aligned}
 
-        where :math:`B^{\\mathrm{PT}}` is the tree-level bispectrum-type
-        kernel, and :math:`I_1^1`, :math:`I_2^1` are the
-        linearly-biased (:math:`\\beta=1`) single- and pair-profile mass
-        integrals :math:`I_\\mu^{(\\beta)}`.
+        where "+ 1 perm :math:`(u_1 \\leftrightarrow u_2)`" denotes the two
+        additional terms obtained by swapping labels :math:`u_1` and
+        :math:`u_2` in each of the two preceding terms, :math:`B^{\\mathrm{PT}}`
+        is the tree-level bispectrum-type kernel, and :math:`I_1^1`,
+        :math:`I_2^1` are the linearly-biased (:math:`\\beta=1`) single- and
+        pair-profile mass integrals :math:`I_\\mu^{(\\beta)}`.
 
         Parameters
         ----------
@@ -1311,8 +1311,8 @@ class Tk:
         .. math::
 
             T_{4h}(k_u, k_v, z) = T^{\\mathrm{PT}}(k_u,-k_u,k_v,-k_v)\\,
-            I_1^1\\!\\left(k_u^{(1)}\\right)\\, I_1^1\\!\\left(k_u^{(2)}\\right)\\,
-            I_1^1\\!\\left(k_v^{(3)}\\right)\\, I_1^1\\!\\left(k_v^{(4)}\\right)
+            I_1^1\\!\\left(k_u \\mid u_1\\right)\\, I_1^1\\!\\left(k_u \\mid u_2\\right)\\,
+            I_1^1\\!\\left(k_v \\mid v_1\\right)\\, I_1^1\\!\\left(k_v \\mid v_2\\right)
 
         where :math:`I_1^1` is the linearly-biased (:math:`\\beta=1`)
         single-profile mass integral :math:`I_\\mu^{(\\beta)}` and the
