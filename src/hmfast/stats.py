@@ -997,9 +997,9 @@ class Tk:
         where :math:`I_2^1` is the linearly-biased (:math:`\\beta=1`)
         pair-profile mass integral :math:`I_\\mu^{(\\beta)}`, and
         :math:`\\bar P` is the relative-angle average
-        of :math:`P_{\\mathrm{lin}}(|{\\bf k}_u+{\\bf k}_v|)` (see
-        ``_Pbar_kernel``) -- the third possible pairing vanishes because it
-        would require :math:`P_{\\mathrm{lin}}(0) = 0`.
+        of :math:`P_{\\mathrm{lin}}(|{\\bf k}_u+{\\bf k}_v|)` -- the third
+        possible pairing vanishes because it would require
+        :math:`P_{\\mathrm{lin}}(0) = 0`.
 
         .. math::
 
@@ -1087,10 +1087,9 @@ class Tk:
         """
         Angle-averaged :math:`P_3(k,k') = \\langle P_{\\mathrm{lin}}(|{\\bf
         k}+{\\bf k}'|)\\, F_2(k,k',\\theta)\\rangle_\\theta` entering the
-        tree-level bispectrum-type kernel of the 3-halo trispectrum term
-        (``_Bpt_kernel``), built from the existing ``_F2``/``_mu`` SPT
-        kernels evaluated between leg ``k`` and the vector sum
-        ``kr = |k + kp|`` (``_ksum``).
+        tree-level bispectrum-type kernel of the 3-halo trispectrum term,
+        built from the SPT kernels evaluated between leg ``k`` and the
+        vector sum ``kr = |k + kp|``.
         """
         k_b, kp_b, kr, pkr = _kr_pkr(hm, k, kp, z_arr)
         wgt = _TRISPEC_THETA_WEIGHT[None, :]
@@ -1133,7 +1132,7 @@ class Tk:
             \\end{aligned}
 
         where :math:`B^{\\mathrm{PT}}` is the tree-level bispectrum-type
-        kernel from ``_Bpt_kernel``, and :math:`I_1^1`, :math:`I_2^1` are the
+        kernel, and :math:`I_1^1`, :math:`I_2^1` are the
         linearly-biased (:math:`\\beta=1`) single- and pair-profile mass
         integrals :math:`I_\\mu^{(\\beta)}`.
 
@@ -1192,9 +1191,9 @@ class Tk:
     def _P4_kernel(self, hm, k, kp, z_arr):
         """
         Angle-averaged P4A(k,kp), P4X(k,kp) kernels ("1122" diagram) entering
-        the tree-level 4h trispectrum, built from the existing ``_F2``/``_mu``
-        SPT kernels evaluated between leg ``k`` and the vector sum
-        ``kr = |k + kp|`` (``_ksum``), following Eq. 30 of Takada & Hu (2013).
+        the tree-level 4h trispectrum, built from the SPT kernels evaluated
+        between leg ``k`` and the vector sum ``kr = |k + kp|``, following
+        Eq. 30 of Takada & Hu (2013).
 
         ``k``, ``kp`` : (N,) arrays — the two leg magnitudes for this ordering.
         Returns ``(P4A, P4X)``, each of shape (N, Nz).
@@ -1228,9 +1227,8 @@ class Tk:
         angle-averaged over the relative
         orientation of the :math:`k_u` and :math:`k_v` pairs via a
         fixed-order Gauss-Legendre quadrature over :math:`\\theta \\in [0,\\pi]`
-        (the "1122" diagram built from ``_F2``/``_mu``/``_ksum`` in
-        ``_P4_kernel``; the "1113" diagram from the closed-form ``_X3``
-        kernel), following Eq. 30 of Takada & Hu (2013).
+        (the "1122" diagram built from the SPT kernels; the "1113" diagram
+        from a closed-form kernel), following Eq. 30 of Takada & Hu (2013).
 
         Parameters
         ----------
