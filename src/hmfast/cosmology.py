@@ -108,7 +108,7 @@ class Cosmology:
         self._emu = {}  # This will be treated as static
         # Eagerly load these emulators to keep Python-side loader state out of jitted paths and avoid JAX tracer errors.
         if os.environ.get("READTHEDOCS") != "True":
-            for key in ("S8Z", "HZ", "DAZ", "PKL", "PKNL"):
+            for key in ("S8Z", "HZ", "DAZ", "PKL", "PKNL", "DER"):
                 self._load_emulator(key)
         self._tophat_instance = partial(TophatVar(self._pk_grid()[0], lowring=True, backend='jax'), extrap=True)
 
@@ -558,12 +558,23 @@ class Cosmology:
             # the non-extrapolated path for this boundary-anchor call.
             chi_max = self.update(extrapolate_z=False).angular_diameter_distance(z_max) * (1.0 + z_max)
 
-            # Fixed sampling of the [z_max, z] segment for jnp.trapezoid --
-            # c/H(z') is smooth and monotonic there, so accuracy is
-            # insensitive to this choice well above O(10) points.
+            # Sampling of the [z_max, z] segment for jnp.trapezoid, uniform in
+            # ln(1+z) rather than in z itself -- c/H(z') falls steeply just
+            # past z_max and flattens out by z >> z_max, so a fixed *linear*
+            # grid resolves that near-z_max curvature well only while z is
+            # within a factor of a few of z_max. Once z is orders of
+            # magnitude beyond z_max (e.g. z ~ 10^3 when extrapolating out to
+            # the CMB), a linear grid spends almost all its points on the
+            # flat tail and badly under-samples the curved part, so the
+            # integrated distance drifts (checked: at z ~ 1000 this drift is
+            # large enough to make chi(z) overshoot the DER emulator's own
+            # chi_star well before the true z_star, flipping the sign of the
+            # CMB lensing kernel). Sampling uniformly in ln(1+z) resolves the
+            # curvature at any target z and removes that drift.
             n_grid = 64
             t = jnp.linspace(0.0, 1.0, n_grid)
-            zq = z_max + t[None, :] * (z_arr[:, None] - z_max)  # (Nz, n_grid)
+            lnzp1 = jnp.log1p(z_max) + t[None, :] * (jnp.log1p(z_arr[:, None]) - jnp.log1p(z_max))
+            zq = jnp.expm1(lnzp1)  # (Nz, n_grid)
             Hq = self._hz_flrw(zq) * jnp.sqrt(correction)
             chi_ext = chi_max + jnp.trapezoid((Const._c_ / 1e3) / Hq, x=zq, axis=1)
 
