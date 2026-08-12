@@ -244,7 +244,7 @@ class Pk:
 
     .. math::
 
-        I_\\mu^{(\\beta)}(k_1, \\dots, k_\\mu, z) = \\int d\\ln M\\,
+        I_\\mu^\\beta(k_1, \\dots, k_\\mu, z) = \\int d\\ln M\\,
         \\frac{dn}{d\\ln M}\\, b_\\beta(M, z) \\prod_{i=1}^{\\mu} u_i(k_i \\,|\\, M, z)
 
     where :math:`\\mu` is the number of profiles/wavenumbers in the
@@ -252,7 +252,7 @@ class Pk:
     (:math:`b_0 = 1` unweighted, :math:`b_1` linear), and :math:`u_i` are
     the Fourier-space profiles (first moments). See :meth:`pk_1h` and
     :meth:`pk_2h` for how each term is assembled from
-    :math:`I_\\mu^{(\\beta)}`.
+    :math:`I_\\mu^\\beta`.
     """
 
     # FFTLog k grid for xi_1h/xi_2h -- set as default in __init__
@@ -278,10 +278,10 @@ class Pk:
 
         .. math::
 
-            P_{1h}(k, z) = I_2^{(0)}(k, k, z)
+            P_{1h}(k, z) = I_2^0(k, k, z)
 
-        where :math:`I_2^{(0)}` is the unweighted (:math:`\\beta=0`) pair
-        mass integral :math:`I_\\mu^{(\\beta)}` with :math:`\\mu=2`,
+        where :math:`I_2^0` is the unweighted (:math:`\\beta=0`) pair
+        mass integral :math:`I_\\mu^\\beta` with :math:`\\mu=2`,
         evaluated with both profiles at the same wavenumber :math:`k`.
         The mass integral is performed over :attr:`m_grid`.
 
@@ -353,10 +353,10 @@ class Pk:
 
         .. math::
 
-            P_{2h}(k, z) = P_{\\mathrm{lin}}(k, z) \\, I_1^{(1)}(k, z) \\, I_1^{(1)}(k, z)
+            P_{2h}(k, z) = P_{\\mathrm{lin}}(k, z) \\, I_1^1(k, z) \\, I_1^1(k, z)
 
-        where :math:`I_1^{(1)}` is the linearly-biased (:math:`\\beta=1`)
-        single-profile mass integral :math:`I_\\mu^{(\\beta)}` with
+        where :math:`I_1^1` is the linearly-biased (:math:`\\beta=1`)
+        single-profile mass integral :math:`I_\\mu^\\beta` with
         :math:`\\mu=1`, evaluated once per profile at wavenumber
         :math:`k`. The mass integral is performed over :attr:`m_grid`.
 
@@ -656,7 +656,7 @@ class Bk:
 
     .. math::
 
-        I_\\mu^{(\\beta)}(k_1, \\dots, k_\\mu, z) = \\int d\\ln M\\,
+        I_\\mu^\\beta(k_1, \\dots, k_\\mu, z) = \\int d\\ln M\\,
         \\frac{dn}{d\\ln M}\\, b_\\beta(M, z) \\prod_{i=1}^{\\mu} u_i(k_i \\,|\\, M, z)
 
     where :math:`\\mu` is the number of profiles/wavenumbers in the
@@ -664,7 +664,7 @@ class Bk:
     (:math:`b_0 = 1` unweighted, :math:`b_1` linear, :math:`b_2`
     quadratic), and :math:`u_i` are the Fourier-space profiles (first
     moments). See :meth:`bk_1h`, :meth:`bk_2h` and :meth:`bk_3h` for how
-    each term is assembled from :math:`I_\\mu^{(\\beta)}`.
+    each term is assembled from :math:`I_\\mu^\\beta`.
 
     .. note::
 
@@ -691,7 +691,7 @@ class Bk:
             B_{1h}(k_1, k_2, k_3, z) = I_3^0(k_1, k_2, k_3, z)
 
         where :math:`I_3^0` is the unweighted (:math:`\\beta=0`) triple mass
-        integral :math:`I_\\mu^{(\\beta)}` with :math:`\\mu=3`.
+        integral :math:`I_\\mu^\\beta` with :math:`\\mu=3`.
 
         A low-k suppression factor :math:`1 - e^{-(k_{\\min}/k_{\\mathrm{damp}})^2}`
         is applied at the smallest wavenumber of the triplet.
@@ -766,7 +766,7 @@ class Bk:
 
         where :math:`I_1^1` and :math:`I_2^1` are the linearly-biased
         (:math:`\\beta=1`) single- and pair-profile mass integrals
-        :math:`I_\\mu^{(\\beta)}`, and
+        :math:`I_\\mu^\\beta`, and
         "+ 2 cyc" denotes the sum over the two cyclic permutations of
         :math:`(1,2,3)`.
 
@@ -826,7 +826,7 @@ class Bk:
             \\end{aligned}
 
         where :math:`I_1^\\beta(k_i)` is the single-profile mass integral
-        :math:`I_\\mu^{(\\beta)}` (with
+        :math:`I_\\mu^\\beta` (with
         :math:`\\mu=1`; :math:`\\beta=1` linear or :math:`\\beta=2`
         quadratic bias), "+ 2 cyc" denotes the sum over the two cyclic
         permutations of :math:`(1,2,3)`, and
@@ -915,7 +915,7 @@ class Tk:
 
     .. math::
 
-        I_\\mu^{(\\beta)}(k_1, \\dots, k_\\mu, z) = \\int d\\ln M\\,
+        I_\\mu^\\beta(k_1, \\dots, k_\\mu, z) = \\int d\\ln M\\,
         \\frac{dn}{d\\ln M}\\, b_\\beta(M, z) \\prod_{i=1}^{\\mu} u_i(k_i \\,|\\, M, z)
 
     where :math:`\\mu` is the number of
@@ -924,7 +924,7 @@ class Tk:
     :math:`b_1` linear, :math:`b_2` quadratic), and :math:`u_i` are the
     Fourier-space profiles (first moments). See :meth:`tk_1h`, :meth:`tk_2h`,
     :meth:`tk_3h` and :meth:`tk_4h` for how each term is assembled from
-    :math:`I_\\mu^{(\\beta)}`.
+    :math:`I_\\mu^\\beta`.
 
     .. note::
 
@@ -953,7 +953,7 @@ class Tk:
             \\, k_v \\,|\\, v_1,\\, k_v \\,|\\, v_2\\right)
 
         where :math:`I_4^0` is the unweighted (:math:`\\beta=0`) quadruple
-        mass integral :math:`I_\\mu^{(\\beta)}` with :math:`\\mu=4`.
+        mass integral :math:`I_\\mu^\\beta` with :math:`\\mu=4`.
 
         Parameters
         ----------
@@ -1044,7 +1044,7 @@ class Tk:
                 + (v_1 \\leftrightarrow v_2) \\Big]
 
         where :math:`I_2^1` is the linearly-biased (:math:`\\beta=1`)
-        pair-profile mass integral :math:`I_\\mu^{(\\beta)}`, and
+        pair-profile mass integral :math:`I_\\mu^\\beta`, and
         :math:`\\bar P` is the relative-angle average
         of :math:`P_{\\mathrm{lin}}(|{\\bf k}_u+{\\bf k}_v|)`.
 
@@ -1062,7 +1062,7 @@ class Tk:
             \\end{aligned}
 
         where :math:`I_1^1`, :math:`I_3^1` are the linearly-biased (:math:`\\beta=1`) 
-        single- and triple-profile mass integrals :math:`I_\\mu^{(\\beta)}`.
+        single- and triple-profile mass integrals :math:`I_\\mu^\\beta`.
 
         Parameters
         ----------
@@ -1187,7 +1187,7 @@ class Tk:
         where :math:`B^{\\mathrm{PT}}`
         is the tree-level bispectrum-type kernel, and :math:`I_1^1`,
         :math:`I_2^1` are the linearly-biased (:math:`\\beta=1`) single- and
-        pair-profile mass integrals :math:`I_\\mu^{(\\beta)}`.
+        pair-profile mass integrals :math:`I_\\mu^\\beta`.
 
         Parameters
         ----------
@@ -1281,7 +1281,7 @@ class Tk:
             I_1^1\\!\\left(k_v \\,|\\, v_1\\right)\\, I_1^1\\!\\left(k_v \\,|\\, v_2\\right)
 
         where :math:`I_1^1` is the linearly-biased (:math:`\\beta=1`)
-        single-profile mass integral :math:`I_\\mu^{(\\beta)}` and the
+        single-profile mass integral :math:`I_\\mu^\\beta` and the
         tree-level trispectrum :math:`T^{\\mathrm{PT}}` for the
         parallelogram configuration is
         angle-averaged over the relative
