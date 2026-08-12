@@ -52,13 +52,13 @@ class HaloProfile(ABC):
         ----------
         halo_model : HaloModel
             Halo model passed through to ``real``.
-        x : array_like
+        x : jnp.ndarray
             Dimensionless transform grid.
         r : jnp.ndarray
             Comoving radius grid with shape :math:`(N_x, N_m, N_z)`.
-        m : float or array_like
+        m : float or jnp.ndarray
             Halo mass(es).
-        z : float or array_like
+        z : float or jnp.ndarray
             Redshift(s).
 
         Returns
