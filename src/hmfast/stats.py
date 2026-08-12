@@ -33,6 +33,14 @@ def _ksum(k1, k2, mu):
     return jnp.sqrt(k1 ** 2 + k2 ** 2 + 2.0 * k1 * k2 * mu)
 
 
+def _check_bk_inputs(k1, k2, mu12):
+    """k1, k2 must be positive wavenumbers; mu12 must be a genuine cosine."""
+    if bool(jnp.any(jnp.asarray(k1) <= 0.0)) or bool(jnp.any(jnp.asarray(k2) <= 0.0)):
+        raise ValueError("k1 and k2 must be positive.")
+    if bool(jnp.any(jnp.abs(jnp.asarray(mu12)) > 1.0)):
+        raise ValueError("mu12 must be in [-1, 1].")
+
+
 # Trispectrum tree-level helpers (4-halo term)
 #
 # The 4-halo trispectrum term needs the tree-level kernel angle-averaged over
@@ -681,7 +689,7 @@ class Bk:
     # 1-halo term
     # ------------------------------------------------------------------
 
-    def bk_1h(self, halo_model, k1, k2, k3, z, profile1, profile2=None, profile3=None, k_damp=0.01):
+    def bk_1h(self, halo_model, k1, k2, mu12, z, profile1, profile2=None, profile3=None, k_damp=0.01):
         """
         1-halo bispectrum term.
 
@@ -699,8 +707,13 @@ class Bk:
         Parameters
         ----------
         halo_model : HaloModel
-        k1, k2, k3 : float or array-like
-            Triangle wavenumbers in :math:`\\mathrm{Mpc}^{-1}`. Must all be the same size.
+        k1, k2 : float or array-like
+            Two triangle sides in :math:`\\mathrm{Mpc}^{-1}`. Must be the same size.
+        mu12 : float or array-like
+            Cosine of the angle between the :math:`k_1` and :math:`k_2`
+            vectors. Must be a scalar or an array of shape :math:`(N_k,)`
+            matching k1, k2. The third side :math:`k_3 = |\\mathbf{k}_1 + \\mathbf{k}_2|`
+            is derived from :math:`k_1, k_2, \\mu_{12}` via the law of cosines.
         z : array-like
             Redshift grid.
         profile1 : HaloProfile
@@ -717,6 +730,7 @@ class Bk:
             1-halo bispectrum in :math:`\\mathrm{Mpc}^6`, shape :math:`(N_k, N_z)` before
             singleton dimensions get squeezed before return.
         """
+        _check_bk_inputs(k1, k2, mu12)
         hm = halo_model
         profile2 = profile2 if profile2 is not None else profile1
         profile3 = profile3 if profile3 is not None else profile1
@@ -731,7 +745,10 @@ class Bk:
         )
         total_weights = dndlnm * w[:, None]  # (Nm, Nz)
 
-        k1s, k2s, k3s = jnp.atleast_1d(k1), jnp.atleast_1d(k2), jnp.atleast_1d(k3)
+        k1a, k2a = jnp.asarray(k1), jnp.asarray(k2)
+        k3 = _ksum(k1a, k2a, jnp.asarray(mu12))
+
+        k1s, k2s, k3s = jnp.atleast_1d(k1a), jnp.atleast_1d(k2a), jnp.atleast_1d(k3)
         u1 = jnp.reshape(profile1.fourier(hm, k1s, m, z_arr), (len(k1s), len(m), len(z_arr)))
         u2 = jnp.reshape(profile2.fourier(hm, k2s, m, z_arr), (len(k2s), len(m), len(z_arr)))
         u3 = jnp.reshape(profile3.fourier(hm, k3s, m, z_arr), (len(k3s), len(m), len(z_arr)))
@@ -743,7 +760,7 @@ class Bk:
         correction = n_min[None, :] * u1[:, 0, :] * u2[:, 0, :] * u3[:, 0, :]
         bk1h = bk1h + hm.hm_consistency * correction
 
-        k_min = jnp.minimum(jnp.minimum(jnp.asarray(k1), jnp.asarray(k2)), jnp.asarray(k3))
+        k_min = jnp.minimum(jnp.minimum(k1a, k2a), k3)
         mask = k_damp > 0
         damping = jnp.where(mask, 1.0 - jnp.exp(-(k_min / jnp.where(mask, k_damp, 1.0))**2), 1.0)
 
@@ -755,7 +772,7 @@ class Bk:
     # 2-halo term
     # ------------------------------------------------------------------
 
-    def bk_2h(self, halo_model, k1, k2, k3, z, profile1, profile2=None, profile3=None):
+    def bk_2h(self, halo_model, k1, k2, mu12, z, profile1, profile2=None, profile3=None):
         """
         2-halo bispectrum term.
 
@@ -773,8 +790,13 @@ class Bk:
         Parameters
         ----------
         halo_model : HaloModel
-        k1, k2, k3 : float or array-like
-            Triangle wavenumbers in :math:`\\mathrm{Mpc}^{-1}`. Must all be the same size.
+        k1, k2 : float or array-like
+            Two triangle sides in :math:`\\mathrm{Mpc}^{-1}`. Must be the same size.
+        mu12 : float or array-like
+            Cosine of the angle between the :math:`k_1` and :math:`k_2`
+            vectors. Must be a scalar or an array of shape :math:`(N_k,)`
+            matching k1, k2. The third side :math:`k_3 = |\\mathbf{k}_1 + \\mathbf{k}_2|`
+            is derived from :math:`k_1, k_2, \\mu_{12}` via the law of cosines.
         z : array-like
             Redshift grid.
         profile1 : HaloProfile
@@ -789,10 +811,14 @@ class Bk:
             2-halo bispectrum in :math:`\\mathrm{Mpc}^6`, shape :math:`(N_k, N_z)` before
             singleton dimensions get squeezed before return.
         """
+        _check_bk_inputs(k1, k2, mu12)
         hm = halo_model
         profile2 = profile2 if profile2 is not None else profile1
         profile3 = profile3 if profile3 is not None else profile1
         z_arr = jnp.atleast_1d(z)
+
+        k1a, k2a = jnp.asarray(k1), jnp.asarray(k2)
+        k3 = _ksum(k1a, k2a, jnp.asarray(mu12))
 
         I1 = hm._I(profile1, k1, z, bias_order=1)
         I2 = hm._I(profile2, k2, z, bias_order=1)
@@ -812,7 +838,7 @@ class Bk:
     # 3-halo term
     # ------------------------------------------------------------------
 
-    def bk_3h(self, halo_model, k1, k2, k3, z, profile1, profile2=None, profile3=None):
+    def bk_3h(self, halo_model, k1, k2, mu12, z, profile1, profile2=None, profile3=None):
         """
         3-halo bispectrum term.
 
@@ -822,7 +848,7 @@ class Bk:
                 B_{3h}(k_1, k_2, k_3, z) &= B^{\\mathrm{PT}}(k_1, k_2, k_3)\\,
                 I_1^1(k_1)\\, I_1^1(k_2)\\, I_1^1(k_3) \\\\
                 &\\quad +\\; \\Big[\\, I_1^2(k_1)\\, I_1^1(k_2)\\, I_1^1(k_3)\\,
-                P_{\\mathrm{lin}}(k_2)\\, P_{\\mathrm{lin}}(k_3) \\;+\\; \\mathrm{cyc} \\,\\Big]
+                P_{\\mathrm{lin}}(k_2)\\, P_{\\mathrm{lin}}(k_3) \\;+\\; 2\\,\\mathrm{cyc.} \\,\\Big]
             \\end{aligned}
 
         where :math:`I_1^\\beta(k_i)` is the single-profile mass integral
@@ -841,8 +867,13 @@ class Bk:
         Parameters
         ----------
         halo_model : HaloModel
-        k1, k2, k3 : float or array-like
-            Triangle wavenumbers in :math:`\\mathrm{Mpc}^{-1}`. Must all be the same size.
+        k1, k2 : float or array-like
+            Two triangle sides in :math:`\\mathrm{Mpc}^{-1}`. Must be the same size.
+        mu12 : float or array-like
+            Cosine of the angle between the :math:`k_1` and :math:`k_2`
+            vectors. Must be a scalar or an array of shape :math:`(N_k,)`
+            matching k1, k2. The third side :math:`k_3 = |\\mathbf{k}_1 + \\mathbf{k}_2|`
+            is derived from :math:`k_1, k_2, \\mu_{12}` via the law of cosines.
         z : array-like
             Redshift grid.
         profile1 : HaloProfile
@@ -857,26 +888,29 @@ class Bk:
             3-halo bispectrum in :math:`\\mathrm{Mpc}^6`, shape :math:`(N_k, N_z)` before
             singleton dimensions get squeezed before return.
         """
+        _check_bk_inputs(k1, k2, mu12)
         hm = halo_model
         profile2 = profile2 if profile2 is not None else profile1
         profile3 = profile3 if profile3 is not None else profile1
         z_arr = jnp.atleast_1d(z)
 
+        k1a, k2a = jnp.asarray(k1), jnp.asarray(k2)
+        mu12 = jnp.asarray(mu12)
+        k3a = _ksum(k1a, k2a, mu12)
+
         I1_b1 = hm._I(profile1, k1, z, bias_order=1)
         I2_b1 = hm._I(profile2, k2, z, bias_order=1)
-        I3_b1 = hm._I(profile3, k3, z, bias_order=1)
+        I3_b1 = hm._I(profile3, k3a, z, bias_order=1)
         I1_b2 = hm._I(profile1, k1, z, bias_order=2)
         I2_b2 = hm._I(profile2, k2, z, bias_order=2)
-        I3_b2 = hm._I(profile3, k3, z, bias_order=2)
+        I3_b2 = hm._I(profile3, k3a, z, bias_order=2)
 
         P1 = jnp.squeeze(hm.cosmology.pk(jnp.atleast_1d(k1), z_arr, linear=True))
         P2 = jnp.squeeze(hm.cosmology.pk(jnp.atleast_1d(k2), z_arr, linear=True))
-        P3 = jnp.squeeze(hm.cosmology.pk(jnp.atleast_1d(k3), z_arr, linear=True))
+        P3 = jnp.squeeze(hm.cosmology.pk(jnp.atleast_1d(k3a), z_arr, linear=True))
 
         # Tree-level SPT bispectrum with correct cosine convention:
         # mu_ij = (k_k^2 - k_i^2 - k_j^2) / (2 k_i k_j)  [opposite-side law]
-        k1a, k2a, k3a = jnp.asarray(k1), jnp.asarray(k2), jnp.asarray(k3)
-        mu12 = _mu(k1a, k2a, k3a)
         mu23 = _mu(k2a, k3a, k1a)
         mu31 = _mu(k3a, k1a, k2a)
         B_tree = (
@@ -903,15 +937,16 @@ class Bk:
 
 class Tk:
     """
-    Halo model trispectrum T(k_u, k_v, z) in the parallelogram ("covariance")
-    configuration k1 = -k2 = k_u, k3 = -k4 = k_v.
+    Isotropized halo model trispectrum in the parallelogram ("covariance")
+    configuration.
 
     .. math::
 
         T(k_u, k_v, z) = T_{1h} + T_{2h} + T_{3h} + T_{4h}
 
-    where the four terms are built from the generalised halo-model mass
-    integral
+    with :math:`k_1 = -k_2 = k_u` and :math:`k_3 = -k_4 = k_v`,
+    angle-averaged over the angle between the two diagonals, where the
+    four terms are built from the generalised halo-model mass integral
 
     .. math::
 
