@@ -193,7 +193,7 @@ class HaloModel:
 
         .. math::
 
-            I^{(\\beta)}(k, z) = \\int \\frac{dn}{d\\ln M}\\, b_\\beta(M, z)\\,
+            I^\\beta(k, z) = \\int \\frac{dn}{d\\ln M}\\, b_\\beta(M, z)\\,
             u(k \\mid M, z)\\, d\\ln M
 
         where :math:`b_\\beta` is the :math:`\\beta`-th order bias
