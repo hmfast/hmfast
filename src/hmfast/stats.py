@@ -296,9 +296,9 @@ class Pk:
         Parameters
         ----------
         halo_model : HaloModel
-        k : array-like
+        k : float or jnp.ndarray
             Wavenumber grid in :math:`\\mathrm{Mpc}^{-1}`.
-        z : array-like
+        z : float or jnp.ndarray
             Redshift grid.
         profile1 : HaloProfile
             First halo profile object.
@@ -371,9 +371,9 @@ class Pk:
         Parameters
         ----------
         halo_model : HaloModel
-        k : array-like
+        k : float or jnp.ndarray
             Wavenumber grid in :math:`\\mathrm{Mpc}^{-1}`.
-        z : array-like
+        z : float or jnp.ndarray
             Redshift grid.
         profile1 : HaloProfile
             First halo profile object.
@@ -450,11 +450,11 @@ class Pk:
         Parameters
         ----------
         halo_model : HaloModel
-        r : array-like
+        r : float or jnp.ndarray
             Comoving separation grid in :math:`\\mathrm{Mpc}`. Only reliable
             well inside the range dual to :attr:`k_grid`; values of ``r`` too
             close to that range's edges are affected by FFTLog ringing.
-        z : array-like
+        z : float or jnp.ndarray
             Redshift grid.
         profile1 : HaloProfile
             First halo profile object.
@@ -503,11 +503,11 @@ class Pk:
         Parameters
         ----------
         halo_model : HaloModel
-        r : array-like
+        r : float or jnp.ndarray
             Comoving separation grid in :math:`\\mathrm{Mpc}`. Only reliable
             well inside the range dual to :attr:`k_grid`; values of ``r`` too
             close to that range's edges are affected by FFTLog ringing.
-        z : array-like
+        z : float or jnp.ndarray
             Redshift grid.
         profile1 : HaloProfile
             First halo profile object.
@@ -556,7 +556,7 @@ class Pk:
             First tracer object.
         tracer2 : Tracer or None
             Second tracer object (if None, uses tracer1).
-        l : array-like
+        l : float or jnp.ndarray
             Multipole grid.
         z : array
             Redshift array. This must be an array because it defines the
@@ -609,7 +609,7 @@ class Pk:
             First tracer object.
         tracer2 : Tracer or None
             Second tracer object (if None, uses tracer1).
-        l : array-like
+        l : float or jnp.ndarray
             Multipole grid.
         z : array
             Redshift array. This must be an array because it defines the
@@ -707,14 +707,13 @@ class Bk:
         Parameters
         ----------
         halo_model : HaloModel
-        k1, k2 : float or array-like
+        k1, k2 : float or jnp.ndarray
             Two triangle sides in :math:`\\mathrm{Mpc}^{-1}`. Must be the same size.
-        mu12 : float or array-like
+        mu12 : float or jnp.ndarray
             Cosine of the angle between the :math:`k_1` and :math:`k_2`
             vectors. Must be a scalar or an array of shape :math:`(N_k,)`
-            matching k1, k2. The third side :math:`k_3 = |\\mathbf{k}_1 + \\mathbf{k}_2|`
-            is derived from :math:`k_1, k_2, \\mu_{12}` via the law of cosines.
-        z : array-like
+            matching k1, k2. 
+        z : float or jnp.ndarray
             Redshift grid.
         profile1 : HaloProfile
             Halo profile at wavenumber k1.
@@ -790,14 +789,13 @@ class Bk:
         Parameters
         ----------
         halo_model : HaloModel
-        k1, k2 : float or array-like
+        k1, k2 : float or jnp.ndarray
             Two triangle sides in :math:`\\mathrm{Mpc}^{-1}`. Must be the same size.
-        mu12 : float or array-like
+        mu12 : float or jnp.ndarray
             Cosine of the angle between the :math:`k_1` and :math:`k_2`
             vectors. Must be a scalar or an array of shape :math:`(N_k,)`
-            matching k1, k2. The third side :math:`k_3 = |\\mathbf{k}_1 + \\mathbf{k}_2|`
-            is derived from :math:`k_1, k_2, \\mu_{12}` via the law of cosines.
-        z : array-like
+            matching k1, k2. 
+        z : float or jnp.ndarray
             Redshift grid.
         profile1 : HaloProfile
             Halo profile at wavenumber k1.
@@ -867,14 +865,13 @@ class Bk:
         Parameters
         ----------
         halo_model : HaloModel
-        k1, k2 : float or array-like
+        k1, k2 : float or jnp.ndarray
             Two triangle sides in :math:`\\mathrm{Mpc}^{-1}`. Must be the same size.
-        mu12 : float or array-like
+        mu12 : float or jnp.ndarray
             Cosine of the angle between the :math:`k_1` and :math:`k_2`
             vectors. Must be a scalar or an array of shape :math:`(N_k,)`
-            matching k1, k2. The third side :math:`k_3 = |\\mathbf{k}_1 + \\mathbf{k}_2|`
-            is derived from :math:`k_1, k_2, \\mu_{12}` via the law of cosines.
-        z : array-like
+            matching k1, k2. 
+        z : float or jnp.ndarray
             Redshift grid.
         profile1 : HaloProfile
             Halo profile at wavenumber k1.
@@ -993,12 +990,12 @@ class Tk:
         Parameters
         ----------
         halo_model : HaloModel
-        k_u, k_v : float or array-like
+        k_u, k_v : float or jnp.ndarray
             Independent wavenumber grids of the parallelogram
             configuration, in :math:`\\mathrm{Mpc}^{-1}`. Need not be the
             same length; the two are broadcast into an (N_u, N_v) grid,
             one trispectrum value per combination.
-        z : array-like
+        z : float or jnp.ndarray
             Redshift grid.
         profile1 : HaloProfile
             First profile at wavenumber ``k_u`` (the :math:`u_1` leg).
@@ -1102,12 +1099,12 @@ class Tk:
         Parameters
         ----------
         halo_model : HaloModel
-        k_u, k_v : float or array-like
+        k_u, k_v : float or jnp.ndarray
             Independent wavenumber grids of the parallelogram
             configuration, in :math:`\\mathrm{Mpc}^{-1}`. Need not be the
             same length -- the two are broadcast into an (N_u, N_v) grid,
             one trispectrum value per combination.
-        z : array-like
+        z : float or jnp.ndarray
             Redshift grid.
         profile1 : HaloProfile
             First profile at wavenumber ``k_u``.
@@ -1227,12 +1224,12 @@ class Tk:
         Parameters
         ----------
         halo_model : HaloModel
-        k_u, k_v : float or array-like
+        k_u, k_v : float or jnp.ndarray
             Independent wavenumber grids of the parallelogram
             configuration, in :math:`\\mathrm{Mpc}^{-1}`. Need not be the
             same length -- the two are broadcast into an (N_u, N_v) grid,
             one trispectrum value per combination.
-        z : array-like
+        z : float or jnp.ndarray
             Redshift grid.
         profile1 : HaloProfile
             First profile at wavenumber ``k_u``.
@@ -1325,12 +1322,12 @@ class Tk:
         Parameters
         ----------
         halo_model : HaloModel
-        k_u, k_v : float or array-like
+        k_u, k_v : float or jnp.ndarray
             Independent wavenumber grids of the parallelogram
             configuration, in :math:`\\mathrm{Mpc}^{-1}`. Need not be the
             same length -- the two are broadcast into an (N_u, N_v) grid,
             one trispectrum value per combination.
-        z : array-like
+        z : float or jnp.ndarray
             Redshift grid.
         profile1 : HaloProfile
             First profile at wavenumber ``k_u``.

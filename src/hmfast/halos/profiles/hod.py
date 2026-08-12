@@ -157,9 +157,9 @@ class Z07GalaxyHODProfile(GalaxyHODProfile):
         ----------
         halo_model : HaloModel
             The parent halo model instance.
-        m : array-like
+        m : float or jnp.ndarray
             Halo mass in physical :math:`M_{\\odot}`.
-    
+
         Returns
         -------
         n_cen : array-like
@@ -181,9 +181,9 @@ class Z07GalaxyHODProfile(GalaxyHODProfile):
         ----------
         halo_model : HaloModel
             The parent halo model instance.
-        m : array-like
+        m : float or jnp.ndarray
             Halo mass in physical :math:`M_{\\odot}`.
-    
+
         Returns
         -------
         n_sat : array-like
@@ -204,7 +204,7 @@ class Z07GalaxyHODProfile(GalaxyHODProfile):
         ----------
         halo_model : HaloModel
             The parent halo model instance.
-        z : array-like
+        z : float or jnp.ndarray
             Redshift grid.
 
         Returns
@@ -236,7 +236,7 @@ class Z07GalaxyHODProfile(GalaxyHODProfile):
         ----------
         halo_model : HaloModel
             The parent halo model instance.
-        z : array-like
+        z : float or jnp.ndarray
             Redshift grid.
 
         Returns
@@ -307,11 +307,11 @@ class Z07GalaxyHODProfile(GalaxyHODProfile):
         ----------
         halo_model : HaloModel
             The parent halo model instance.
-        k : array-like
+        k : float or jnp.ndarray
             Wavenumber grid in :math:`\\mathrm{Mpc}^{-1}`.
-        m : array-like
+        m : float or jnp.ndarray
             Halo mass grid in physical :math:`M_{\\odot}`.
-        z : array-like
+        z : float or jnp.ndarray
             Redshift grid.
 
         Returns
