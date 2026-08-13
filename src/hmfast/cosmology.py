@@ -3,6 +3,7 @@ import jax
 import jax.numpy as jnp
 import jax.scipy as jscipy
 from typing import Dict, Union
+import mcfit
 from mcfit import TophatVar
 from hmfast.emulator_load import EmulatorLoader, EmulatorLoaderPCA
 from hmfast.download import _get_default_data_path
@@ -108,6 +109,10 @@ class Cosmology:
             for key in ("S8Z", "HZ", "DAZ", "PKL", "PKNL", "DER"):
                 self._load_emulator(key)
         self._tophat_instance = partial(TophatVar(self._pk_grid()[0], lowring=True, backend='jax'), extrap=True)
+        # Same as TophatVar above, but dim=2 (disc window) instead of dim=3 (sphere); used by `sigma2_b_disc`.
+        _disc_var = mcfit.mcfit(self._pk_grid()[0], mcfit.kernels.Mellin_TophatSq(2), q=1.5, lowring=True, backend='jax')
+        _disc_var.prefac *= _disc_var.x**2 / (2.0 * jnp.pi)
+        self._disc_var_instance = partial(_disc_var, extrap=True)
 
         # Cosmological params (leaves) to be changed without recompiling jit
         self.H0, self.omega_cdm, self.omega_b, self.A_s, self.n_s, self.tau = H0, omega_cdm, omega_b, A_s, n_s, tau
@@ -129,13 +134,13 @@ class Cosmology:
             self.T_cmb, self.deg_ncdm
         )
         # 2. Aux data: Static metadata and cached helper objects.
-        aux_data = (self.emulator_set, self.extrapolate_z, self._emu, self._tophat_instance)
+        aux_data = (self.emulator_set, self.extrapolate_z, self._emu, self._tophat_instance, self._disc_var_instance)
         return (children, aux_data)
 
     @classmethod
     def _tree_unflatten(cls, aux_data, children):
         # Reconstruct using the static metadata
-        emulator_set, extrapolate_z, _emu, _tophat_instance = aux_data
+        emulator_set, extrapolate_z, _emu, _tophat_instance, _disc_var_instance = aux_data
 
         # We bypass __init__ to avoid re-triggering the Loader logic
         obj = cls.__new__(cls)
@@ -143,7 +148,8 @@ class Cosmology:
         obj.extrapolate_z = extrapolate_z
         obj._emu = _emu
         obj._tophat_instance = _tophat_instance
-        
+        obj._disc_var_instance = _disc_var_instance
+
         # Assign the 15 parameter children to the object
         (obj.H0, obj.omega_cdm, obj.omega_b, obj.A_s, obj.n_s, obj.tau,
          obj.m_ncdm, obj.N_ur, obj.w0, 
@@ -189,8 +195,8 @@ class Cosmology:
         # Only update values that are not None
         new_leaves = [v if v is not None else old for v, old in zip(values, leaves)]
         if extrapolate_z is not None:
-            emulator_set, _, _emu, _tophat_instance = aux_data
-            aux_data = (emulator_set, extrapolate_z, _emu, _tophat_instance)
+            emulator_set, _, _emu, _tophat_instance, _disc_var_instance = aux_data
+            aux_data = (emulator_set, extrapolate_z, _emu, _tophat_instance, _disc_var_instance)
         return self._tree_unflatten(aux_data, new_leaves)
             
     # ------------------------------------------------------------------
@@ -439,6 +445,55 @@ class Cosmology:
         m = 4.0 * jnp.pi / 3.0 * rho_mean_0 * r**3
 
         return self.sigma_m(m, z)
+
+
+    @partial(jax.jit, static_argnums=(0,))
+    def sigma2_b_disc(self, z, f_sky=1.0):
+        """
+        Variance of the projected linear density field over a circular
+        disc covering a sky fraction :math:`f_{\\rm sky}`, as a function of
+        redshift -- the super-sample variance entering
+        :meth:`hmfast.stats.Tk.covariance_ssc`.
+
+        .. math::
+
+            \\sigma_B^2(z) = \\int_0^\\infty \\frac{k\\,dk}{2\\pi}\\,
+            P_{\\mathrm{L}}(k, z)\\, \\left[\\frac{2 J_1(kR(z))}{kR(z)}\\right]^2,
+
+        where :math:`R(z) = \\chi(z)\\arccos(1 - 2f_{\\rm sky})` is the
+        comoving transverse radius subtended by a circular footprint of
+        solid angle :math:`4\\pi f_{\\rm sky}`. Uses the same FFTLog
+        machinery (via ``mcfit``) as :meth:`_compute_sigma_grid`, just with
+        the 2D projected disc window in place of the 3D spherical top-hat.
+
+        Parameters
+        ----------
+        z : float or jnp.ndarray
+            Redshift(s).
+        f_sky : float, default 1.0
+            Observed sky fraction.
+
+        Returns
+        -------
+        float or jnp.ndarray
+            :math:`\\sigma_B^2(z)`, with shape matching ``z`` (squeezed if
+            scalar).
+        """
+        z_arr = jnp.atleast_1d(z)
+        k_grid, _ = self._pk_grid()
+        pk_grid = jnp.reshape(self.pk(k_grid, z_arr, linear=True), (len(k_grid), len(z_arr)))
+
+        R_grid, var_grid = jax.vmap(self._disc_var_instance, in_axes=1, out_axes=(0, 0))(pk_grid)
+        R_grid = R_grid[0]  # same R grid for every z -- only depends on k_grid
+
+        chi = self.angular_diameter_distance(z_arr) * (1.0 + z_arr)
+        R_target = chi * jnp.arccos(1.0 - 2.0 * f_sky)
+
+        ln_var = jax.vmap(
+            lambda r_i, var_i: jnp.interp(jnp.log(r_i), jnp.log(R_grid), jnp.log(var_i))
+        )(R_target, var_grid)
+
+        return jnp.squeeze(jnp.exp(ln_var))
 
 
     # ------------------------------------------------------------------
@@ -835,8 +890,8 @@ class Cosmology:
         D_grid = self.growth_factor(z_grid_pk)
         a_grid = 1.0 / (1.0 + z_grid_pk)
         f_grid = jnp.gradient(jnp.log(D_grid), jnp.log(a_grid))
-        
-        return jnp.squeeze(jnp.interp(z, z_grid_pk, f_grid))
+
+        return jnp.squeeze(jnp.interp(z, z_grid_pk, f_grid, left=jnp.nan, right=jnp.nan))
 
     @jax.jit
     def velocity_dispersion(self, z):
@@ -877,8 +932,8 @@ class Cosmology:
         W_grid = f_grid * a_grid * H_grid / c_km_s
         integrand = (W_grid[:, None]**2 / 3) * P_grid * k_grid / (2 * jnp.pi**2)
         velocity_dispersion_grid = jax.scipy.integrate.trapezoid(integrand, x=jnp.log(k_grid), axis=1)
-    
-        return jnp.squeeze(jnp.interp(z, z_grid_pk, velocity_dispersion_grid))
+
+        return jnp.squeeze(jnp.interp(z, z_grid_pk, velocity_dispersion_grid, left=jnp.nan, right=jnp.nan))
 
     @jax.jit
     def comoving_volume_element(self, z):
