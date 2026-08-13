@@ -16,11 +16,14 @@ class kSZTracer(Tracer):
     ----------
     profile : DensityProfile
         Electron density profile used to model the kinetic Sunyaev-Zeldovich signal.
+    z_max : float
+        Maximum redshift up to which the kernel has support.
     """
     _required_profile_type = DensityProfile
-    
-    def __init__(self, profile=None):
+
+    def __init__(self, profile=None, z_max=6.0):
         super().__init__(profile=profile or B16DensityProfile())
+        self.z_max = z_max
 
 
     # ---------------- Start JAX PyTree Registration ---------------- #
@@ -28,17 +31,19 @@ class kSZTracer(Tracer):
     def _tree_flatten(self):
         # The profile is the leaf. JAX will drill down into the profile's leaves.
         leaves = (self.profile,)
-        aux_data = None 
+        aux_data = (self.z_max,)
         return (leaves, aux_data)
 
     @classmethod
     def _tree_unflatten(cls, aux_data, leaves):
         profile, = leaves
+        z_max, = aux_data
         obj = cls.__new__(cls)
         obj.profile = profile
+        obj.z_max = z_max
         return obj
 
-    def update(self, profile=None):
+    def update(self, profile=None, z_max=None):
         """
         Return a new kSZTracer instance with updated attributes using PyTree logic.
 
@@ -46,6 +51,8 @@ class kSZTracer(Tracer):
         ----------
         profile : DensityProfile, optional
             New density profile to use for the tracer. If None, the profile is unchanged.
+        z_max : float, optional
+            New maximum redshift for the kernel. If None, z_max is unchanged.
 
         Returns
         -------
@@ -54,7 +61,8 @@ class kSZTracer(Tracer):
         """
         flat, aux = self._tree_flatten()
         new_profile = profile if profile is not None else flat[0]
-        return self._tree_unflatten(aux, (new_profile,))
+        new_z_max = z_max if z_max is not None else aux[0]
+        return self._tree_unflatten((new_z_max,), (new_profile,))
 
 
     # ---------------- End JAX PyTree Registration ---------------- #
@@ -70,6 +78,8 @@ class kSZTracer(Tracer):
 
             W_{\\mathrm{kSZ}}(\\chi) = \\frac{\\sigma_T}{m_p}
             \\frac{v_{\\mathrm{rms}}(z)}{1+z}
+
+        for :math:`z \\leq z_{\\max}`, and zero otherwise.
 
         where :math:`\\sigma_T` is the Thomson cross-section, :math:`m_p` is
         the proton mass, and :math:`z` is the redshift. The velocity dispersion
@@ -92,7 +102,8 @@ class kSZTracer(Tracer):
         sigma_T_over_m_p = (Const._sigma_T_ / Const._m_p_) / Const._Mpc_over_m_**2 * Const._M_sun_ / mu_e
         z = jnp.atleast_1d(z)
         velocity_dispersion = jnp.sqrt(cosmology.velocity_dispersion(z))
-        return sigma_T_over_m_p * velocity_dispersion / (1.0 + z)
+        W = sigma_T_over_m_p * velocity_dispersion / (1.0 + z)
+        return jnp.where(z <= self.z_max, W, 0.0)
 
 
 

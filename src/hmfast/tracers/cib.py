@@ -16,28 +16,33 @@ class CIBTracer(Tracer):
     ----------
     profile : CIBProfile
         Infrared emissivity profile used to model the cosmic infrared background signal.
+    z_max : float
+        Maximum redshift up to which the kernel has support.
     """
 
     _required_profile_type = CIBProfile
-    
-    def __init__(self, profile=None):
+
+    def __init__(self, profile=None, z_max=6.0):
         super().__init__(profile=profile or S12CIBProfile(nu=100))
-        
+        self.z_max = z_max
+
     # --- JAX PyTree Registration ---
     def _tree_flatten(self):
         # The Tracer's only dynamic component is the Profile PyTree
         leaves = (self.profile,)
-        aux_data = None 
+        aux_data = (self.z_max,)
         return (leaves, aux_data)
 
     @classmethod
     def _tree_unflatten(cls, aux_data, leaves):
         profile, = leaves
+        z_max, = aux_data
         obj = cls.__new__(cls)
         obj.profile = profile
+        obj.z_max = z_max
         return obj
 
-    def update(self, profile=None):
+    def update(self, profile=None, z_max=None):
         """
         Return a new CIBTracer instance with updated attributes using PyTree logic.
 
@@ -45,6 +50,8 @@ class CIBTracer(Tracer):
         ----------
         profile : CIBProfile, optional
             New CIB profile to use for the tracer. If None, the profile is unchanged.
+        z_max : float, optional
+            New maximum redshift for the kernel. If None, z_max is unchanged.
 
         Returns
         -------
@@ -54,8 +61,10 @@ class CIBTracer(Tracer):
         flat, aux = self._tree_flatten()
         if profile is not None:
             flat = (profile,)
+        if z_max is not None:
+            aux = (z_max,)
         return self._tree_unflatten(aux, flat)
-    
+
     def kernel(self, cosmology, z):
         """
         Compute the CIB kernel :math:`W_{\\mathrm{CIB}}(\\chi)` at redshift :math:`z`.
@@ -65,6 +74,8 @@ class CIBTracer(Tracer):
         .. math::
 
             W_{\\mathrm{CIB}}(\\chi) = \\frac{1}{1+z}
+
+        for :math:`z \\leq z_{\\max}`, and zero otherwise.
 
         Parameters
         ----------
@@ -79,7 +90,8 @@ class CIBTracer(Tracer):
             CIB kernel evaluated at redshift(s) :math:`z`.
         """
         z = jnp.atleast_1d(z)
-        return 1.0 / (1.0 + z)
+        W = 1.0 / (1.0 + z)
+        return jnp.where(z <= self.z_max, W, 0.0)
 
 
 jax.tree_util.register_pytree_node(
