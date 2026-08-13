@@ -55,6 +55,110 @@ def newton_root(f, x0, tol=1e-8, max_iter=25):
     return lax.custom_root(f, x0, solve, tangent_solve=tangent_solve)
 
 
+# Dormand-Prince (DOPRI5) Butcher tableau -- order 5, embedded order-4 error estimate.
+_DOPRI5_C = (1 / 5, 3 / 10, 4 / 5, 8 / 9, 1.0)
+_DOPRI5_A = (
+    (1 / 5,),
+    (3 / 40, 9 / 40),
+    (44 / 45, -56 / 15, 32 / 9),
+    (19372 / 6561, -25360 / 2187, 64448 / 6561, -212 / 729),
+    (9017 / 3168, -355 / 33, 46732 / 5247, 49 / 176, -5103 / 18656),
+)
+_DOPRI5_B5 = (35 / 384, 0.0, 500 / 1113, 125 / 192, -2187 / 6784, 11 / 84)
+_DOPRI5_B4 = (5179 / 57600, 0.0, 7571 / 16695, 393 / 640, -92097 / 339200, 187 / 2100, 1 / 40)
+
+
+def dopri5_integrate(rhs, y0, x_start, x_max, rtol=1e-6, atol=1e-9, max_steps=200, max_h=None):
+    """
+    Adaptive-step embedded Dormand-Prince (order 5(4)) integration of
+    dy/dx = rhs(x, y), y(x_start) = y0, from x_start to x_max.
+
+    Every proposed step is accepted unconditionally; its embedded 4th-order
+    error estimate is used only to size the *next* step to (rtol, atol).
+    Runs inside a fixed-length ``lax.scan`` of ``max_steps`` proposals so it
+    stays reverse-mode differentiable -- once x reaches x_max, remaining
+    proposals are frozen (zero-length), so max_steps is a safety cap on
+    resolution, not an accuracy control; rtol/atol control accuracy.
+
+    Parameters
+    ----------
+    rhs : callable
+        Right-hand side ``rhs(x, y) -> dy/dx``. ``y`` and its return
+        value may be arbitrary JAX pytrees of matching structure.
+    y0 : pytree
+        Initial state at ``x_start``.
+    x_start, x_max : float
+        Integration bounds (``x_max`` may be less than ``x_start`` to
+        integrate backward).
+    rtol, atol : float
+        Relative/absolute error tolerance used for step-size control.
+    max_steps : int
+        Static upper bound on the number of proposed steps; must be large
+        enough that x reaches x_max well before it is exhausted.
+    max_h : float or None
+        Optional ceiling on the step size. The tolerance-driven step size
+        can otherwise grow large enough on a smooth problem that the
+        returned trajectory is too sparse to safely interpolate between
+        nodes for callers reading off *interior* points, not just
+        ``x_traj[-1]``; set this to bound node spacing for such callers.
+
+    Returns
+    -------
+    x_traj : jnp.ndarray
+        Up to ``max_steps + 1`` integration nodes, including ``x_start``;
+        nodes after convergence repeat ``x_max``.
+    y_traj : pytree
+        State trajectory at each node in ``x_traj``, same pytree structure
+        as ``y0`` with a leading axis of length ``max_steps + 1`` on every leaf.
+    """
+    direction = jnp.sign(x_max - x_start)
+    h0 = (x_max - x_start) / max_steps
+    if max_h is not None:
+        h0 = direction * jnp.minimum(jnp.abs(h0), max_h)
+
+    def combine(y, h, coeffs, ks):
+        return jax.tree_util.tree_map(
+            lambda y_leaf, *k_leaves: y_leaf + h * sum(c * k for c, k in zip(coeffs, k_leaves)),
+            y, *ks,
+        )
+
+    def rms_norm(tree):
+        leaves = jax.tree_util.tree_leaves(tree)
+        mean_sq = sum(jnp.sum(l ** 2) for l in leaves) / sum(l.size for l in leaves)
+        return jnp.sqrt(mean_sq + 1e-300)  # avoid sqrt's singular grad at exactly 0
+
+    def step(carry, _):
+        x, y, h = carry
+        remaining = x_max - x
+        done = direction * remaining <= 0
+        h_eff = jnp.where(done, 0.0, jnp.where(jnp.abs(h) > jnp.abs(remaining), remaining, h))
+
+        ks = [rhs(x, y)]
+        for a_row, c in zip(_DOPRI5_A, _DOPRI5_C):
+            ks.append(rhs(x + c * h_eff, combine(y, h_eff, a_row, ks)))
+        y5 = combine(y, h_eff, _DOPRI5_B5, ks)
+        k7 = rhs(x + h_eff, y5)
+        y4 = combine(y, h_eff, _DOPRI5_B4, ks + [k7])
+
+        err_norm = rms_norm(jax.tree_util.tree_map(
+            lambda a, b, y5_leaf: (a - b) / (atol + rtol * jnp.abs(y5_leaf)), y5, y4, y5
+        ))
+        factor = jnp.clip(0.9 * err_norm ** (-0.2), 0.2, 5.0)
+        h_prop = h * factor
+        if max_h is not None:
+            h_prop = direction * jnp.minimum(jnp.abs(h_prop), max_h)
+        h_new = jnp.where(done, h, h_prop)
+        x_new = x + h_eff
+        return (x_new, y5, h_new), (x_new, y5)
+
+    _, (x_traj, y_traj) = lax.scan(step, (x_start, y0, h0), None, length=max_steps)
+    x_traj = jnp.concatenate([jnp.asarray([x_start]), x_traj])
+    y_traj = jax.tree_util.tree_map(
+        lambda leaf0, traj: jnp.concatenate([jnp.asarray(leaf0)[None], traj]), y0, y_traj
+    )
+    return x_traj, y_traj
+
+
 
 # Lambert W function. As of the writing of this comment, it is not yet implemented in JAX
 def _real_lambertw_recursion(w: jax.Array, x: jax.Array) -> jax.Array:

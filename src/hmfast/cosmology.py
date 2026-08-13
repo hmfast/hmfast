@@ -6,7 +6,7 @@ from typing import Dict, Union
 from mcfit import TophatVar
 from hmfast.emulator_load import EmulatorLoader, EmulatorLoaderPCA
 from hmfast.download import _get_default_data_path
-from hmfast.utils import Const, log_interp1d_extrap
+from hmfast.utils import Const, log_interp1d_extrap, dopri5_integrate
 from functools import partial
 
 jax.config.update("jax_enable_x64", True)
@@ -81,10 +81,7 @@ class Cosmology:
         Degeneracy factor for the non-cold dark matter species, used if a massive-neutrino cosmological model is selected.
     extrapolate_z : bool
         If True, redshifts above the emulators' trained maximum are
-        extrapolated (in :meth:`hubble_parameter`, :meth:`angular_diameter_distance`,
-        :meth:`growth_factor`, and :meth:`pk`) using a closed-form
-        flat-FLRW background and growth ODE, calibrated to agree exactly
-        with the emulators at that boundary. Less accurate for early dark
+        extrapolated. This is less accurate for early dark
         energy models, and for masses/neutrino content where the
         non-relativistic approximation for massive neutrinos breaks down
         before then.
@@ -166,10 +163,7 @@ class Cosmology:
         Parameters
         ----------
         H0, omega_cdm, omega_b, A_s, n_s, tau, m_ncdm, N_ur, w0, f_ede, z_c, theta_i, r, T_cmb, deg_ncdm : float or None
-            Cosmological parameters to update. In particular,
-            :math:`\\tau` is the optical depth to reionization and
-            :math:`\\theta_i` is the initial early-dark-energy scalar
-            field displacement.
+            Cosmological parameters to update. 
         extrapolate_z : bool or None
             If not None, replaces :attr:`extrapolate_z`.
 
@@ -398,10 +392,7 @@ class Cosmology:
         z = jnp.atleast_1d(z)
 
         ln_x_grid, ln_M_grid, sigma_grid = self._compute_sigma_grid()
-        sigma_interp = jscipy.interpolate.RegularGridInterpolator(
-            (ln_x_grid, ln_M_grid),
-            jnp.log(sigma_grid),
-        )
+        sigma_interp = jscipy.interpolate.RegularGridInterpolator((ln_x_grid, ln_M_grid), jnp.log(sigma_grid))
 
         mm, zz = jnp.meshgrid(m, z, indexing='ij')
         pts = jnp.stack([jnp.log1p(zz), jnp.log(mm)], axis=-1)
@@ -463,35 +454,19 @@ class Cosmology:
     # ------------------------------------------------------------------
     # Cosmology
     # ------------------------------------------------------------------
-    def _hz_flrw(self, z):
-        """
-        Closed-form flat-FLRW :math:`H(z)`, from the species decomposition
-        in :meth:`_cosmo_params`. Only used to extend :meth:`hubble_parameter`
-        past the emulator's trained z-range: treats massive neutrinos as
-        non-relativistic matter at all z and ignores exotic components
-        such as early dark energy, so it is not accurate on its own --
-        see :meth:`hubble_parameter` for how it is calibrated against the
-        emulator before use.
-        """
-        p = self._cosmo_params()
-        zp1 = 1.0 + z
-        return self.H0 * jnp.sqrt(
-            (p['Omega0_m_nonu'] + p['Omega0_ncdm']) * zp1 ** 3
-            + p['Omega0_r'] * zp1 ** 4
-            + p['Omega_Lambda'] * zp1 ** (3.0 * (1.0 + self.w0))
-        )
-
-    def _hz_extension_correction(self, z_max):
-        """
-        Scalar rescaling so :meth:`_hz_flrw` agrees exactly with the
-        emulator's :math:`H(z_{\\max})`, used to calibrate the analytic
-        extension in both :meth:`hubble_parameter` and
-        :meth:`angular_diameter_distance`.
-        """
-        # Force the non-extrapolated path for this boundary-anchor call --
-        # otherwise, with self.extrapolate_z True, jnp.where's eager
-        # evaluation of both branches would recurse into this same method.
-        return (self.update(extrapolate_z=False).hubble_parameter(z_max) / self._hz_flrw(z_max)) ** 2
+    def _hz_flrw_calibrated(self, z_max):
+        """Closed-form flat-FLRW H(z), rescaled to match the emulator's H(z_max) exactly."""
+        def hz_flrw(z):
+            p = self._cosmo_params()
+            zp1 = 1.0 + z
+            return self.H0 * jnp.sqrt(
+                (p['Omega0_m_nonu'] + p['Omega0_ncdm']) * zp1 ** 3
+                + p['Omega0_r'] * zp1 ** 4
+                + p['Omega_Lambda'] * zp1 ** (3.0 * (1.0 + self.w0))
+            )
+        # Force the non-extrapolated path to avoid recursing into this method via jnp.where's eager evaluation.
+        correction = (self.update(extrapolate_z=False).hubble_parameter(z_max) / hz_flrw(z_max)) ** 2
+        return lambda z: hz_flrw(z) * jnp.sqrt(correction)
 
     @jax.jit
     def hubble_parameter(self, z):
@@ -515,10 +490,9 @@ class Cosmology:
         Hz = self._interp_z(z, self._z_grid_bg(), preds)
 
         if self.extrapolate_z:
-            z_max = 20.0
+            z_max = self._z_grid_bg()[-1]
             z_arr = jnp.atleast_1d(z)
-            correction = self._hz_extension_correction(z_max)
-            Hz_analytic = self._hz_flrw(z_arr) * jnp.sqrt(correction)
+            Hz_analytic = self._hz_flrw_calibrated(z_max)(z_arr)
             Hz_arr = jnp.where(z_arr > z_max, Hz_analytic, jnp.atleast_1d(Hz))
             Hz = Hz_arr[0] if Hz_arr.shape[0] == 1 else Hz_arr
 
@@ -551,32 +525,24 @@ class Cosmology:
         DA = self._interp_z(z, self._z_grid_bg(), preds)
 
         if self.extrapolate_z:
-            z_max = 20.0
+            z_max = self._z_grid_bg()[-1]
             z_arr = jnp.atleast_1d(z)
-            correction = self._hz_extension_correction(z_max)
-            # Same recursion hazard as _hz_extension_correction -- force
-            # the non-extrapolated path for this boundary-anchor call.
+            # Same recursion hazard as _hz_flrw_calibrated -- force the non-extrapolated path for this boundary-anchor call.
             chi_max = self.update(extrapolate_z=False).angular_diameter_distance(z_max) * (1.0 + z_max)
 
-            # Sampling of the [z_max, z] segment for jnp.trapezoid, uniform in
-            # ln(1+z) rather than in z itself -- c/H(z') falls steeply just
-            # past z_max and flattens out by z >> z_max, so a fixed *linear*
-            # grid resolves that near-z_max curvature well only while z is
-            # within a factor of a few of z_max. Once z is orders of
-            # magnitude beyond z_max (e.g. z ~ 10^3 when extrapolating out to
-            # the CMB), a linear grid spends almost all its points on the
-            # flat tail and badly under-samples the curved part, so the
-            # integrated distance drifts (checked: at z ~ 1000 this drift is
-            # large enough to make chi(z) overshoot the DER emulator's own
-            # chi_star well before the true z_star, flipping the sign of the
-            # CMB lensing kernel). Sampling uniformly in ln(1+z) resolves the
-            # curvature at any target z and removes that drift.
-            n_grid = 64
-            t = jnp.linspace(0.0, 1.0, n_grid)
-            lnzp1 = jnp.log1p(z_max) + t[None, :] * (jnp.log1p(z_arr[:, None]) - jnp.log1p(z_max))
-            zq = jnp.expm1(lnzp1)  # (Nz, n_grid)
-            Hq = self._hz_flrw(zq) * jnp.sqrt(correction)
-            chi_ext = chi_max + jnp.trapezoid((Const._c_ / 1e3) / Hq, x=zq, axis=1)
+            Hz_fn = self._hz_flrw_calibrated(z_max)
+            x_max = jnp.log1p(z_max)
+
+            def dchi_dx(x, chi):
+                z = jnp.expm1(x)
+                return (Const._c_ / 1e3) * (1.0 + z) / Hz_fn(z)
+
+            # Integrate to each z independently -- a shared trajectory would be too sparse to interpolate safely.
+            def chi_at(z_target):
+                _, chi_traj = dopri5_integrate(dchi_dx, chi_max, x_max, jnp.log1p(z_target), rtol=1e-4, atol=1e-7, max_steps=16)
+                return chi_traj[-1]
+
+            chi_ext = jax.vmap(chi_at)(z_arr)
 
             DA_analytic = chi_ext / (1.0 + z_arr)
             DA_arr = jnp.where(z_arr > z_max, DA_analytic, jnp.atleast_1d(DA))
@@ -763,93 +729,43 @@ class Cosmology:
             f"{prescription!r}. Allowed values are: 'EdS', 'EdS_approx', 'NS97'."
         )
 
-    def _growth_ode_rhs(self, lna, f, correction):
-        """
-        Right-hand side of the linear growth equation, recast as a
-        first-order Riccati equation for the growth rate
-        :math:`f = d\\ln D/d\\ln a` in e-folding time
-        :math:`x = \\ln a`:
-
-        .. math::
-
-            \\frac{df}{dx} = -f^2 - \\left(2 + \\frac{d\\ln H}{dx}\\right) f
-            + \\frac{3}{2}\\Omega_m(a)
-
-        using the calibrated :meth:`_hz_flrw` background (``dlnH/dx`` via
-        autodiff). Returns ``(dlnD/dx, df/dx) = (f, df/dx)``, since
-        integrating ``f`` also gives :math:`\\ln D`. Only used by
-        :meth:`_growth_factor_ode` to extend :meth:`growth_factor` past the
-        emulator's trained z-range.
-        """
-        def ln_hz(x):
-            z = jnp.exp(-x) - 1.0
-            return jnp.log(self._hz_flrw(z)) + 0.5 * jnp.log(correction)
-
-        dlnH_dlna = jax.grad(ln_hz)(lna)
-
-        z = jnp.exp(-lna) - 1.0
-        p = self._cosmo_params()
-        Om0_m = p['Omega0_m_nonu'] + p['Omega0_ncdm']
-        Hz2 = self._hz_flrw(z) ** 2 * correction
-        Om_a = Om0_m * (1.0 + z) ** 3 * self.H0 ** 2 / Hz2
-
-        df_dx = -f ** 2 - (2.0 + dlnH_dlna) * f + 1.5 * Om_a
-        return f, df_dx
-
     def _growth_factor_ode(self, z, z_max):
         """
-        Extend the linear growth factor past ``z_max``.
-
-        Shooting the growth equation *backward* from a low-z boundary
-        condition is numerically unstable: the decaying mode (irrelevant
-        at low z) grows exponentially when integrated toward higher z.
-        Instead, integrate *forward* in e-folding time -- the stable
-        direction -- starting deep in matter domination (where the
-        growing-mode seed :math:`D\\propto a`, i.e. :math:`f=1`, is a good
-        approximation) down through every redshift of interest, using
-        fixed-step RK4 (via :meth:`_growth_ode_rhs`). The resulting
-        trajectory carries an arbitrary overall normalization, which is
-        fixed by rescaling to match the emulator's own (accurate)
-        :meth:`growth_factor` at ``z_max``; the requested redshifts are
-        then read off that single calibrated trajectory by interpolation.
-        Only called by :meth:`growth_factor` for the ``extrapolate_z``
-        branch.
+        Extend the linear growth factor past the emulator's ``z_max`` by integrating the
+        growth-rate Riccati equation forward (the numerically stable
+        direction) from a deep-matter-domination seed via
+        :func:`hmfast.utils.dopri5_integrate`, then calibrating the result to
+        :meth:`growth_factor` at ``z_max``.
         """
-        correction = self._hz_extension_correction(z_max)
+        Hz_fn = self._hz_flrw_calibrated(z_max)
         z_arr = jnp.atleast_1d(z)
 
-        # Start comfortably deeper in matter domination than any requested
-        # z (or z_max), so the D~a seed has room to relax onto the true
-        # growing mode well before reaching the redshifts we actually want.
+        # Seed well past any requested z so D~a has room to relax onto the growing mode.
         z_start = 4.0 * jnp.maximum(jnp.max(z_arr), z_max)
         x_start = jnp.log(1.0 / (1.0 + z_start))
         x_max = jnp.log(1.0 / (1.0 + z_max))
 
-        n_steps = 200
-        dx = (x_max - x_start) / n_steps
+        p = self._cosmo_params()
+        Om0_m = p['Omega0_m_nonu'] + p['Omega0_ncdm']
 
-        def rk4_step(carry, _):
-            lna, lnD, f = carry
-            k1D, k1f = self._growth_ode_rhs(lna, f, correction)
-            k2D, k2f = self._growth_ode_rhs(lna + 0.5 * dx, f + 0.5 * dx * k1f, correction)
-            k3D, k3f = self._growth_ode_rhs(lna + 0.5 * dx, f + 0.5 * dx * k2f, correction)
-            k4D, k4f = self._growth_ode_rhs(lna + dx, f + dx * k3f, correction)
-            lnD_new = lnD + (dx / 6.0) * (k1D + 2.0 * k2D + 2.0 * k3D + k4D)
-            f_new = f + (dx / 6.0) * (k1f + 2.0 * k2f + 2.0 * k3f + k4f)
-            lna_new = lna + dx
-            return (lna_new, lnD_new, f_new), (lna_new, lnD_new)
+        def ln_hubble(x):
+            return jnp.log(Hz_fn(jnp.expm1(-x)))
 
-        init = (x_start, jnp.array(0.0), jnp.array(1.0))  # D_seed=1 (arbitrary norm), f_seed=1
-        _, (lna_traj, lnD_traj) = jax.lax.scan(rk4_step, init, None, length=n_steps)
-        lna_traj = jnp.concatenate([jnp.array([x_start]), lna_traj])
-        lnD_traj = jnp.concatenate([jnp.array([0.0]), lnD_traj])
+        def growth_rhs(x, y):
+            _, f = y
+            dlnH_dx = jax.grad(ln_hubble)(x)
+            z = jnp.expm1(-x)
+            Om_a = Om0_m * (1.0 + z) ** 3 * self.H0 ** 2 / Hz_fn(z) ** 2
+            return f, -f ** 2 - (2.0 + dlnH_dx) * f + 1.5 * Om_a
 
-        # Boundary-anchor call -- force the non-extrapolated path (same
-        # recursion hazard as _hz_extension_correction).
-        norm = jnp.log(self.update(extrapolate_z=False).growth_factor(z_max)) - jnp.interp(x_max, lna_traj, lnD_traj)
+        # D_seed=1 (arbitrary norm), f_seed=1; max_h caps node spacing so batched interior queries interpolate safely.
+        x_traj, (lnD_traj, _) = dopri5_integrate(growth_rhs, (jnp.array(0.0), jnp.array(1.0)), x_start, x_max, rtol=1e-4, atol=1e-7, max_steps=64, max_h=0.3)
+
+        # Force the non-extrapolated path to avoid recursing back into this method.
+        norm = jnp.log(self.update(extrapolate_z=False).growth_factor(z_max)) - jnp.interp(x_max, x_traj, lnD_traj)
 
         x_target = jnp.log(1.0 / (1.0 + z_arr))
-        lnD_target = jnp.interp(x_target, lna_traj, lnD_traj) + norm
+        lnD_target = jnp.interp(x_target, x_traj, lnD_traj) + norm
         return jnp.exp(lnD_target)
 
     @jax.jit
@@ -872,10 +788,7 @@ class Cosmology:
 
         z = jnp.atleast_1d(z)
 
-        # These pk() calls are always over the in-bounds z_grid_pk, but
-        # must bypass self.extrapolate_z regardless -- jnp.where's eager
-        # evaluation below would otherwise recurse back into this method
-        # via pk()'s own extrapolation branch.
+        # These pk() calls must bypass self.extrapolate_z to avoid recursing back into this method via pk()'s own extrapolation branch.
         strict = self.update(extrapolate_z=False)
         k0 = 1e-2
         z_grid_pk = self._z_grid_pk()
@@ -887,7 +800,7 @@ class Cosmology:
         D = jnp.interp(z, z_grid_pk, D_grid)
 
         if self.extrapolate_z:
-            z_max = jnp.where(self.emulator_set == "ede:v2", 20.0, 5.0)
+            z_max = self._z_grid_pk()[-1]
             D_ext = self._growth_factor_ode(z, z_max)
             D = jnp.where(z > z_max, D_ext, D)
 
@@ -1026,12 +939,9 @@ class Cosmology:
         z = jnp.atleast_1d(z)
 
         if self.extrapolate_z:
-            z_max = jnp.where(self.emulator_set == "ede:v2", 20.0, 5.0)
+            z_max = self._z_grid_pk()[-1]
             in_bounds = z <= z_max
-            growth_ratio_sq = jnp.where(
-                in_bounds, 1.0,
-                (self.growth_factor(z) / self.growth_factor(z_max)) ** 2,
-            )
+            growth_ratio_sq = jnp.where(in_bounds, 1.0, (self.growth_factor(z) / self.growth_factor(z_max)) ** 2)
             z = jnp.where(in_bounds, z, z_max)
 
         params_base = self._to_dict()
