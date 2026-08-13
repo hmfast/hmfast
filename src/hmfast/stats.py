@@ -574,15 +574,24 @@ class Pk:
         hm = halo_model
         tracer2 = tracer1 if tracer2 is None else tracer2
 
+        # Beyond z_b, freeze pk_1h at z_b and rescale by the growth ratio, as Cosmology.pk() does.
+        z_b = hm.cosmology._z_grid_pk()[-1]
+        in_bounds = z <= z_b
+        growth_ratio_sq = jnp.where(
+            in_bounds, 1.0,
+            (hm.cosmology.growth_factor(z) / hm.cosmology.growth_factor(z_b)) ** 2
+        )
+        z_eval = jnp.where(in_bounds, z, z_b)
+
         # Define the slice function to map l -> k for a specific z
-        def get_pk_slice(zi):
+        def get_pk_slice(zi, zi_eval):
             chi_i = hm.cosmology.angular_diameter_distance(zi) * (1 + zi)
             ki = (l + 0.5) / chi_i
-            pk = self.pk_1h(hm, k=ki, z=jnp.atleast_1d(zi), profile1=tracer1.profile, profile2=tracer2.profile, k_damp=k_damp)
+            pk = self.pk_1h(hm, k=ki, z=jnp.atleast_1d(zi_eval), profile1=tracer1.profile, profile2=tracer2.profile, k_damp=k_damp)
             return pk.flatten()
 
         # Get the halo model pk_1h, the kernels, and the Limber weight c/(H chi^2)
-        P_1h_grid = jax.vmap(get_pk_slice)(z)
+        P_1h_grid = jax.vmap(get_pk_slice)(z, z_eval) * growth_ratio_sq[:, None]
         kernel1 = tracer1.kernel(hm.cosmology, z)
         kernel2 = tracer2.kernel(hm.cosmology, z)
         chi = hm.cosmology.angular_diameter_distance(z) * (1.0 + z)
@@ -625,15 +634,24 @@ class Pk:
         hm = halo_model
         tracer2 = tracer1 if tracer2 is None else tracer2
 
+        # Beyond z_b, freeze pk_2h at z_b and rescale by the growth ratio, as Cosmology.pk() does.
+        z_b = hm.cosmology._z_grid_pk()[-1]
+        in_bounds = z <= z_b
+        growth_ratio_sq = jnp.where(
+            in_bounds, 1.0,
+            (hm.cosmology.growth_factor(z) / hm.cosmology.growth_factor(z_b)) ** 2
+        )
+        z_eval = jnp.where(in_bounds, z, z_b)
+
         # Define the slice function for Limber integration
-        def get_pk_slice(zi):
+        def get_pk_slice(zi, zi_eval):
             # Map l to k using the Limber approximation and then get the pk_2h
             chi_i = hm.cosmology.angular_diameter_distance(zi) * (1 + zi)
             ki = (l + 0.5) / chi_i
-            return self.pk_2h(hm, k=ki, z=jnp.atleast_1d(zi), profile1=tracer1.profile, profile2=tracer2.profile).flatten()
+            return self.pk_2h(hm, k=ki, z=jnp.atleast_1d(zi_eval), profile1=tracer1.profile, profile2=tracer2.profile).flatten()
 
         # Map over redshift to get P(k=l/chi, z)
-        P_2h_grid = jax.vmap(get_pk_slice)(z)
+        P_2h_grid = jax.vmap(get_pk_slice)(z, z_eval) * growth_ratio_sq[:, None]
 
         # Get individual kernels and the Limber weight c/(H chi^2)
         kernel1 = tracer1.kernel(hm.cosmology, z)

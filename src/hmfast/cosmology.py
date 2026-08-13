@@ -411,6 +411,7 @@ class Cosmology:
 
             \\sigma^2(R, z) = \\frac{1}{2\\pi^2} \\int_0^\\infty dk\, k^2\,
             P_{\\mathrm{L}}(k, z)\, \\hat{W}^2(kR),
+
         with Fourier-space top-hat window
 
         .. math::
