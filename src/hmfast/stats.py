@@ -93,16 +93,17 @@ def _X3(k, kp):
 # Shared across Bk and Tk (not tied to either class's state), so kept at
 # module level rather than duplicated as a private method on each.
 
-def _pair_integral(halo_model, p1, p2, k1, k2, z, outer=False):
+def _pair_integral(halo_model, p1, p2, k1, k2, z, outer=False, bias_order=1):
     """
-    ∫ dn/dlnM * b1(M) * p1.fourier(k1,M,z) * p2.fourier(k2,M,z) dlnM
+    ∫ dn/dlnM * b_beta(M) * p1.fourier(k1,M,z) * p2.fourier(k2,M,z) dlnM
 
-    Pair integral with first-order halo bias included.
-    Used as a building block for ``Bk.bk_2h`` (``outer=False``: ``k1``
-    and ``k2`` share a single batch axis, paired elementwise across a set
-    of triangles) and the halo-model trispectrum's 2h/3h terms
-    (``outer=True``: ``k1`` and ``k2`` are independent and broadcast into
-    an (N1, N2) grid).
+    Pair integral with halo bias of order ``beta = bias_order`` included
+    (``0``: unweighted, ``1``: linear bias -- the default, matching every
+    existing caller below, which all omit the argument). Used as a building
+    block for ``Bk.bk_2h`` (``outer=False``: ``k1`` and ``k2`` share a single
+    batch axis, paired elementwise across a set of triangles) and the
+    halo-model trispectrum's 2h/3h terms (``outer=True``: ``k1`` and ``k2``
+    are independent and broadcast into an (N1, N2) grid).
 
     Future generalisation: replace ``u1 * u2`` with a ``_fourier_2pt``
     variant that handles different k values when specialised 2-point kernels
@@ -126,31 +127,105 @@ def _pair_integral(halo_model, p1, p2, k1, k2, z, outer=False):
         hm.halo_mass_function.dndlnm(hm.cosmology, m, z_arr, hm.mass_def, hm.convert_masses),
         (len(m), len(z_arr)),
     )
-    bias_w = jnp.reshape(
-        hm.halo_bias.bias(hm.cosmology, m, z_arr, hm.mass_def, hm.convert_masses, order=1),
-        (len(m), len(z_arr)),
-    )
+    if bias_order == 0:
+        bias_w = jnp.ones((len(m), len(z_arr)))
+    else:
+        bias_w = jnp.reshape(
+            hm.halo_bias.bias(hm.cosmology, m, z_arr, hm.mass_def, hm.convert_masses, order=bias_order),
+            (len(m), len(z_arr)),
+        )
     total_weights = dndlnm * bias_w * w[:, None]  # (Nm, Nz)
 
     k1s, k2s = jnp.atleast_1d(k1), jnp.atleast_1d(k2)
     u1 = jnp.reshape(p1.fourier(hm, k1s, m, z_arr), (len(k1s), len(m), len(z_arr)))
     u2 = jnp.reshape(p2.fourier(hm, k2s, m, z_arr), (len(k2s), len(m), len(z_arr)))
 
-    n_min, b1_min, _ = hm._counter_terms(z_arr)
+    n_min, b1_min, b2_min = hm._counter_terms(z_arr)
+    b_min = {0: jnp.ones_like(b1_min), 1: b1_min, 2: b2_min}[bias_order]
 
     if outer:
         u1e = u1[:, None, :, :]  # (N1, 1, Nm, Nz)
         u2e = u2[None, :, :, :]  # (1, N2, Nm, Nz)
         integral = jnp.sum(u1e * u2e * total_weights[None, None, :, :], axis=2)  # (N1, N2, Nz)
         correction = (
-            n_min[None, None, :] * b1_min[None, None, :]
+            n_min[None, None, :] * b_min[None, None, :]
             * u1[:, None, 0, :] * u2[None, :, 0, :]
         )
         return integral + hm.hm_consistency * correction
 
     integral = jnp.sum(u1 * u2 * total_weights[None, :, :], axis=1)  # (Nk, Nz)
-    correction = n_min[None, :] * b1_min[None, :] * u1[:, 0, :] * u2[:, 0, :]
+    correction = n_min[None, :] * b_min[None, :] * u1[:, 0, :] * u2[:, 0, :]
     return jnp.squeeze(integral + hm.hm_consistency * correction)
+
+
+def _dPk_response(halo_model, k, z, profile1, profile2=None):
+    """
+    Halo-model power-spectrum response :math:`\\partial P_{u,v}(k,z) /
+    \\partial\\delta_b`, the effective "trispectrum" entering the
+    super-sample covariance (Wagner et al. 2015; Takada & Hu 2013):
+
+    .. math::
+
+        \\frac{\\partial P_{u,v}(k,z)}{\\partial\\delta_b} =
+        \\left(\\frac{47}{21} - \\frac{1}{3}\\frac{d\\ln P_{\\rm lin}}{d\\ln k}\\right)
+        P_{\\rm lin}(k,z)\\, I_1^1(k \\,|\\, u)\\, I_1^1(k \\,|\\, v)
+        + I_1^2(k \\,|\\, u, v)
+
+    where :math:`I_1^1` is the halo model's linearly-biased single-profile
+    mass integral (:meth:`~hmfast.halos.HaloModel._I` with
+    ``bias_order=1``) and :math:`I_1^2` is the equivalent paired-profile
+    integral (:func:`_pair_integral` with ``bias_order=1``, evaluated at
+    matching :math:`k` for both legs).
+
+    .. note::
+
+        This does not include the number-counts counter-term
+        (:math:`-(b_u+b_v)P_{u,v}`) that applies when :math:`u` or
+        :math:`v` represents a discrete number-counts observable (e.g.
+        galaxy clustering/HOD) rather than a continuous field -- not
+        needed for continuous-field tracers (matter, lensing, pressure).
+
+    Parameters
+    ----------
+    halo_model : HaloModel
+    k : float or jnp.ndarray
+        Wavenumber grid in :math:`\\mathrm{Mpc}^{-1}`.
+    z : float or jnp.ndarray
+        Redshift grid.
+    profile1 : HaloProfile
+        First profile (:math:`u`).
+    profile2 : HaloProfile or None, default None
+        Second profile (:math:`v`). If None, defaults to ``profile1``.
+
+    Returns
+    -------
+    array
+        Response with shape :math:`(N_k, N_z)`, where singleton dimensions
+        are squeezed before return.
+    """
+    hm = halo_model
+    profile2 = profile2 if profile2 is not None else profile1
+    k_arr, z_arr = jnp.atleast_1d(k), jnp.atleast_1d(z)
+    nk, nz = len(k_arr), len(z_arr)
+
+    i11_u = jnp.reshape(hm._I(profile1, k_arr, z_arr, bias_order=1), (nk, nz))
+    i11_v = jnp.reshape(hm._I(profile2, k_arr, z_arr, bias_order=1), (nk, nz))
+    i12_uv = jnp.reshape(
+        _pair_integral(hm, profile1, profile2, k_arr, k_arr, z_arr, outer=False, bias_order=1),
+        (nk, nz),
+    )
+    pk_lin = jnp.reshape(hm.cosmology.pk(k_arr, z_arr, linear=True), (nk, nz))
+
+    # dlnP/dlnk needs a properly resolved k grid -- a finite difference on a sparse query k_arr is inaccurate.
+    k_fine, _ = hm.cosmology._pk_grid()
+    pk_fine = jnp.reshape(hm.cosmology.pk(k_fine, z_arr, linear=True), (len(k_fine), nz))
+    dlnp_fine = jnp.gradient(jnp.log(pk_fine), jnp.log(k_fine), axis=0)
+    dlnp_dlnk = jax.vmap(
+        lambda dp: jnp.interp(jnp.log(k_arr), jnp.log(k_fine), dp), in_axes=1, out_axes=1
+    )(dlnp_fine)
+
+    response = (47.0 / 21.0 - dlnp_dlnk / 3.0) * pk_lin * i11_u * i11_v + i12_uv
+    return jnp.squeeze(response)
 
 
 def _triple_integral(halo_model, p_single, p_pair1, p_pair2, k_single, k_pair, z, outer=False):
@@ -1395,6 +1470,198 @@ class Tk:
         I4 = jnp.reshape(hm._I(profile4, k_v, z, bias_order=1), (1, nv, nz))
 
         return jnp.squeeze(T_pt * I1 * I2 * I3 * I4)
+
+    # ------------------------------------------------------------------
+    # Connected (non-Gaussian) angular power spectrum covariance
+    # ------------------------------------------------------------------
+
+    def covariance_cng(self, halo_model, tracer1, tracer2, tracer3, tracer4, l1, l2, z, f_sky=1.0):
+        """
+        Connected (non-Gaussian) covariance between two Limber-projected
+        angular power spectra :math:`C_{\\ell_1}^{12}` and
+        :math:`C_{\\ell_2}^{34}`, sourced by the halo-model trispectrum.
+
+        Under the Limber approximation, the two independent line-of-sight
+        integrals of the exact covariance collapse to a single integral
+        over comoving distance, since both multipoles map to a wavenumber
+        at the *same* :math:`\\chi`:
+
+        .. math::
+
+            {\\rm Cov}(\\ell_1,\\ell_2) = \\frac{1}{4\\pi f_{\\rm sky}}
+            \\int dz\\, \\frac{d\\chi/dz}{\\chi^6}\\,
+            W_1(z)\\, W_2(z)\\, W_3(z)\\, W_4(z)\\,
+            T\\!\\left(k_1, k_2, z\\right)
+
+        with :math:`k_1 = (\\ell_1 + 1/2)/\\chi(z)`,
+        :math:`k_2 = (\\ell_2 + 1/2)/\\chi(z)`, :math:`W_i` the tracer
+        kernels, and :math:`T = T_{1h} + T_{2h} + T_{3h} + T_{4h}` the full
+        halo-model trispectrum (see :meth:`tk_1h`, :meth:`tk_2h`,
+        :meth:`tk_3h`, :meth:`tk_4h`).
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+        tracer1 : Tracer
+            First tracer of the :math:`C_{\\ell_1}` pair.
+        tracer2 : Tracer or None
+            Second tracer of the :math:`C_{\\ell_1}` pair. If None,
+            defaults to ``tracer1``.
+        tracer3 : Tracer or None
+            First tracer of the :math:`C_{\\ell_2}` pair. If None,
+            defaults to ``tracer1``.
+        tracer4 : Tracer or None
+            Second tracer of the :math:`C_{\\ell_2}` pair. If None,
+            defaults to (the resolved) ``tracer3``.
+        l1, l2 : float or jnp.ndarray
+            Multipole grids for the first and second angular power
+            spectrum, respectively. Need not be the same length; the two
+            are broadcast into an :math:`(N_{\\ell_1}, N_{\\ell_2})` grid.
+        z : array
+            Redshift array. This must be an array because it defines the
+            integration grid over redshift.
+        f_sky : float, default 1.0
+            Observed sky fraction.
+
+        Returns
+        -------
+        array
+            Connected covariance with shape :math:`(N_{\\ell_1},
+            N_{\\ell_2})`, where singleton dimensions are squeezed before
+            return.
+        """
+        hm = halo_model
+        tracer2 = tracer2 if tracer2 is not None else tracer1
+        tracer3 = tracer3 if tracer3 is not None else tracer1
+        tracer4 = tracer4 if tracer4 is not None else tracer3
+
+        def get_cov_slice(z_i):
+            chi = hm.cosmology.angular_diameter_distance(z_i) * (1.0 + z_i)
+            k1 = (l1 + 0.5) / chi
+            k2 = (l2 + 0.5) / chi
+
+            T = (
+                self.tk_1h(hm, k1, k2, z_i, tracer1.profile, tracer2.profile, tracer3.profile, tracer4.profile)
+                + self.tk_2h(hm, k1, k2, z_i, tracer1.profile, tracer2.profile, tracer3.profile, tracer4.profile)
+                + self.tk_3h(hm, k1, k2, z_i, tracer1.profile, tracer2.profile, tracer3.profile, tracer4.profile)
+                + self.tk_4h(hm, k1, k2, z_i, tracer1.profile, tracer2.profile, tracer3.profile, tracer4.profile)
+            )  # (N_l1, N_l2)
+
+            kernels = jnp.squeeze(
+                tracer1.kernel(hm.cosmology, z_i) * tracer2.kernel(hm.cosmology, z_i)
+                * tracer3.kernel(hm.cosmology, z_i) * tracer4.kernel(hm.cosmology, z_i)
+            )
+            weight = jnp.squeeze(hm.cosmology.comoving_volume_element(z_i) / chi ** 8)
+
+            return T * (kernels * weight)
+
+        integrand = jax.vmap(get_cov_slice)(z)  # (Nz, N_l1, N_l2)
+        cov = jnp.trapezoid(integrand, x=z, axis=0) / (4.0 * jnp.pi * f_sky)
+
+        return jnp.squeeze(cov)
+
+    # ------------------------------------------------------------------
+    # Super-sample covariance
+    # ------------------------------------------------------------------
+
+    def covariance_ssc(self, halo_model, tracer1, tracer2, tracer3, tracer4, l1, l2, z, f_sky=1.0):
+        """
+        Super-sample covariance (SSC) between two Limber-projected angular
+        power spectra :math:`C_{\\ell_1}^{12}` and :math:`C_{\\ell_2}^{34}`.
+
+        Sourced by long-wavelength density modes larger than the survey
+        footprint, which are not measured directly but instead shift the
+        mean background density of the observed volume -- rescaling every
+        halo-model quantity inside it. Structurally a sibling of
+        :meth:`covariance_cng`: the same Limber-collapsed single
+        line-of-sight integral and tracer-kernel product, but with the real
+        trispectrum replaced by a factorised power-spectrum *response*
+        product, and one extra ingredient, the survey-footprint variance of
+        the background mode:
+
+        .. math::
+
+            {\\rm Cov}(\\ell_1,\\ell_2) =
+            \\int dz\\, \\frac{d\\chi/dz}{\\chi^4}\\,
+            W_1(z)\\, W_2(z)\\, W_3(z)\\, W_4(z)\\,
+            \\sigma_B^2(z)\\,
+            \\frac{\\partial P_{12}(k_1,z)}{\\partial\\delta_b}\\,
+            \\frac{\\partial P_{34}(k_2,z)}{\\partial\\delta_b}
+
+        with :math:`k_1 = (\\ell_1 + 1/2)/\\chi(z)`,
+        :math:`k_2 = (\\ell_2 + 1/2)/\\chi(z)`, :math:`W_i` the tracer
+        kernels, :math:`\\sigma_B^2(z)` the disc-footprint variance (see
+        :meth:`~hmfast.cosmology.Cosmology.sigma2_b_disc`), and
+        :math:`\\partial P_{u,v}/\\partial\\delta_b` the halo-model power
+        spectrum response (see :func:`_dPk_response`).
+
+        .. note::
+
+            Does not include the number-counts counter-term that applies
+            when a profile represents a discrete number-counts observable
+            (e.g. galaxy clustering/HOD) rather than a continuous field --
+            see :func:`_dPk_response`.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+        tracer1 : Tracer
+            First tracer of the :math:`C_{\\ell_1}` pair.
+        tracer2 : Tracer or None
+            Second tracer of the :math:`C_{\\ell_1}` pair. If None,
+            defaults to ``tracer1``.
+        tracer3 : Tracer or None
+            First tracer of the :math:`C_{\\ell_2}` pair. If None,
+            defaults to ``tracer1``.
+        tracer4 : Tracer or None
+            Second tracer of the :math:`C_{\\ell_2}` pair. If None,
+            defaults to (the resolved) ``tracer3``.
+        l1, l2 : float or jnp.ndarray
+            Multipole grids for the first and second angular power
+            spectrum, respectively. Need not be the same length; the two
+            are broadcast into an :math:`(N_{\\ell_1}, N_{\\ell_2})` grid.
+        z : array
+            Redshift array. This must be an array because it defines the
+            integration grid over redshift.
+        f_sky : float, default 1.0
+            Observed sky fraction. Also sets the disc footprint used for
+            :math:`\\sigma_B^2(z)`.
+
+        Returns
+        -------
+        array
+            Super-sample covariance with shape :math:`(N_{\\ell_1},
+            N_{\\ell_2})`, where singleton dimensions are squeezed before
+            return.
+        """
+        hm = halo_model
+        tracer2 = tracer2 if tracer2 is not None else tracer1
+        tracer3 = tracer3 if tracer3 is not None else tracer1
+        tracer4 = tracer4 if tracer4 is not None else tracer3
+
+        def get_cov_slice(z_i):
+            chi = hm.cosmology.angular_diameter_distance(z_i) * (1.0 + z_i)
+            k1 = (l1 + 0.5) / chi
+            k2 = (l2 + 0.5) / chi
+
+            response1 = _dPk_response(hm, k1, z_i, tracer1.profile, tracer2.profile)  # (N_l1,)
+            response2 = _dPk_response(hm, k2, z_i, tracer3.profile, tracer4.profile)  # (N_l2,)
+            response_outer = response1[:, None] * response2[None, :]  # (N_l1, N_l2)
+
+            kernels = jnp.squeeze(
+                tracer1.kernel(hm.cosmology, z_i) * tracer2.kernel(hm.cosmology, z_i)
+                * tracer3.kernel(hm.cosmology, z_i) * tracer4.kernel(hm.cosmology, z_i)
+            )
+            sigma2_b = jnp.squeeze(hm.cosmology.sigma2_b_disc(z_i, f_sky=f_sky))
+            weight = jnp.squeeze(hm.cosmology.comoving_volume_element(z_i) / chi ** 6)
+
+            return response_outer * (kernels * weight * sigma2_b)
+
+        # No 1/(4*pi*f_sky) prefactor here -- f_sky's effect is already fully carried by sigma2_b_disc(z, f_sky).
+        integrand = jax.vmap(get_cov_slice)(z)  # (Nz, N_l1, N_l2)
+        cov = jnp.trapezoid(integrand, x=z, axis=0)
+
+        return jnp.squeeze(cov)
 
 
         
