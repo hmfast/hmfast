@@ -91,7 +91,8 @@ class CIBTracer(Tracer):
         """
         z = jnp.atleast_1d(z)
         W = 1.0 / (1.0 + z)
-        return jnp.where(z <= self.z_max, W, 0.0)
+        # Tolerance guards against callers' z grids (e.g. jnp.geomspace) not landing bit-exactly on z_max.
+        return jnp.squeeze(jnp.where(z <= self.z_max + 1e-8, W, 0.0))
 
 
 jax.tree_util.register_pytree_node(

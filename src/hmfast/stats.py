@@ -667,8 +667,9 @@ class Pk:
 
         # Get the halo model pk_1h, the kernels, and the Limber weight c/(H chi^2)
         P_1h_grid = jax.vmap(get_pk_slice)(z, z_eval) * growth_ratio_sq[:, None]
-        kernel1 = tracer1.kernel(hm.cosmology, z)
-        kernel2 = tracer2.kernel(hm.cosmology, z)
+        # kernel() squeezes singleton dims, so re-expand in case z has length 1.
+        kernel1 = jnp.atleast_1d(tracer1.kernel(hm.cosmology, z))
+        kernel2 = jnp.atleast_1d(tracer2.kernel(hm.cosmology, z))
         chi = hm.cosmology.angular_diameter_distance(z) * (1.0 + z)
         limber_weight = hm.cosmology.comoving_volume_element(z) / chi**4
 
@@ -729,8 +730,9 @@ class Pk:
         P_2h_grid = jax.vmap(get_pk_slice)(z, z_eval) * growth_ratio_sq[:, None]
 
         # Get individual kernels and the Limber weight c/(H chi^2)
-        kernel1 = tracer1.kernel(hm.cosmology, z)
-        kernel2 = tracer2.kernel(hm.cosmology, z)
+        # kernel() squeezes singleton dims, so re-expand in case z has length 1.
+        kernel1 = jnp.atleast_1d(tracer1.kernel(hm.cosmology, z))
+        kernel2 = jnp.atleast_1d(tracer2.kernel(hm.cosmology, z))
         chi = hm.cosmology.angular_diameter_distance(z) * (1.0 + z)
         limber_weight = hm.cosmology.comoving_volume_element(z) / chi**4
 

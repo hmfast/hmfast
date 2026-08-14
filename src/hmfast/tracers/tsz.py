@@ -104,7 +104,8 @@ class tSZTracer(Tracer):
         m_e = Const._m_e_ * Const._c_**2 / Const._eV_
         sigma_T = Const._sigma_T_ * 1e6
         W = (sigma_T / m_e) * Const._Mpc_over_m_ / (1.0 + z)
-        return jnp.where(z <= self.z_max, W, 0.0)
+        # Tolerance guards against callers' z grids (e.g. jnp.geomspace) not landing bit-exactly on z_max.
+        return jnp.squeeze(jnp.where(z <= self.z_max + 1e-8, W, 0.0))
 
 
 

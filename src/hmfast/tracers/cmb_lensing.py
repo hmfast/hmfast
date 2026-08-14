@@ -110,7 +110,7 @@ class CMBLensingTracer(Tracer):
         )
 
        
-        return W_kappa_cmb 
+        return jnp.squeeze(W_kappa_cmb)
 
 
 

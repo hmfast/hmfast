@@ -1,15 +1,15 @@
 import os
-import numpy as np
+from functools import partial
+
 import jax
 import jax.numpy as jnp
 import mcfit
-from functools import partial
+import numpy as np
 
 from hmfast.download import _get_default_data_path
-from hmfast.utils import Const
 from hmfast.halos.massdef import MassDefinition, mass_translator
 from hmfast.halos.profiles import HaloProfile, HankelTransform
-
+from hmfast.utils import Const
 
 
 class PressureProfile(HaloProfile):
@@ -18,6 +18,7 @@ class PressureProfile(HaloProfile):
 
     Child profile classes must implement :meth:`real` and :meth:`fourier`.
     """
+
     def _fourier_radius_scale(self, halo_model, m, z):
         raise NotImplementedError()
 
@@ -44,18 +45,28 @@ class PressureProfile(HaloProfile):
             singleton dimensions get squeezed before return.
         """
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
-        r_scale = jnp.reshape(self._fourier_radius_scale(halo_model, m, z), (len(m), len(z)))
+        r_scale = jnp.reshape(
+            self._fourier_radius_scale(halo_model, m, z), (len(m), len(z))
+        )
         r = self.x_grid[:, None, None] * r_scale[None, :, :] * (1.0 + z[None, None, :])
-        real_profile = jnp.reshape(self.real(halo_model, r, m, z), (len(self.x_grid), len(m), len(z)))
+        real_profile = jnp.reshape(
+            self.real(halo_model, r, m, z), (len(self.x_grid), len(m), len(z))
+        )
 
         k_native, u_k_native = self._u_k_hankel(halo_model, self.x_grid, r, m, z)
         u_k_native = jnp.reshape(u_k_native, (len(k_native), len(m), len(z)))
 
-        q_native = jnp.broadcast_to(k_native[:, None, None], (len(k_native), len(m), len(z)))
+        q_native = jnp.broadcast_to(
+            k_native[:, None, None], (len(k_native), len(m), len(z))
+        )
         q_target = k[:, None, None] * r_scale[None, :, :] * (1.0 + z[None, None, :])
-        prefactor = 4.0 * jnp.pi * r_scale**3 * (1.0 + z)[None, :]**3
-        u_k_val = prefactor[None, :, :] * u_k_native * jnp.sqrt(jnp.pi / (2.0 * q_native))
-        u_k_zero = prefactor * jnp.trapezoid(self.x_grid[:, None, None]**2 * real_profile, x=self.x_grid, axis=0)
+        prefactor = 4.0 * jnp.pi * r_scale**3 * (1.0 + z)[None, :] ** 3
+        u_k_val = (
+            prefactor[None, :, :] * u_k_native * jnp.sqrt(jnp.pi / (2.0 * q_native))
+        )
+        u_k_zero = prefactor * jnp.trapezoid(
+            self.x_grid[:, None, None] ** 2 * real_profile, x=self.x_grid, axis=0
+        )
 
         q_native = jnp.concatenate([jnp.zeros((1, len(m), len(z))), q_native], axis=0)
         u_k_val = jnp.concatenate([u_k_zero[None, :, :], u_k_val], axis=0)
@@ -69,15 +80,12 @@ class PressureProfile(HaloProfile):
 
         vmap_interp = jax.vmap(
             jax.vmap(interp_at_z, in_axes=(0, 0, 0), out_axes=0),
-            in_axes=(0, 0, 0), out_axes=0,
+            in_axes=(0, 0, 0),
+            out_axes=0,
         )
 
         u_interp = vmap_interp(q_target_cols, q_native_cols, u_k_cols)
         return jnp.squeeze(jnp.transpose(u_interp, (2, 0, 1)))
-
-
-
-
 
 
 class GNFWPressureProfile(PressureProfile):
@@ -86,7 +94,7 @@ class GNFWPressureProfile(PressureProfile):
 
     The profile is evaluated as a function of the comoving radius :math:`r`,
     and its normalization and shape are defined using the native :math:`500c`
-    calibration mass and radius. 
+    calibration mass and radius.
 
     .. math::
 
@@ -106,7 +114,7 @@ class GNFWPressureProfile(PressureProfile):
         \\tag{2}
 
     with :math:`E(z)=H(z)/H_0`. In this notation we introduce the shorthand
-    :math:`h_{70} \\equiv h / 0.7`. 
+    :math:`h_{70} \\equiv h / 0.7`.
 
     The projected Fourier-space pressure profile is evaluated as
 
@@ -143,8 +151,20 @@ class GNFWPressureProfile(PressureProfile):
     P0_hexp : float
         Exponent controlling the :math:`h_{70}` scaling of the normalization. Set to ``-1`` for SZ-calibrated profiles and ``-3/2`` for X-ray-calibrated profiles.
     """
-    
-    def __init__(self, x_grid=None, P0=8.130, c500=1.156, alpha=1.0620, beta=5.4807, gamma=0.3292, B=1.4, alpha_P=0.12, P0_hexp=-1.0, x_out=jnp.inf):
+
+    def __init__(
+        self,
+        x_grid=None,
+        P0=8.130,
+        c500=1.156,
+        alpha=1.0620,
+        beta=5.4807,
+        gamma=0.3292,
+        B=1.4,
+        alpha_P=0.12,
+        P0_hexp=-1.0,
+        x_out=jnp.inf,
+    ):
 
         self.P0 = P0
         self.c500 = c500
@@ -156,8 +176,11 @@ class GNFWPressureProfile(PressureProfile):
         self.P0_hexp = P0_hexp
         self.x_out = x_out
 
-        self.x_grid = x_grid if x_grid is not None else jnp.logspace(jnp.log10(1e-5), jnp.log10(4.0), 256)
-
+        self.x_grid = (
+            x_grid
+            if x_grid is not None
+            else jnp.logspace(jnp.log10(1e-5), jnp.log10(4.0), 256)
+        )
 
     @property
     def x_grid(self):
@@ -168,10 +191,19 @@ class GNFWPressureProfile(PressureProfile):
         self._x_grid = jnp.sort(value)
         self._hankel = HankelTransform(self._x_grid, nu=0.5)
 
-
     def _tree_flatten(self):
         # The dynamic parameters JAX should track
-        leaves = (self.P0, self.c500, self.alpha, self.beta, self.gamma, self.B, self.alpha_P, self.P0_hexp, self.x_out)
+        leaves = (
+            self.P0,
+            self.c500,
+            self.alpha,
+            self.beta,
+            self.gamma,
+            self.B,
+            self.alpha_P,
+            self.P0_hexp,
+            self.x_out,
+        )
         # Static metadata: the grid and the Hankel object
         aux_data = (self._x_grid, self._hankel)
         return (leaves, aux_data)
@@ -181,12 +213,34 @@ class GNFWPressureProfile(PressureProfile):
         x_grid, hankel = aux_data
         # Create object without calling __init__ to avoid rebuilding Hankel
         obj = cls.__new__(cls)
-        obj.P0, obj.c500, obj.alpha, obj.beta, obj.gamma, obj.B, obj.alpha_P, obj.P0_hexp, obj.x_out = leaves
+        (
+            obj.P0,
+            obj.c500,
+            obj.alpha,
+            obj.beta,
+            obj.gamma,
+            obj.B,
+            obj.alpha_P,
+            obj.P0_hexp,
+            obj.x_out,
+        ) = leaves
         obj._x_grid = x_grid
         obj._hankel = hankel
         return obj
 
-    def update(self, P0=None, c500=None, alpha=None, beta=None, gamma=None, B=None, alpha_P=None, P0_hexp=None, x_out=None, x_grid=None):
+    def update(
+        self,
+        P0=None,
+        c500=None,
+        alpha=None,
+        beta=None,
+        gamma=None,
+        B=None,
+        alpha_P=None,
+        P0_hexp=None,
+        x_out=None,
+        x_grid=None,
+    ):
         """
         Return a new profile instance with updated GNFW pressure profile parameters. Any argument left as ``None`` keeps its current value.
 
@@ -265,37 +319,60 @@ class GNFWPressureProfile(PressureProfile):
             where singleton dimensions get squeezed before return.
         """
         H0 = halo_model.cosmology.H0
-        P0, c500, alpha, beta, gamma, B, alpha_P, P0_hexp, x_out = self.P0, self.c500, self.alpha, self.beta, self.gamma, self.B, self.alpha_P, self.P0_hexp, self.x_out
+        P0, c500, alpha, beta, gamma, B, alpha_P, P0_hexp, x_out = (
+            self.P0,
+            self.c500,
+            self.alpha,
+            self.beta,
+            self.gamma,
+            self.B,
+            self.alpha_P,
+            self.P0_hexp,
+            self.x_out,
+        )
         r, m, z = jnp.atleast_1d(r), jnp.atleast_1d(m), jnp.atleast_1d(z)
         h = H0 / 100.0
-    
+
         m_tilde = jnp.broadcast_to((m / B)[:, None], (len(m), len(z)))
         r_tilde = jnp.reshape(
             halo_model.mass_def.r_delta(halo_model.cosmology, m_tilde, z),
             (len(m), len(z)),
         )
-    
+
         # Convert the comoving radius to the calibrated physical coordinate.
         x_tilde = r[:, None, None] / ((1.0 + z[None, None, :]) * r_tilde[None, :, :])
-    
+
         # Compute normalization P_500c (with hydrostatic bias)
         h = H0 / 100.0
         H = halo_model.cosmology.hubble_parameter(z)  # (Nz,)
         H = jnp.atleast_1d(H)[None, None, :]  # (1, 1, Nz)
         m_tilde_h = (m_tilde * h)[None, :, :]
-        P_tilde = (1.65 * (h / 0.7) ** 2 * (H / H0) ** (8 / 3) * (m_tilde_h / (0.7 * 3e14)) ** (2 / 3 + alpha_P) * (h / 0.7) ** P0_hexp)
-    
+        P_tilde = (
+            1.65
+            * (h / 0.7) ** 2
+            * (H / H0) ** (8 / 3)
+            * (m_tilde_h / (0.7 * 3e14)) ** (2 / 3 + alpha_P)
+            * (h / 0.7) ** P0_hexp
+        )
+
         # GNFW profile
         scaled_x = c500 * x_tilde
-        Pe = P_tilde * P0 * scaled_x ** (-gamma) * (1 + scaled_x ** alpha) ** ((gamma - beta) / alpha)
-        Pe = jnp.where(x_tilde <= x_out, Pe, 0.0)
-    
+        Pe = (
+            P_tilde
+            * P0
+            * scaled_x ** (-gamma)
+            * (1 + scaled_x**alpha) ** ((gamma - beta) / alpha)
+        )
+        # NaN-safe: a bare `x_tilde <= x_out` would silently zero out NaN instead of propagating it.
+        Pe = jnp.where(jnp.isnan(x_tilde) | (x_tilde <= x_out), Pe, 0.0)
+
         return jnp.squeeze(Pe)
+
 
 jax.tree_util.register_pytree_node(
     GNFWPressureProfile,
     lambda obj: obj._tree_flatten(),
-    lambda aux_data, children: GNFWPressureProfile._tree_unflatten(aux_data, children)
+    lambda aux_data, children: GNFWPressureProfile._tree_unflatten(aux_data, children),
 )
 
 
@@ -368,15 +445,34 @@ class B12PressureProfile(PressureProfile):
     alpha_z_beta : float
         Redshift-scaling exponent :math:`\\alpha_z^\\beta`.
     """
-    def __init__(self, x_grid=None,
-                 A_P0=18.1, A_xc=0.497, A_beta=4.35,
-                 alpha_m_P0=0.154, alpha_m_xc=-0.00865, alpha_m_beta=0.0393,
-                 alpha_z_P0=-0.758, alpha_z_xc=0.731, alpha_z_beta=0.415, x_out=jnp.inf):
+
+    def __init__(
+        self,
+        x_grid=None,
+        A_P0=18.1,
+        A_xc=0.497,
+        A_beta=4.35,
+        alpha_m_P0=0.154,
+        alpha_m_xc=-0.00865,
+        alpha_m_beta=0.0393,
+        alpha_z_P0=-0.758,
+        alpha_z_xc=0.731,
+        alpha_z_beta=0.415,
+        x_out=jnp.inf,
+    ):
 
         # Physics Parameters (The Leaves)
         self.A_P0, self.A_xc, self.A_beta = A_P0, A_xc, A_beta
-        self.alpha_m_P0, self.alpha_m_xc, self.alpha_m_beta = alpha_m_P0, alpha_m_xc, alpha_m_beta
-        self.alpha_z_P0, self.alpha_z_xc, self.alpha_z_beta = alpha_z_P0, alpha_z_xc, alpha_z_beta
+        self.alpha_m_P0, self.alpha_m_xc, self.alpha_m_beta = (
+            alpha_m_P0,
+            alpha_m_xc,
+            alpha_m_beta,
+        )
+        self.alpha_z_P0, self.alpha_z_xc, self.alpha_z_beta = (
+            alpha_z_P0,
+            alpha_z_xc,
+            alpha_z_beta,
+        )
         self.x_out = x_out
 
         # Grid initialization
@@ -393,9 +489,15 @@ class B12PressureProfile(PressureProfile):
 
     def _tree_flatten(self):
         leaves = (
-            self.A_P0, self.A_xc, self.A_beta,
-            self.alpha_m_P0, self.alpha_m_xc, self.alpha_m_beta,
-            self.alpha_z_P0, self.alpha_z_xc, self.alpha_z_beta,
+            self.A_P0,
+            self.A_xc,
+            self.A_beta,
+            self.alpha_m_P0,
+            self.alpha_m_xc,
+            self.alpha_m_beta,
+            self.alpha_z_P0,
+            self.alpha_z_xc,
+            self.alpha_z_beta,
             self.x_out,
         )
         aux_data = (self._x_grid, self._hankel)
@@ -406,18 +508,37 @@ class B12PressureProfile(PressureProfile):
         x_grid, hankel = aux_data
         obj = cls.__new__(cls)
 
-        (obj.A_P0, obj.A_xc, obj.A_beta,
-         obj.alpha_m_P0, obj.alpha_m_xc, obj.alpha_m_beta,
-         obj.alpha_z_P0, obj.alpha_z_xc, obj.alpha_z_beta,
-         obj.x_out) = leaves
+        (
+            obj.A_P0,
+            obj.A_xc,
+            obj.A_beta,
+            obj.alpha_m_P0,
+            obj.alpha_m_xc,
+            obj.alpha_m_beta,
+            obj.alpha_z_P0,
+            obj.alpha_z_xc,
+            obj.alpha_z_beta,
+            obj.x_out,
+        ) = leaves
 
         obj._x_grid = x_grid
         obj._hankel = hankel
         return obj
 
-    def update(self, A_P0=None, A_xc=None, A_beta=None,
-               alpha_m_P0=None, alpha_m_xc=None, alpha_m_beta=None,
-               alpha_z_P0=None, alpha_z_xc=None, alpha_z_beta=None, x_out=None, x_grid=None):
+    def update(
+        self,
+        A_P0=None,
+        A_xc=None,
+        A_beta=None,
+        alpha_m_P0=None,
+        alpha_m_xc=None,
+        alpha_m_beta=None,
+        alpha_z_P0=None,
+        alpha_z_xc=None,
+        alpha_z_beta=None,
+        x_out=None,
+        x_grid=None,
+    ):
         """
         Return a new profile instance with updated B12 parameters.
 
@@ -456,9 +577,15 @@ class B12PressureProfile(PressureProfile):
 
     _PRESETS = {
         "agn": dict(
-            A_P0=18.1, A_xc=0.497, A_beta=4.35,
-            alpha_m_P0=0.154, alpha_m_xc=-0.00865, alpha_m_beta=0.0393,
-            alpha_z_P0=-0.758, alpha_z_xc=0.731, alpha_z_beta=0.415,
+            A_P0=18.1,
+            A_xc=0.497,
+            A_beta=4.35,
+            alpha_m_P0=0.154,
+            alpha_m_xc=-0.00865,
+            alpha_m_beta=0.0393,
+            alpha_z_P0=-0.758,
+            alpha_z_xc=0.731,
+            alpha_z_beta=0.415,
         ),
     }
 
@@ -491,9 +618,15 @@ class B12PressureProfile(PressureProfile):
         z = jnp.atleast_1d(z)
 
         mass_def_200c = MassDefinition(200, "critical")
-        translate_to_200c = mass_translator(halo_model.mass_def, mass_def_200c, halo_model.concentration)
-        m200c = jnp.reshape(translate_to_200c(halo_model.cosmology, m, z), (len(m), len(z)))
-        return jnp.reshape(mass_def_200c.r_delta(halo_model.cosmology, m200c, z), (len(m), len(z)))
+        translate_to_200c = mass_translator(
+            halo_model.mass_def, mass_def_200c, halo_model.concentration
+        )
+        m200c = jnp.reshape(
+            translate_to_200c(halo_model.cosmology, m, z), (len(m), len(z))
+        )
+        return jnp.reshape(
+            mass_def_200c.r_delta(halo_model.cosmology, m200c, z), (len(m), len(z))
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def real(self, halo_model, r, m, z):
@@ -523,44 +656,58 @@ class B12PressureProfile(PressureProfile):
         alpha, gamma = 1.0, -0.3
         x_out = self.x_out
         r, m, z = jnp.atleast_1d(r), jnp.atleast_1d(m), jnp.atleast_1d(z)
-    
+
         # Convert input mass to M200c for normalization
         mass_def_old = halo_model.mass_def
         mass_def_200c = MassDefinition(200, "critical")
-        translate_to_200c = mass_translator(mass_def_old, mass_def_200c, halo_model.concentration)
-        m200c = jnp.reshape(translate_to_200c(halo_model.cosmology, m, z), (len(m), len(z)))
+        translate_to_200c = mass_translator(
+            mass_def_old, mass_def_200c, halo_model.concentration
+        )
+        m200c = jnp.reshape(
+            translate_to_200c(halo_model.cosmology, m, z), (len(m), len(z))
+        )
 
-        r_200c = jnp.reshape(mass_def_200c.r_delta(halo_model.cosmology, m200c, z), m200c.shape)  # (Nm, Nz)
-    
+        r_200c = jnp.reshape(
+            mass_def_200c.r_delta(halo_model.cosmology, m200c, z), m200c.shape
+        )  # (Nm, Nz)
+
         # Convert the comoving radius to the calibrated physical 200c coordinate.
-        x_200c = r[:, None, None] / ((1.0 + z[None, None, :]) * r_200c[None, :, :])  # (Nr, Nm, Nz)
+        x_200c = r[:, None, None] / (
+            (1.0 + z[None, None, :]) * r_200c[None, :, :]
+        )  # (Nr, Nm, Nz)
         m200c_b = m200c[None, :, :]
         z_b = z[None, None, :]
         mass_ratio = m200c_b / 1e14
-    
+
         # Compute shape parameters using M200c
-        P0 = self.A_P0 * mass_ratio**self.alpha_m_P0 * (1 + z_b)**self.alpha_z_P0
-        xc = self.A_xc * mass_ratio**self.alpha_m_xc * (1 + z_b)**self.alpha_z_xc
-        beta = self.A_beta * mass_ratio**self.alpha_m_beta * (1 + z_b)**self.alpha_z_beta
-    
+        P0 = self.A_P0 * mass_ratio**self.alpha_m_P0 * (1 + z_b) ** self.alpha_z_P0
+        xc = self.A_xc * mass_ratio**self.alpha_m_xc * (1 + z_b) ** self.alpha_z_xc
+        beta = (
+            self.A_beta * mass_ratio**self.alpha_m_beta * (1 + z_b) ** self.alpha_z_beta
+        )
+
         # Normalized GNFW shape
         scaled_x = x_200c / xc
-        p_x = (scaled_x)**gamma * (1 + scaled_x**alpha)**(-beta)
-    
+        p_x = (scaled_x) ** gamma * (1 + scaled_x**alpha) ** (-beta)
+
         # Thermal Pressure Normalization (P200c)
         H = jnp.atleast_1d(halo_model.cosmology.hubble_parameter(z))
         f_b = cparams["Omega_b"] / cparams["Omega0_m"]
         r_200c = r_200c * h
         # Use M200c and r_200c for normalization
-        P_200c = ((m200c_b / r_200c[None, :, :]) * f_b * 2.61051e-18 * (H[None, None, :])**2)
-    
+        P_200c = (
+            (m200c_b / r_200c[None, :, :]) * f_b * 2.61051e-18 * (H[None, None, :]) ** 2
+        )
+
         Pe = P_200c * P0 * p_x
-        Pe = jnp.where(x_200c <= x_out, Pe, 0.0)
+        # NaN-safe: a bare `x_200c <= x_out` would silently zero out NaN instead of propagating it.
+        Pe = jnp.where(jnp.isnan(x_200c) | (x_200c <= x_out), Pe, 0.0)
 
         return jnp.squeeze(Pe)
+
 
 jax.tree_util.register_pytree_node(
     B12PressureProfile,
     lambda obj: obj._tree_flatten(),
-    lambda aux_data, children: B12PressureProfile._tree_unflatten(aux_data, children)
+    lambda aux_data, children: B12PressureProfile._tree_unflatten(aux_data, children),
 )

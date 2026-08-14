@@ -131,7 +131,9 @@ class GalaxyLensingTracer(Tracer):
         chi_z = chi_z[None, :]      # (1, N_z)
     
         # Lensing factor
-        chi_diff = (chi_z_s - chi_z) / chi_z_s
+        # A source at z_s=0 gives chi_z_s=0 (always masked out below), but an unguarded 1/chi_z_s still poisons the gradient with NaN/Inf.
+        safe_chi_z_s = jnp.where(chi_z_s > 0, chi_z_s, 1.0)
+        chi_diff = (chi_z_s - chi_z) / safe_chi_z_s
     
         # Mask: only include sources behind the lens
         mask = (z_s[:, None] > z[None, :])  # (N_s, N_z)
@@ -200,7 +202,7 @@ class GalaxyLensingTracer(Tracer):
             I_s
         )
     
-        return W_kappa_g 
+        return jnp.squeeze(W_kappa_g)
 
 
 
