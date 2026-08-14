@@ -72,6 +72,9 @@ class HaloProfile(ABC):
         r = jnp.asarray(r)
         m = jnp.atleast_1d(m)
         z = jnp.atleast_1d(z)
+        # m may be z-independent (N_m,) or already z-dependent (N_m, N_z); normalize to the latter.
+        if m.ndim == 1:
+            m = jnp.broadcast_to(m[:, None], (m.shape[0], z.shape[0]))
         W_x = jnp.where((x >= x[0]) & (x <= x[-1]), 1.0, 0.0)
 
         def single_m_z(r_vals, m_val, z_val):
@@ -79,7 +82,7 @@ class HaloProfile(ABC):
             return profile * x**0.5 * W_x
 
         hankel_integrand = jax.vmap(
-            jax.vmap(single_m_z, in_axes=(1, None, 0), out_axes=0),
+            jax.vmap(single_m_z, in_axes=(1, 0, 0), out_axes=0),
             in_axes=(1, 0, None), out_axes=0,
         )(r, m, z)
 

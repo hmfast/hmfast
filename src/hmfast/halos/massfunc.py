@@ -15,7 +15,7 @@ class HaloMassFunction(ABC):
     """
 
     @abstractmethod
-    def dndlnm(self, cosmology, m, z, mass_def=None, convert_masses=False):
+    def dndlnm(self, cosmology, m, z, mass_def=None):
         """Required halo mass function evaluator."""
         pass
 
@@ -88,14 +88,14 @@ class T08HaloMassFunction(HaloMassFunction):
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def dndlnm(self, cosmology, m, z, mass_def=MassDefinition(delta=200, reference="mean"), convert_masses=False):
+    def dndlnm(self, cosmology, m, z, mass_def=MassDefinition(delta=200, reference="mean")):
         """
         Compute the halo mass function :math:`dn/d\\ln M`.
-    
+
         The halo mass function gives the comoving number density of halos per logarithmic mass interval:
-    
+
         .. math::
-    
+
             \\frac{dn}{d\\ln M} = f(\\sigma) \\frac{\\rho_{m,0}}{M} \\left| \\frac{d\\ln \\sigma^{-1}}{d\\ln M} \\right|
 
         In this model,
@@ -124,10 +124,7 @@ class T08HaloMassFunction(HaloMassFunction):
             Halo mass definition at which to evaluate the halo mass
             function. Defaults to the native :math:`200\\mathrm{m}`
             calibration definition.
-        convert_masses : bool, optional
-            Mass conversions are applied if ``convert_masses`` is set to
-            ``True``.
-    
+
         Returns
         -------
         dndlnM : float or array-like
@@ -233,8 +230,8 @@ class T10HaloMassFunction(HaloMassFunction):
         f_nu = 0.5 * alpha * (1 + beta_term) * eta_term * exp_term * jnp.sqrt(nu)
         return f_nu
 
-    @partial(jax.jit, static_argnums=(0, 5))
-    def dndlnm(self, cosmology, m, z, mass_def=MassDefinition(delta=200, reference="mean"), convert_masses=False):
+    @partial(jax.jit, static_argnums=(0,))
+    def dndlnm(self, cosmology, m, z, mass_def=MassDefinition(delta=200, reference="mean")):
         """
         Compute the halo mass function :math:`dn/d\\ln M`.
     
@@ -269,10 +266,7 @@ class T10HaloMassFunction(HaloMassFunction):
             Halo mass definition at which to evaluate the halo mass
             function. Defaults to the native :math:`200\\mathrm{m}`
             calibration definition.
-        convert_masses : bool, optional
-            Mass conversions are applied if ``convert_masses`` is set to
-            ``True``.
-    
+
         Returns
         -------
         dndlnM : float or array-like

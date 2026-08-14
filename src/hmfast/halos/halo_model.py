@@ -41,8 +41,6 @@ class HaloModel:
         Halo concentration relation used to map halo mass and redshift to concentration.
     hm_consistency : bool
         Flag controlling whether halo-model consistency counterterms are applied.
-    convert_masses : bool
-        Flag controlling whether profile-specific native mass definitions are converted automatically.
     m_grid : array
         Log-spaced halo mass grid in :math:`M_\\odot` used for all mass integrals.
     """
@@ -55,7 +53,6 @@ class HaloModel:
                  subhalo_mass_function=TW10SubHaloMassFunction(),
                  concentration=D08Concentration(),
                  hm_consistency=True,
-                 convert_masses=False,
                  m_grid=None):
         """Initialize the halo model."""
 
@@ -73,7 +70,6 @@ class HaloModel:
 
         self.mass_def = mass_def
         self.hm_consistency = hm_consistency
-        self.convert_masses = convert_masses
         self.m_grid = jnp.sort(m_grid if m_grid is not None else jnp.geomspace(1e10, 1e15, 100))
 
 
@@ -82,7 +78,7 @@ class HaloModel:
         # Everything else is configuration/metadata — aux_data.
         children = (self.cosmology, self.m_grid)
         aux_data = (self.halo_mass_function, self.halo_bias, self.subhalo_mass_function, self.concentration,
-            self.mass_def, self.hm_consistency, self.convert_masses
+            self.mass_def, self.hm_consistency
         )
         return (children, aux_data)
 
@@ -93,18 +89,17 @@ class HaloModel:
         obj.cosmology = cosmology
         obj.m_grid = m_grid
         (obj.halo_mass_function, obj.halo_bias, obj.subhalo_mass_function,
-         obj.concentration, obj.mass_def, obj.hm_consistency,
-         obj.convert_masses) = aux_data
+         obj.concentration, obj.mass_def, obj.hm_consistency) = aux_data
         return obj
 
     def update(self, cosmology=None, halo_mass_function=None, halo_bias=None, subhalo_mass_function=None, concentration=None, mass_def=None,
-               hm_consistency=None, convert_masses=None, m_grid=None):
+               hm_consistency=None, m_grid=None):
         """
         Return a new HaloModel instance with updated components.
 
         Parameters
         ----------
-        cosmology, halo_mass_function, halo_bias, subhalo_mass_function, concentration, mass_def, hm_consistency, convert_masses, m_grid : optional
+        cosmology, halo_mass_function, halo_bias, subhalo_mass_function, concentration, mass_def, hm_consistency, m_grid : optional
             Replacement values for the corresponding class attributes. Any argument left as ``None`` keeps its current value.
 
         Returns
@@ -118,7 +113,7 @@ class HaloModel:
         cosmo_child, m_grid0 = children
         (
             halo_mass_function0, halo_bias0, subhalo_mass_function0, concentration0,
-            mass_def0, hm_consistency0, convert_masses0
+            mass_def0, hm_consistency0
         ) = aux_data
 
         # Update only provided components
@@ -130,11 +125,10 @@ class HaloModel:
         new_concentration = concentration if concentration is not None else concentration0
         new_mass_def = mass_def if mass_def is not None else mass_def0
         new_hm_consistency = hm_consistency if hm_consistency is not None else hm_consistency0
-        new_convert_masses = convert_masses if convert_masses is not None else convert_masses0
 
         new_aux_data = (
             new_halo_mass_function, new_halo_bias, new_subhalo_mass_function, new_concentration,
-            new_mass_def, new_hm_consistency, new_convert_masses
+            new_mass_def, new_hm_consistency
         )
         # Use _tree_unflatten to create the new instance efficiently
         return self._tree_unflatten(new_aux_data, (new_cosmo, new_m_grid))
@@ -168,9 +162,9 @@ class HaloModel:
     
     
         # Public HMF and bias interfaces use physical masses.
-        dn_dlnm = jnp.reshape(self.halo_mass_function.dndlnm(self.cosmology, m, z, self.mass_def, self.convert_masses), (len(m), len(z)))
-        b1 = jnp.reshape(self.halo_bias.bias(self.cosmology, m, z, self.mass_def, self.convert_masses, 1), (len(m), len(z)))
-        b2 = jnp.reshape(self.halo_bias.bias(self.cosmology, m, z, self.mass_def, self.convert_masses, 2), (len(m), len(z)))
+        dn_dlnm = jnp.reshape(self.halo_mass_function.dndlnm(self.cosmology, m, z, self.mass_def), (len(m), len(z)))
+        b1 = jnp.reshape(self.halo_bias.bias(self.cosmology, m, z, self.mass_def, order=1), (len(m), len(z)))
+        b2 = jnp.reshape(self.halo_bias.bias(self.cosmology, m, z, self.mass_def, order=2), (len(m), len(z)))
     
         # Compute integrals I0, I1, I2
         I0 = jnp.trapezoid(dn_dlnm * m_over_rho_mean, x=logm, axis=0)  # (Nz,)
@@ -229,7 +223,7 @@ class HaloModel:
         w = jnp.concatenate([jnp.array([dm[0]]), dm[:-1] + dm[1:], jnp.array([dm[-1]])]) * 0.5
 
         dndlnm = jnp.reshape(
-            self.halo_mass_function.dndlnm(self.cosmology, m, z, self.mass_def, self.convert_masses),
+            self.halo_mass_function.dndlnm(self.cosmology, m, z, self.mass_def),
             (len(m), len(z)),
         )
 
@@ -237,12 +231,12 @@ class HaloModel:
             bias_w = jnp.ones((len(m), len(z)))
         elif bias_order == 1:
             bias_w = jnp.reshape(
-                self.halo_bias.bias(self.cosmology, m, z, self.mass_def, self.convert_masses, order=1),
+                self.halo_bias.bias(self.cosmology, m, z, self.mass_def, order=1),
                 (len(m), len(z)),
             )
         elif bias_order == 2:
             bias_w = jnp.reshape(
-                self.halo_bias.bias(self.cosmology, m, z, self.mass_def, self.convert_masses, order=2),
+                self.halo_bias.bias(self.cosmology, m, z, self.mass_def, order=2),
                 (len(m), len(z)),
             )
 

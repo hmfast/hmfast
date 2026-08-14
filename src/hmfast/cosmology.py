@@ -630,6 +630,9 @@ class Cosmology:
         params = self._to_dict()
         emu = self._load_emulator("S8Z")
         preds = emu.predictions(params)
+        if self.emulator_set == "ede:v2":
+            # ede:v2's S8Z emulator was trained on log10(sigma8), unlike every other emulator
+            preds = 10.0 ** preds
         return self._enforce_bounds(self._interp_z(z, self._z_grid_bg(), preds))
 
     @jax.jit
@@ -790,8 +793,8 @@ class Cosmology:
         Extend the linear growth factor past the emulator's ``z_max`` by integrating the
         growth-rate Riccati equation forward (the numerically stable
         direction) from a deep-matter-domination seed via
-        :func:`hmfast.utils.dopri5_integrate`, then calibrating the result to
-        :meth:`growth_factor` at ``z_max``.
+        :func:`hmfast.utils.dopri5_integrate`, then calibrating the growth-factor branch
+        to :meth:`growth_factor` at ``z_max``.
         """
         Hz_fn = self._hz_flrw_calibrated(z_max)
         z_arr = jnp.atleast_1d(z)
@@ -815,7 +818,7 @@ class Cosmology:
             return f, -f ** 2 - (2.0 + dlnH_dx) * f + 1.5 * Om_a
 
         # D_seed=1 (arbitrary norm), f_seed=1; max_h caps node spacing so batched interior queries interpolate safely.
-        x_traj, (lnD_traj, _) = dopri5_integrate(growth_rhs, (jnp.array(0.0), jnp.array(1.0)), x_start, x_max, rtol=1e-4, atol=1e-7, max_steps=64, max_h=0.3)
+        x_traj, (lnD_traj, f_traj) = dopri5_integrate(growth_rhs, (jnp.array(0.0), jnp.array(1.0)), x_start, x_max, rtol=1e-4, atol=1e-7, max_steps=64, max_h=0.3)
 
         # Force the non-extrapolated path to avoid recursing back into this method.
         norm = jnp.log(self.update(extrapolate_z=False).growth_factor(z_max)) - jnp.interp(x_max, x_traj, lnD_traj)
@@ -828,6 +831,11 @@ class Cosmology:
     def growth_factor(self, z):
         """
         Linear growth factor :math:`D(z)`, normalized to :math:`D(0)=1`.
+
+        Without ``extrapolate_z``, NaN beyond the emulator's trained z-grid (plain
+        ``jnp.interp`` clamps by default, which silently returned a flat, wrong value
+        here previously -- fixed to NaN instead). With ``extrapolate_z=True``, the
+        growth ODE branch below still applies, unchanged.
 
         Parameters
         ----------
@@ -853,7 +861,7 @@ class Cosmology:
         pk0_z0_tmp = strict.pk(jnp.array([k0]), jnp.array([0.0]), linear=True)
         D_grid = jnp.sqrt(pk0_grid / jnp.atleast_2d(pk0_z0_tmp)[0, 0])
 
-        D = jnp.interp(z, z_grid_pk, D_grid)
+        D = jnp.interp(z, z_grid_pk, D_grid, left=jnp.nan, right=jnp.nan)
 
         if self.extrapolate_z:
             z_max = self._z_grid_pk()[-1]
@@ -871,6 +879,9 @@ class Cosmology:
 
             f(z) = \\frac{d \\ln D}{d \\ln a}
 
+        NaN beyond the emulator's trained z-grid regardless of ``extrapolate_z`` --
+        no extrapolation branch, by design (unlike ``growth_factor``, ``pk``, etc.).
+
         Parameters
         ----------
         z : float or jnp.ndarray
@@ -883,7 +894,7 @@ class Cosmology:
             :math:`(N_z,)`, where singleton dimensions get squeezed before
             return.
         """
-        
+
         z = jnp.atleast_1d(z)
 
         z_grid_pk = self._z_grid_pk()
@@ -891,7 +902,9 @@ class Cosmology:
         a_grid = 1.0 / (1.0 + z_grid_pk)
         f_grid = jnp.gradient(jnp.log(D_grid), jnp.log(a_grid))
 
-        return jnp.squeeze(jnp.interp(z, z_grid_pk, f_grid, left=jnp.nan, right=jnp.nan))
+        f = jnp.interp(z, z_grid_pk, f_grid, left=jnp.nan, right=jnp.nan)
+
+        return jnp.squeeze(f)
 
     @jax.jit
     def velocity_dispersion(self, z):
@@ -994,11 +1007,11 @@ class Cosmology:
         k = jnp.atleast_1d(k)
         z = jnp.atleast_1d(z)
 
+        z_max = self._z_grid_pk()[-1]
+        in_z_bounds = z <= z_max
         if self.extrapolate_z:
-            z_max = self._z_grid_pk()[-1]
-            in_bounds = z <= z_max
-            growth_ratio_sq = jnp.where(in_bounds, 1.0, (self.growth_factor(z) / self.growth_factor(z_max)) ** 2)
-            z = jnp.where(in_bounds, z, z_max)
+            growth_ratio_sq = jnp.where(in_z_bounds, 1.0, (self.growth_factor(z) / self.growth_factor(z_max)) ** 2)
+            z = jnp.where(in_z_bounds, z, z_max)
 
         params_base = self._to_dict()
         key = "PKL" if linear else "PKNL"
@@ -1020,13 +1033,14 @@ class Cosmology:
             pk_out = jnp.where(in_k_bounds[:, None], pk_out, jnp.nan)
         if self.extrapolate_z:
             pk_out = pk_out * growth_ratio_sq[None, :]
+        else:
+            pk_out = jnp.where(in_z_bounds[None, :], pk_out, jnp.nan)
         return jnp.squeeze(self._enforce_bounds(pk_out))
 
     # ------------------------------------------------------------------
     # CMB angular power spectra
     # ------------------------------------------------------------------
 
-    @partial(jax.jit, static_argnums=(1,))
     def cl(self, type, l):
         """
         Evaluate the CMB power spectrum of the specified type at requested multipoles `l` using the emulator.
@@ -1045,6 +1059,19 @@ class Cosmology:
             C_ell for the requested type evaluated at `l`. Out-of-range `l` return NaN.
         """
         s = str(type).upper()
+        if s not in ("TT", "EE", "TE", "PP"):
+            raise ValueError(f"Unsupported spectrum type: {type}")
+
+        # Load the emulator here, outside of any jax.jit trace. Loading it lazily from inside
+        # the jitted numeric core below (as this used to do) mutates `self._emu` as a side
+        # effect *during* tracing, which JAX's leak-checker can non-deterministically flag as
+        # an escaping tracer the next time the jitted core is traced for a different type or
+        # `l` shape on this same instance.
+        self._load_emulator(s)
+        return self._cl_jit(s, l)
+
+    @partial(jax.jit, static_argnums=(1,))
+    def _cl_jit(self, s, l):
         params = self._to_dict()
 
         if s == "TT":
@@ -1056,8 +1083,6 @@ class Cosmology:
         elif s == "PP":
             preds = self._load_emulator("PP").ten_to_predictions(params)
             preds = preds / (2 * jnp.pi)
-        else:
-            raise ValueError(f"Unsupported spectrum type: {type}")
 
         ell = jnp.arange(2, len(preds) + 2)
         l = jnp.atleast_1d(l)

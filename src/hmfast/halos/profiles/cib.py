@@ -406,7 +406,7 @@ class S12CIBProfile(CIBProfile):
         lc = jnp.reshape(self.l_cen(halo_model, m, z), (len(m), len(z)))
         ls = jnp.reshape(self.l_sat(halo_model, m, z), (len(m), len(z)))
 
-        dndlnm = jnp.reshape(halo_model.halo_mass_function.dndlnm(halo_model.cosmology, m, z, halo_model.mass_def, halo_model.convert_masses), (len(m), len(z)))
+        dndlnm = jnp.reshape(halo_model.halo_mass_function.dndlnm(halo_model.cosmology, m, z, halo_model.mass_def), (len(m), len(z)))
 
         integrand = dndlnm * (lc + ls)
         j_bar = jnp.trapezoid(integrand, x=jnp.log(m), axis=0)
@@ -915,7 +915,7 @@ class M21CIBProfile(CIBProfile):
         lc = jnp.reshape(self.l_cen(halo_model, m, z), (len(m), len(z)))
         ls = jnp.reshape(self.l_sat(halo_model, m, z), (len(m), len(z)))
 
-        dndlnm = jnp.reshape(halo_model.halo_mass_function.dndlnm(halo_model.cosmology, m, z, halo_model.mass_def, halo_model.convert_masses), (len(m), len(z)))
+        dndlnm = jnp.reshape(halo_model.halo_mass_function.dndlnm(halo_model.cosmology, m, z, halo_model.mass_def), (len(m), len(z)))
 
         integrand = dndlnm * (lc + ls)
         j_bar = jnp.trapezoid(integrand, x=jnp.log(m), axis=0)

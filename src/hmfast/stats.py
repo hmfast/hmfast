@@ -124,14 +124,14 @@ def _pair_integral(halo_model, p1, p2, k1, k2, z, outer=False, bias_order=1):
     w = jnp.concatenate([jnp.array([dm[0]]), dm[:-1] + dm[1:], jnp.array([dm[-1]])]) * 0.5
 
     dndlnm = jnp.reshape(
-        hm.halo_mass_function.dndlnm(hm.cosmology, m, z_arr, hm.mass_def, hm.convert_masses),
+        hm.halo_mass_function.dndlnm(hm.cosmology, m, z_arr, hm.mass_def),
         (len(m), len(z_arr)),
     )
     if bias_order == 0:
         bias_w = jnp.ones((len(m), len(z_arr)))
     else:
         bias_w = jnp.reshape(
-            hm.halo_bias.bias(hm.cosmology, m, z_arr, hm.mass_def, hm.convert_masses, order=bias_order),
+            hm.halo_bias.bias(hm.cosmology, m, z_arr, hm.mass_def, order=bias_order),
             (len(m), len(z_arr)),
         )
     total_weights = dndlnm * bias_w * w[:, None]  # (Nm, Nz)
@@ -255,11 +255,11 @@ def _triple_integral(halo_model, p_single, p_pair1, p_pair2, k_single, k_pair, z
     w = jnp.concatenate([jnp.array([dm[0]]), dm[:-1] + dm[1:], jnp.array([dm[-1]])]) * 0.5
 
     dndlnm = jnp.reshape(
-        hm.halo_mass_function.dndlnm(hm.cosmology, m, z_arr, hm.mass_def, hm.convert_masses),
+        hm.halo_mass_function.dndlnm(hm.cosmology, m, z_arr, hm.mass_def),
         (len(m), len(z_arr)),
     )
     bias_w = jnp.reshape(
-        hm.halo_bias.bias(hm.cosmology, m, z_arr, hm.mass_def, hm.convert_masses, order=1),
+        hm.halo_bias.bias(hm.cosmology, m, z_arr, hm.mass_def, order=1),
         (len(m), len(z_arr)),
     )
     total_weights = dndlnm * bias_w * w[:, None]  # (Nm, Nz)
@@ -398,7 +398,7 @@ class Pk:
         dm = jnp.diff(logm)
         w = jnp.concatenate([jnp.array([dm[0]]), dm[:-1] + dm[1:], jnp.array([dm[-1]])]) * 0.5
 
-        dndlnm = jnp.reshape(hm.halo_mass_function.dndlnm(hm.cosmology, m, z, hm.mass_def, hm.convert_masses), (len(m), len(z)))
+        dndlnm = jnp.reshape(hm.halo_mass_function.dndlnm(hm.cosmology, m, z, hm.mass_def), (len(m), len(z)))
         total_weights = dndlnm * w[:, None]  # (Nm, Nz)
 
         # Process a single mass bin at a time and extract the uk^2 at the lowest mass for the halo model consistency term
@@ -473,8 +473,8 @@ class Pk:
         w = jnp.concatenate([jnp.array([dm[0]]), dm[:-1] + dm[1:], jnp.array([dm[-1]])]) * 0.5
 
         # Combine hmf, bias, and weights into a single (Nm, Nz) weight grid
-        dndlnm = jnp.reshape(hm.halo_mass_function.dndlnm(hm.cosmology, m, z, hm.mass_def, hm.convert_masses), (len(m), len(z)))
-        bias = jnp.reshape(hm.halo_bias.bias(hm.cosmology, m, z, hm.mass_def, hm.convert_masses), (len(m), len(z)))
+        dndlnm = jnp.reshape(hm.halo_mass_function.dndlnm(hm.cosmology, m, z, hm.mass_def), (len(m), len(z)))
+        bias = jnp.reshape(hm.halo_bias.bias(hm.cosmology, m, z, hm.mass_def), (len(m), len(z)))
         total_weights = dndlnm * bias * w[:, None]
 
         def get_I(profile):
@@ -832,7 +832,7 @@ class Bk:
         w = jnp.concatenate([jnp.array([dm[0]]), dm[:-1] + dm[1:], jnp.array([dm[-1]])]) * 0.5
 
         dndlnm = jnp.reshape(
-            hm.halo_mass_function.dndlnm(hm.cosmology, m, z_arr, hm.mass_def, hm.convert_masses),
+            hm.halo_mass_function.dndlnm(hm.cosmology, m, z_arr, hm.mass_def),
             (len(m), len(z_arr)),
         )
         total_weights = dndlnm * w[:, None]  # (Nm, Nz)
@@ -1115,7 +1115,7 @@ class Tk:
         w = jnp.concatenate([jnp.array([dm[0]]), dm[:-1] + dm[1:], jnp.array([dm[-1]])]) * 0.5
 
         dndlnm = jnp.reshape(
-            hm.halo_mass_function.dndlnm(hm.cosmology, m, z_arr, hm.mass_def, hm.convert_masses),
+            hm.halo_mass_function.dndlnm(hm.cosmology, m, z_arr, hm.mass_def),
             (len(m), len(z_arr)),
         )
         total_weights = dndlnm * w[:, None]  # (Nm, Nz)
