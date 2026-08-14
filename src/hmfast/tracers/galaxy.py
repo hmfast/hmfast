@@ -111,7 +111,7 @@ class GalaxyTracer(Tracer):
         phi_prime_g_at_z = jnp.interp(z, z_g, phi_prime_g, left=0.0, right=0.0)
         H_grid = cosmology.hubble_parameter(z) / (Const._c_ / 1e3)
 
-        return H_grid * phi_prime_g_at_z
+        return jnp.squeeze(H_grid * phi_prime_g_at_z)
 
 
 

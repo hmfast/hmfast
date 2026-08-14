@@ -103,7 +103,8 @@ class kSZTracer(Tracer):
         z = jnp.atleast_1d(z)
         velocity_dispersion = jnp.sqrt(cosmology.velocity_dispersion(z))
         W = sigma_T_over_m_p * velocity_dispersion / (1.0 + z)
-        return jnp.where(z <= self.z_max, W, 0.0)
+        # Tolerance guards against callers' z grids (e.g. jnp.geomspace) not landing bit-exactly on z_max.
+        return jnp.squeeze(jnp.where(z <= self.z_max + 1e-8, W, 0.0))
 
 
 

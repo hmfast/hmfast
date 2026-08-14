@@ -56,6 +56,7 @@ Documentation = "https://hmfast.readthedocs.io"
 markers = [
     "ccl: cross-checks against pyccl as ground truth (requires pyccl, auto-skipped otherwise)",
     "camb: cross-checks requiring CAMB via CCL's boltzmann_camb transfer function (requires camb, auto-skipped otherwise)",
+    "class_sz: cross-checks against class_sz as ground truth (requires the classy_sz package, auto-skipped otherwise)",
 ]
 python_files = ["test_*.py", "benchmark_*.py"]
 

@@ -4,10 +4,17 @@ Shared fixtures for the hmfast test suite.
 Picked up automatically by both ``tests/unit/`` and ``tests/benchmarks/``
 via pytest's conftest inheritance.
 """
+
 import jax.numpy as jnp
 import pytest
 
 from hmfast.cosmology import Cosmology
+from hmfast.halos import HaloModel
+from hmfast.halos.concentration import (
+    B13Concentration,
+    ConstantConcentration,
+    D08Concentration,
+)
 from hmfast.halos.massdef import MassDefinition
 
 
@@ -55,26 +62,45 @@ def z_grid():
     return jnp.array([0.0, 0.5, 1.0, 2.0])
 
 
-@pytest.fixture(params=[
-    (200, "critical"),
-    (200, "mean"),
-    (500, "critical"),
-    ("vir", "critical"),
-])
+@pytest.fixture(
+    params=[
+        (200, "critical"),
+        (200, "mean"),
+        (500, "critical"),
+        ("vir", "critical"),
+    ]
+)
 def mass_def(request):
     """Parametrized across the four mass definitions compare_ccl.ipynb benchmarks (200c/200m/500c/vir)."""
     delta, reference = request.param
     return MassDefinition(delta=delta, reference=reference)
 
 
-@pytest.fixture(scope="session", params=[
-    "mnu:v1",
-    "neff:v1",
-    "wcdm:v1",
-    "ede:v1",
-    "ede:v2",
-    "mnu-3states:v1",
-])
+@pytest.fixture
+def halo_model(fixed_cosmology, mass_def):
+    """A HaloModel per mass_def, pairing each with a different concentration class."""
+    conc = {200: D08Concentration(), "vir": B13Concentration()}.get(
+        mass_def.delta, ConstantConcentration(c=5)
+    )
+    return HaloModel(
+        cosmology=fixed_cosmology,
+        mass_def=mass_def,
+        concentration=conc,
+        m_grid=jnp.geomspace(1e10, 1e15, 40),
+    )
+
+
+@pytest.fixture(
+    scope="session",
+    params=[
+        "mnu:v1",
+        "neff:v1",
+        "wcdm:v1",
+        "ede:v1",
+        "ede:v2",
+        "mnu-3states:v1",
+    ],
+)
 def other_emulator_cosmology(request):
     """
     A Cosmology for each non-lcdm emulator set, at default params. Skips cleanly if
