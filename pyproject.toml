@@ -52,6 +52,13 @@ Homepage = "https://github.com/class_sz_organization/hmfast"
 Repository = "https://github.com/class_sz_organization/hmfast"
 Documentation = "https://hmfast.readthedocs.io"
 
+[tool.pytest.ini_options]
+markers = [
+    "ccl: cross-checks against pyccl as ground truth (requires pyccl, auto-skipped otherwise)",
+    "camb: cross-checks requiring CAMB via CCL's boltzmann_camb transfer function (requires camb, auto-skipped otherwise)",
+]
+python_files = ["test_*.py", "benchmark_*.py"]
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 

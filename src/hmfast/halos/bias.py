@@ -13,7 +13,7 @@ class HaloBias(ABC):
     Child classes must implement :meth:`bias`.
     """
     @abstractmethod
-    def bias(self, cosmology, m, z, mass_def=None, convert_masses=False, order=1):
+    def bias(self, cosmology, m, z, mass_def=None, order=1):
         """Required halo bias evaluator."""
         pass
 
@@ -121,8 +121,8 @@ class T10HaloBias(HaloBias):
         return b2_nu
 
 
-    @partial(jax.jit, static_argnums=(0, 5, 6))
-    def bias(self, cosmology, m, z, mass_def=MassDefinition(delta=200, reference="mean"), convert_masses=False, order=1):
+    @partial(jax.jit, static_argnums=(0, 5))
+    def bias(self, cosmology, m, z, mass_def=MassDefinition(delta=200, reference="mean"), order=1):
         """
         Compute the halo bias for a given order.
         
@@ -154,9 +154,6 @@ class T10HaloBias(HaloBias):
         mass_def : MassDefinition, optional
             Halo mass definition at which to evaluate the bias. Defaults to
             the native :math:`200\\mathrm{m}` calibration definition.
-        convert_masses : bool, optional
-            Mass conversions are applied if ``convert_masses`` is set to
-            ``True``.
         order : int, optional
             Bias order to evaluate. Supported values are ``1`` and ``2``.
         
