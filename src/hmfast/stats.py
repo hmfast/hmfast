@@ -6,6 +6,7 @@ import mcfit
 import numpy as np
 
 from hmfast.halos.profiles.profiles_2pt import _fourier_2pt
+from hmfast.halos.profiles.hod import GalaxyHODProfile
 
 
 # -------------------------
@@ -158,7 +159,49 @@ def _pair_integral(halo_model, p1, p2, k1, k2, z, outer=False, bias_order=1):
     return jnp.squeeze(integral + hm.hm_consistency * correction)
 
 
-def _dPk_response(halo_model, k, z, profile1, profile2=None):
+def _pair_integral_2pt(halo_model, p1, p2, k, z):
+    """
+    ∫ dn/dlnM * ⟨p1(k,M,z) p2(k,M,z)⟩_2pt dlnM
+
+    The bias_order=0 (unweighted) pair integral :math:`I_1^2`, built from the
+    specialised 1-halo 2-point kernel :func:`_fourier_2pt` instead of a naive
+    ``p1.fourier(k,...) * p2.fourier(k,...)`` product -- the same
+    generalisation :func:`_pair_integral`'s own docstring anticipates, applied
+    here specifically for the SSC number-counts counter-term (see
+    :func:`_dPk_response`). Unlike ``_pair_integral``, there is no
+    ``outer``/independent-k1-k2 mode: ``_fourier_2pt`` has no such notion (it
+    takes a single shared ``k`` for both legs), which is all the counter-term
+    ever needs (matching the existing ``i12_uv`` term's own single-k
+    convention in ``_dPk_response``).
+
+    Returns
+    -------
+    array
+        Shape (Nk, Nz), singleton dimensions squeezed.
+    """
+    hm = halo_model
+    m, z_arr = hm.m_grid, jnp.atleast_1d(z)
+    logm = jnp.log(m)
+    dm = jnp.diff(logm)
+    w = jnp.concatenate([jnp.array([dm[0]]), dm[:-1] + dm[1:], jnp.array([dm[-1]])]) * 0.5
+
+    dndlnm = jnp.reshape(
+        hm.halo_mass_function.dndlnm(hm.cosmology, m, z_arr, hm.mass_def),
+        (len(m), len(z_arr)),
+    )
+    total_weights = dndlnm * w[:, None]  # (Nm, Nz), bias_order=0 (unweighted)
+
+    ks = jnp.atleast_1d(k)
+    u2pt = jnp.reshape(_fourier_2pt(hm, p1, p2, ks, m, z_arr), (len(ks), len(m), len(z_arr)))
+
+    n_min, _, _ = hm._counter_terms(z_arr)
+    integral = jnp.sum(u2pt * total_weights[None, :, :], axis=1)  # (Nk, Nz)
+    correction = n_min[None, :] * u2pt[:, 0, :]
+    return jnp.squeeze(integral + hm.hm_consistency * correction)
+
+
+def _dPk_response(halo_model, k, z, profile1, profile2=None,
+                   needs_counterterm1=None, needs_counterterm2=None):
     """
     Halo-model power-spectrum response :math:`\\partial P_{u,v}(k,z) /
     \\partial\\delta_b`, the effective "trispectrum" entering the
@@ -177,13 +220,20 @@ def _dPk_response(halo_model, k, z, profile1, profile2=None):
     integral (:func:`_pair_integral` with ``bias_order=1``, evaluated at
     matching :math:`k` for both legs).
 
-    .. note::
+    If ``needs_counterterm1``/``needs_counterterm2`` mark :math:`u`/:math:`v`
+    as discrete number-counts observables (e.g. galaxy clustering/HOD) rather
+    than a continuous field, the number-counts counter-term is subtracted:
 
-        This does not include the number-counts counter-term
-        (:math:`-(b_u+b_v)P_{u,v}`) that applies when :math:`u` or
-        :math:`v` represents a discrete number-counts observable (e.g.
-        galaxy clustering/HOD) rather than a continuous field -- not
-        needed for continuous-field tracers (matter, lensing, pressure).
+    .. math::
+
+        \\partial P_{u,v}/\\partial\\delta_b \\; \\mathrel{-}= \\;
+        (b_u+b_v)\\,P_{u,v}(k,z), \\qquad
+        P_{u,v} = P_{\\rm lin}\\,I_1^1(k\\,|\\,u)\\,I_1^1(k\\,|\\,v) + I_1^{2,\\rm 2pt}(k\\,|\\,u,v)
+
+    where :math:`b_u = I_1^1(k\\,|\\,u)` (only included for the legs flagged
+    ``True``) and :math:`I_1^{2,\\rm 2pt}` is :func:`_pair_integral_2pt`, the
+    bias_order=0 pair integral built from the specialised 1-halo 2-point
+    kernel (:func:`_fourier_2pt`) rather than a naive profile product.
 
     Parameters
     ----------
@@ -196,6 +246,14 @@ def _dPk_response(halo_model, k, z, profile1, profile2=None):
         First profile (:math:`u`).
     profile2 : HaloProfile or None, default None
         Second profile (:math:`v`). If None, defaults to ``profile1``.
+    needs_counterterm1 : bool or None, default None
+        Whether ``profile1`` is a discrete number-counts observable requiring
+        the counter-term above. ``None`` (the default) auto-detects via
+        ``isinstance(profile1, GalaxyHODProfile)`` -- ``True`` for HOD-like
+        profiles, ``False`` for everything else (matter, lensing, pressure,
+        CIB). An explicit ``True``/``False`` always overrides auto-detection.
+    needs_counterterm2 : bool or None, default None
+        As ``needs_counterterm1``, but for ``profile2``.
 
     Returns
     -------
@@ -205,6 +263,10 @@ def _dPk_response(halo_model, k, z, profile1, profile2=None):
     """
     hm = halo_model
     profile2 = profile2 if profile2 is not None else profile1
+    if needs_counterterm1 is None:
+        needs_counterterm1 = isinstance(profile1, GalaxyHODProfile)
+    if needs_counterterm2 is None:
+        needs_counterterm2 = isinstance(profile2, GalaxyHODProfile)
     k_arr, z_arr = jnp.atleast_1d(k), jnp.atleast_1d(z)
     nk, nz = len(k_arr), len(z_arr)
 
@@ -225,6 +287,14 @@ def _dPk_response(halo_model, k, z, profile1, profile2=None):
     )(dlnp_fine)
 
     response = (47.0 / 21.0 - dlnp_dlnk / 3.0) * pk_lin * i11_u * i11_v + i12_uv
+
+    if needs_counterterm1 or needs_counterterm2:
+        i02_uv = jnp.reshape(_pair_integral_2pt(hm, profile1, profile2, k_arr, z_arr), (nk, nz))
+        P_uv = pk_lin * i11_u * i11_v + i02_uv
+        b_u = i11_u if needs_counterterm1 else 0.0
+        b_v = i11_v if needs_counterterm2 else 0.0
+        response = response - (b_u + b_v) * P_uv
+
     return jnp.squeeze(response)
 
 
@@ -1566,7 +1636,9 @@ class Tk:
     # Super-sample covariance
     # ------------------------------------------------------------------
 
-    def covariance_ssc(self, halo_model, tracer1, tracer2, tracer3, tracer4, l1, l2, z, f_sky=1.0):
+    def covariance_ssc(self, halo_model, tracer1, tracer2, tracer3, tracer4, l1, l2, z, f_sky=1.0,
+                        needs_counterterm1=None, needs_counterterm2=None,
+                        needs_counterterm3=None, needs_counterterm4=None):
         """
         Super-sample covariance (SSC) between two Limber-projected angular
         power spectra :math:`C_{\\ell_1}^{12}` and :math:`C_{\\ell_2}^{34}`.
@@ -1599,10 +1671,12 @@ class Tk:
 
         .. note::
 
-            Does not include the number-counts counter-term that applies
-            when a profile represents a discrete number-counts observable
-            (e.g. galaxy clustering/HOD) rather than a continuous field --
-            see :func:`_dPk_response`.
+            The number-counts counter-term (see :func:`_dPk_response`) is
+            applied per tracer slot via ``needs_counterterm1``..``4``. Each
+            defaults to ``None``, which auto-detects per slot from
+            ``tracerN.profile`` (``True`` for HOD-like discrete profiles,
+            ``False`` otherwise -- see :func:`_dPk_response`); an explicit
+            ``True``/``False`` always overrides the auto-detected value.
 
         Parameters
         ----------
@@ -1628,6 +1702,11 @@ class Tk:
         f_sky : float, default 1.0
             Observed sky fraction. Also sets the disc footprint used for
             :math:`\\sigma_B^2(z)`.
+        needs_counterterm1, needs_counterterm2, needs_counterterm3, needs_counterterm4 : bool or None, default None
+            Whether ``tracer1``/``tracer2``/``tracer3``/``tracer4``'s
+            profile is a discrete number-counts observable requiring the
+            SSC counter-term (see :func:`_dPk_response`). ``None``
+            auto-detects from the tracer's profile type.
 
         Returns
         -------
@@ -1646,8 +1725,14 @@ class Tk:
             k1 = (l1 + 0.5) / chi
             k2 = (l2 + 0.5) / chi
 
-            response1 = _dPk_response(hm, k1, z_i, tracer1.profile, tracer2.profile)  # (N_l1,)
-            response2 = _dPk_response(hm, k2, z_i, tracer3.profile, tracer4.profile)  # (N_l2,)
+            response1 = _dPk_response(
+                hm, k1, z_i, tracer1.profile, tracer2.profile,
+                needs_counterterm1=needs_counterterm1, needs_counterterm2=needs_counterterm2,
+            )  # (N_l1,)
+            response2 = _dPk_response(
+                hm, k2, z_i, tracer3.profile, tracer4.profile,
+                needs_counterterm1=needs_counterterm3, needs_counterterm2=needs_counterterm4,
+            )  # (N_l2,)
             response_outer = response1[:, None] * response2[None, :]  # (N_l1, N_l2)
 
             kernels = jnp.squeeze(
