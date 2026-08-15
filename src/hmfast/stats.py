@@ -1664,19 +1664,36 @@ class Tk:
 
         with :math:`k_1 = (\\ell_1 + 1/2)/\\chi(z)`,
         :math:`k_2 = (\\ell_2 + 1/2)/\\chi(z)`, :math:`W_i` the tracer
-        kernels, :math:`\\sigma_B^2(z)` the disc-footprint variance (see
-        :meth:`~hmfast.cosmology.Cosmology.sigma2_b_disc`), and
-        :math:`\\partial P_{u,v}/\\partial\\delta_b` the halo-model power
-        spectrum response (see :func:`_dPk_response`).
+        kernels, and :math:`\\sigma_B^2(z)` the disc-footprint variance (see
+        :meth:`~hmfast.cosmology.Cosmology.sigma2_b_disc`).
 
-        .. note::
+        For a profile pair :math:`(u,v)`, the response (Wagner et al. 2015;
+        Takada & Hu 2013) is
 
-            The number-counts counter-term (see :func:`_dPk_response`) is
-            applied per tracer slot via ``needs_counterterm1``..``4``. Each
-            defaults to ``None``, which auto-detects per slot from
-            ``tracerN.profile`` (``True`` for HOD-like discrete profiles,
-            ``False`` otherwise -- see :func:`_dPk_response`); an explicit
-            ``True``/``False`` always overrides the auto-detected value.
+        .. math::
+
+            \\frac{\\partial P_{u,v}(k,z)}{\\partial\\delta_b} =
+            \\left(\\frac{47}{21} - \\frac{1}{3}\\frac{d\\ln P_{\\rm lin}}{d\\ln k}\\right)
+            P_{\\rm lin}(k,z)\\, I_1^1(k \\,|\\, u)\\, I_1^1(k \\,|\\, v)
+            + I_1^2(k \\,|\\, u, v)
+            \\; - \\; \\left[\\theta_u\\, I_1^1(k \\,|\\, u) + \\theta_v\\, I_1^1(k \\,|\\, v)\\right]
+            P_{u,v}(k,z)
+
+        with :math:`P_{u,v}(k,z) = P_{\\rm lin}(k,z)\\, I_1^1(k \\,|\\, u)\\,
+        I_1^1(k \\,|\\, v) + I_1^{2,\\rm 2pt}(k \\,|\\, u, v)`, where
+        :math:`I_1^1(k\\,|\\,u) = \\int d\\ln M\\, (dn/d\\ln M)\\, b_1(M,z)\\,
+        u(k\\,|\\,M,z)` is the linearly-biased single-profile mass integral,
+        :math:`I_1^2` is the same integral with a naive product
+        :math:`u(k\\,|\\,M,z)\\,v(k\\,|\\,M,z)` in place of a single profile,
+        and :math:`I_1^{2,\\rm 2pt}` replaces that naive product with the
+        halo's joint 2-point cumulant of :math:`u,v` -- a shot-noise-aware
+        kernel that reduces to the naive product for continuous-field
+        profiles.
+
+        :math:`\\theta_u, \\theta_v \\in \\{0, 1\\}` flag whether
+        :math:`u`/:math:`v` is a discrete number-counts observable (e.g.
+        HOD), via ``needs_counterterm1``..``4`` below; the bracketed
+        counter-term vanishes when both are 0.
 
         Parameters
         ----------
@@ -1705,8 +1722,9 @@ class Tk:
         needs_counterterm1, needs_counterterm2, needs_counterterm3, needs_counterterm4 : bool or None, default None
             Whether ``tracer1``/``tracer2``/``tracer3``/``tracer4``'s
             profile is a discrete number-counts observable requiring the
-            SSC counter-term (see :func:`_dPk_response`). ``None``
-            auto-detects from the tracer's profile type.
+            SSC counter-term above (:math:`\\theta_u`/:math:`\\theta_v` for
+            the first/second response, respectively). ``None`` auto-detects
+            from the tracer's profile type.
 
         Returns
         -------
