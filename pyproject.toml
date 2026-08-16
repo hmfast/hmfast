@@ -4,19 +4,21 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hmfast"
-version = "0.1.0"
+version = "0.2.0"
 description = "Machine learning accelerated and differentiable halo model code"
 readme = "README.md"
 requires-python = ">=3.8"
 license = {file = "LICENSE"}
 authors = [
-    {name = "Boris", email = "boris@example.com"},
+    {name = "Patrick Janulewicz"},
+    {name = "Licong Xu"},
+    {name = "Boris Bolliet"},
 ]
 keywords = ["halo model", "cosmology", "machine learning", "jax", "emulator"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
@@ -48,8 +50,8 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/class_sz_organization/hmfast"
-Repository = "https://github.com/class_sz_organization/hmfast"
+Homepage = "https://github.com/hmfast/hmfast"
+Repository = "https://github.com/hmfast/hmfast"
 Documentation = "https://hmfast.readthedocs.io"
 
 [tool.pytest.ini_options]
@@ -65,6 +67,9 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.exclude-package-data]
+"*" = [".ipynb_checkpoints/*", "*-checkpoint.py"]
 
 [tool.black]
 line-length = 88

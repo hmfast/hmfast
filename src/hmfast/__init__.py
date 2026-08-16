@@ -5,7 +5,7 @@ This package provides fast, differentiable halo model calculations using JAX
 and machine learning emulators for cosmological applications.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "Patrick Janulewicz, Licong Xu, Boris Bolliet"
 __email__ = "pj407@cam.ac.uk"
 
