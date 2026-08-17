@@ -23,7 +23,7 @@ class tSZTracer(Tracer):
 
     _required_profile_type = PressureProfile
 
-    def __init__(self, profile=None, z_max=6.0):
+    def __init__(self, profile=None, z_max=5.0):
         super().__init__(profile=profile or GNFWPressureProfile())
         self.z_max = z_max
 

@@ -339,7 +339,9 @@ def mass_translator(mass_def_old, mass_def_new, concentration, max_iter=20):
 		@jax.jit
 		def f(cosmology, m, z):
 			m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
-			return jnp.squeeze(jnp.broadcast_to(m[:, None], (len(m), len(z))))
+			if m.ndim == 1:
+				m = jnp.broadcast_to(m[:, None], (len(m), len(z)))
+			return jnp.squeeze(m)
 
 		return f
 

@@ -22,7 +22,7 @@ class CIBTracer(Tracer):
 
     _required_profile_type = CIBProfile
 
-    def __init__(self, profile=None, z_max=6.0):
+    def __init__(self, profile=None, z_max=5.0):
         super().__init__(profile=profile or S12CIBProfile(nu=100))
         self.z_max = z_max
 
