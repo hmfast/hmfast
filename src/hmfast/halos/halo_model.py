@@ -180,7 +180,7 @@ class HaloModel:
         return n_min, b1_min, b2_min
 
 
-    @partial(jax.jit, static_argnums=(1, 4))
+    @partial(jax.jit, static_argnums=(4,))
     def _I(self, profile, k, z, bias_order=1):
         """
         Generalised halo model mass integral.

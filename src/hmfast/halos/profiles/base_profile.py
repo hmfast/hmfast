@@ -92,6 +92,57 @@ class HaloProfile(ABC):
 
         return k_native, jnp.squeeze(u_k_native)
 
+    def _fourier_via_hankel_transform(self, halo_model, k, m, z, r_scale):
+        """
+        Generic Fourier-space transform via a Hankel transform of ``self.real()``,
+        interpolated against the dimensionless wavenumber :math:`q = k\\,r_{\\rm scale}\\,(1+z)`,
+        with an analytic :math:`q \\to 0` anchor from direct real-space integration.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+            Passed through to ``self.real()`` and ``self._u_k_hankel()``.
+        k, m, z : jnp.ndarray
+            Already ``atleast_1d``'d wavenumber, mass, and redshift grids.
+        r_scale : jnp.ndarray
+            Characteristic radius (e.g. :math:`r_\\Delta`, :math:`r_s`, :math:`r_{\\rm vir}`)
+            with shape :math:`(N_m, N_z)`, defining both the real-space sampling grid
+            and the q-space rescaling.
+
+        Returns
+        -------
+        jnp.ndarray
+            Fourier-space profile with shape :math:`(N_k, N_m, N_z)`, where singleton
+            dimensions get squeezed before return.
+        """
+        r = self.x_grid[:, None, None] * r_scale[None, :, :] * (1.0 + z[None, None, :])
+        real_profile = jnp.reshape(self.real(halo_model, r, m, z), (len(self.x_grid), len(m), len(z)))
+
+        k_native, u_k_native = self._u_k_hankel(halo_model, self.x_grid, r, m, z)
+        u_k_native = jnp.reshape(u_k_native, (len(k_native), len(m), len(z)))
+
+        q_native = jnp.broadcast_to(k_native[:, None, None], (len(k_native), len(m), len(z)))
+        q_target = k[:, None, None] * r_scale[None, :, :] * (1.0 + z[None, None, :])
+        prefactor = 4.0 * jnp.pi * r_scale**3 * (1.0 + z)[None, :] ** 3
+
+        u_k_val = prefactor[None, :, :] * u_k_native * jnp.sqrt(jnp.pi / (2.0 * q_native))
+        u_k_zero = prefactor * jnp.trapezoid(self.x_grid[:, None, None] ** 2 * real_profile, x=self.x_grid, axis=0)
+
+        q_native = jnp.concatenate([jnp.zeros((1, len(m), len(z))), q_native], axis=0)
+        u_k_val = jnp.concatenate([u_k_zero[None, :, :], u_k_val], axis=0)
+
+        def interp_at_col(q_t, q_n, u_n):
+            return jnp.interp(jnp.log(q_t), jnp.log(q_n[1:]), u_n[1:], left=u_n[0])
+
+        q_target_cols = jnp.transpose(q_target, (1, 2, 0))
+        q_native_cols = jnp.transpose(q_native, (1, 2, 0))
+        u_k_cols = jnp.transpose(u_k_val, (1, 2, 0))
+
+        vmap_interp = jax.vmap(jax.vmap(interp_at_col, in_axes=(0, 0, 0), out_axes=0), in_axes=(0, 0, 0), out_axes=0)
+
+        u_interp = vmap_interp(q_target_cols, q_native_cols, u_k_cols)
+        return jnp.squeeze(jnp.transpose(u_interp, (2, 0, 1)))
+
     def _u_r_nfw(self, halo_model, r, m, z):
         """
         Calculate the normalized real-space NFW matter profile.

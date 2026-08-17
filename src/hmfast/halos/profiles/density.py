@@ -376,42 +376,10 @@ class B16DensityProfile(DensityProfile):
         """
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
         mass_def_200c = MassDefinition(200, "critical")
-        m_200c = mass_translator(
-            halo_model.mass_def, mass_def_200c, halo_model.concentration
-        )(halo_model.cosmology, m, z)
-        m_200c = jnp.reshape(m_200c, (len(m), len(z)))
-        r_delta = jnp.reshape(
-            mass_def_200c.r_delta(halo_model.cosmology, m_200c, z), (len(m), len(z))
-        )
-        d_A_z = jnp.atleast_1d(halo_model.cosmology.angular_diameter_distance(z))
-        ell_delta = d_A_z[None, :] / r_delta
-
-        chi = d_A_z * (1 + z)
-        ell_target = k[:, None] * chi[None, :] - 0.5
-
-        prefactor = 4 * jnp.pi * r_delta**3 * (1 + z)[None, :] ** 3
-
-        r = self.x_grid[:, None, None] * r_delta[None, :, :] * (1.0 + z[None, None, :])
+        m_200c = jnp.reshape(mass_translator(halo_model.mass_def, mass_def_200c, halo_model.concentration)(halo_model.cosmology, m, z), (len(m), len(z)))
+        r_delta = jnp.reshape(mass_def_200c.r_delta(halo_model.cosmology, m_200c, z), (len(m), len(z)))
         halo_model_200c = halo_model.update(mass_def=mass_def_200c)
-        k_native, u_k_native = self._u_k_hankel(
-            halo_model_200c, self.x_grid, r, m_200c, z
-        )
-        u_k_native = jnp.reshape(u_k_native, (len(k_native), len(m), len(z)))
-
-        u_ell_native = u_k_native * jnp.sqrt(jnp.pi / (2 * k_native[:, None, None]))
-        ell_native = k_native[:, None, None] * ell_delta[None, :, :]
-        u_ell_val = prefactor[None, :, :] * u_ell_native
-
-        def interp_single_column(target_x, native_x, native_y):
-            return jnp.interp(jnp.log(target_x), jnp.log(native_x), native_y)
-
-        vmapped_interp = jax.vmap(
-            jax.vmap(interp_single_column, in_axes=(None, 1, 1), out_axes=1),
-            in_axes=(1, 2, 2),
-            out_axes=2,
-        )
-
-        return jnp.squeeze(vmapped_interp(ell_target, ell_native, u_ell_val))
+        return self._fourier_via_hankel_transform(halo_model_200c, k, m_200c, z, r_delta)
 
 
 jax.tree_util.register_pytree_node(
@@ -566,6 +534,11 @@ class _NFWDensityProfile(DensityProfile):
 
         return jnp.squeeze(rho_gas / mu_e)
 
+    def _fourier_radius_scale(self, halo_model, m, z):
+        r_delta = jnp.reshape(halo_model.mass_def.r_delta(halo_model.cosmology, m, z), (len(m), len(z)))
+        c_delta = jnp.reshape(halo_model.concentration.c_delta(halo_model.cosmology, m, z, mass_def=halo_model.mass_def), (len(m), len(z)))
+        return r_delta / c_delta
+
     @partial(jax.jit, static_argnums=(0,))
     def fourier(self, halo_model, k, m, z):
         """
@@ -589,45 +562,8 @@ class _NFWDensityProfile(DensityProfile):
             singleton dimensions get squeezed before return.
         """
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
-        r_delta = jnp.reshape(
-            halo_model.mass_def.r_delta(halo_model.cosmology, m, z), (len(m), len(z))
-        )
-        c_delta = jnp.reshape(
-            halo_model.concentration.c_delta(
-                halo_model.cosmology,
-                m,
-                z,
-                mass_def=halo_model.mass_def,
-            ),
-            (len(m), len(z)),
-        )
-        r_s = r_delta / c_delta
-        d_A_z = jnp.atleast_1d(halo_model.cosmology.angular_diameter_distance(z))
-        ell_s = d_A_z[None, :] / r_s
-
-        chi = d_A_z * (1 + z)
-        ell_target = k[:, None] * chi[None, :] - 0.5
-
-        prefactor = 4 * jnp.pi * r_s**3 * (1 + z)[None, :] ** 3
-
-        r = self.x_grid[:, None, None] * r_s[None, :, :] * (1.0 + z[None, None, :])
-        k_native, u_k_native = self._u_k_hankel(halo_model, self.x_grid, r, m, z)
-        u_k_native = jnp.reshape(u_k_native, (len(k_native), len(m), len(z)))
-
-        u_ell_native = u_k_native * jnp.sqrt(jnp.pi / (2 * k_native[:, None, None]))
-        ell_native = k_native[:, None, None] * ell_s[None, :, :]
-        u_ell_val = prefactor[None, :, :] * u_ell_native
-
-        def interp_single_column(target_x, native_x, native_y):
-            return jnp.interp(jnp.log(target_x), jnp.log(native_x), native_y)
-
-        vmapped_interp = jax.vmap(
-            jax.vmap(interp_single_column, in_axes=(None, 1, 1), out_axes=1),
-            in_axes=(1, 2, 2),
-            out_axes=2,
-        )
-
-        return jnp.squeeze(vmapped_interp(ell_target, ell_native, u_ell_val))
+        r_s = jnp.reshape(self._fourier_radius_scale(halo_model, m, z), (len(m), len(z)))
+        return self._fourier_via_hankel_transform(halo_model, k, m, z, r_s)
 
 
 jax.tree_util.register_pytree_node(
@@ -880,6 +816,9 @@ class _BCMDensityProfile(DensityProfile):
         mu_e = 1.14
         return jnp.squeeze(num / (denom1 * denom2) / mu_e)
 
+    def _fourier_radius_scale(self, halo_model, m, z):
+        return jnp.reshape(MassDefinition("vir", "critical").r_delta(halo_model.cosmology, m, z), (len(m), len(z)))
+
     @partial(jax.jit, static_argnums=(0,))
     def fourier(self, halo_model, k, m, z):
         """
@@ -903,40 +842,8 @@ class _BCMDensityProfile(DensityProfile):
             singleton dimensions get squeezed before return.
         """
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
-        r_vir = jnp.reshape(
-            MassDefinition("vir", "critical").r_delta(
-                halo_model.cosmology,
-                m,
-                z,
-            ),
-            (len(m), len(z)),
-        )
-        d_A_z = jnp.atleast_1d(halo_model.cosmology.angular_diameter_distance(z))
-        ell_vir = d_A_z[None, :] / r_vir
-
-        chi = d_A_z * (1 + z)
-        ell_target = k[:, None] * chi[None, :] - 0.5
-
-        prefactor = 4 * jnp.pi * r_vir**3 * (1 + z)[None, :] ** 3
-
-        r = self.x_grid[:, None, None] * r_vir[None, :, :] * (1.0 + z[None, None, :])
-        k_native, u_k_native = self._u_k_hankel(halo_model, self.x_grid, r, m, z)
-        u_k_native = jnp.reshape(u_k_native, (len(k_native), len(m), len(z)))
-
-        u_ell_native = u_k_native * jnp.sqrt(jnp.pi / (2 * k_native[:, None, None]))
-        ell_native = k_native[:, None, None] * ell_vir[None, :, :]
-        u_ell_val = prefactor[None, :, :] * u_ell_native
-
-        def interp_single_column(target_x, native_x, native_y):
-            return jnp.interp(jnp.log(target_x), jnp.log(native_x), native_y)
-
-        vmapped_interp = jax.vmap(
-            jax.vmap(interp_single_column, in_axes=(None, 1, 1), out_axes=1),
-            in_axes=(1, 2, 2),
-            out_axes=2,
-        )
-
-        return jnp.squeeze(vmapped_interp(ell_target, ell_native, u_ell_val))
+        r_vir = jnp.reshape(self._fourier_radius_scale(halo_model, m, z), (len(m), len(z)))
+        return self._fourier_via_hankel_transform(halo_model, k, m, z, r_vir)
 
 
 jax.tree_util.register_pytree_node(

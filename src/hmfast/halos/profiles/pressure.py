@@ -45,47 +45,8 @@ class PressureProfile(HaloProfile):
             singleton dimensions get squeezed before return.
         """
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
-        r_scale = jnp.reshape(
-            self._fourier_radius_scale(halo_model, m, z), (len(m), len(z))
-        )
-        r = self.x_grid[:, None, None] * r_scale[None, :, :] * (1.0 + z[None, None, :])
-        real_profile = jnp.reshape(
-            self.real(halo_model, r, m, z), (len(self.x_grid), len(m), len(z))
-        )
-
-        k_native, u_k_native = self._u_k_hankel(halo_model, self.x_grid, r, m, z)
-        u_k_native = jnp.reshape(u_k_native, (len(k_native), len(m), len(z)))
-
-        q_native = jnp.broadcast_to(
-            k_native[:, None, None], (len(k_native), len(m), len(z))
-        )
-        q_target = k[:, None, None] * r_scale[None, :, :] * (1.0 + z[None, None, :])
-        prefactor = 4.0 * jnp.pi * r_scale**3 * (1.0 + z)[None, :] ** 3
-        u_k_val = (
-            prefactor[None, :, :] * u_k_native * jnp.sqrt(jnp.pi / (2.0 * q_native))
-        )
-        u_k_zero = prefactor * jnp.trapezoid(
-            self.x_grid[:, None, None] ** 2 * real_profile, x=self.x_grid, axis=0
-        )
-
-        q_native = jnp.concatenate([jnp.zeros((1, len(m), len(z))), q_native], axis=0)
-        u_k_val = jnp.concatenate([u_k_zero[None, :, :], u_k_val], axis=0)
-
-        def interp_at_z(q_t, q_n, u_n):
-            return jnp.interp(jnp.log(q_t), jnp.log(q_n[1:]), u_n[1:], left=u_n[0])
-
-        q_target_cols = jnp.transpose(q_target, (1, 2, 0))
-        q_native_cols = jnp.transpose(q_native, (1, 2, 0))
-        u_k_cols = jnp.transpose(u_k_val, (1, 2, 0))
-
-        vmap_interp = jax.vmap(
-            jax.vmap(interp_at_z, in_axes=(0, 0, 0), out_axes=0),
-            in_axes=(0, 0, 0),
-            out_axes=0,
-        )
-
-        u_interp = vmap_interp(q_target_cols, q_native_cols, u_k_cols)
-        return jnp.squeeze(jnp.transpose(u_interp, (2, 0, 1)))
+        r_scale = jnp.reshape(self._fourier_radius_scale(halo_model, m, z), (len(m), len(z)))
+        return self._fourier_via_hankel_transform(halo_model, k, m, z, r_scale)
 
 
 class GNFWPressureProfile(PressureProfile):
