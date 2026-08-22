@@ -427,61 +427,42 @@ class Pk:
     def cl_2h_nonlimber(self, halo_model, tracer1, tracer2, l, z, l_limber=0.0,
                          k=None, z_fid=0.0, n_chi=None, n_interp=200, bias=0.1, window=0.2):
         """
-        2-halo angular power spectrum C_ell, exact at low ell and via the
-        fast Limber approximation (:meth:`cl_2h`) at high ell.
-
-        .. note::
-
-            Experimental: this method runs alongside :meth:`cl_2h` while
-            it's being validated against Limber-only results, and is
-            expected to eventually replace it.
+        Compute the 2-halo contribution to the angular power spectrum
+        :math:`C_\\ell^{2h}`, using the Limber approximation (:meth:`cl_2h`)
+        by default, with an exact non-Limber calculation available below a
+        chosen multipole.
 
         The Limber approximation assumes each tracer's kernel varies slowly
         compared to the density fluctuations it's weighted against; this
         breaks down at low multipoles, where kernels can be narrow or only
         partially overlap in redshift. Below `l_limber`, this method
-        instead performs an exact projection via a closed-form
-        Hankel-transform (FFTLog) decomposition of each kernel
-        (:func:`~hmfast.stats.nonlimber._cl_2h_nonlimber`); at and above
-        `l_limber`, it falls back to :meth:`cl_2h`. Only the 2-halo
-        contribution is computed here; add a 1-halo term separately (e.g.
-        from :meth:`cl_1h`) for the full spectrum.
-
-        This method itself is plain Python, not ``jax.jit``-compiled: which
-        ell values go to which method is a data-dependent shape decision no
-        array library can trace, so `l` must be concrete here (not a value
-        being traced by JAX) and the low/high split is done as ordinary
-        Python index bookkeeping. The two branches it dispatches to,
-        :func:`~hmfast.stats.nonlimber._cl_2h_nonlimber` and
-        :meth:`_cl_limber`, are each independently ``jax.jit``-compiled and
-        cached by their own input shapes and static config
-        (``n_chi``/``n_interp``/``bias``/``window`` for the former,
-        ``include_1h``/``include_2h``/``self`` for the latter) -- so
-        repeated calls on the *same* ``Pk`` instance with the same low/high
-        ell *counts* reuse the cached compilation even when the concrete
-        ell values, `z`, or any parameter reachable through
-        `halo_model`/`tracer1`/`tracer2` change, and those all remain fully
-        traced and differentiable through the cached functions.
+        instead performs an exact projection using a SwiftCl-style
+        (`Reymond et al. 2025 <https://arxiv.org/abs/2505.22718>`_)
+        FFTLog decomposition of each tracer kernel, which exploits the
+        separability of the 2-halo power spectrum to avoid the double
+        line-of-sight integral over oscillatory Bessel functions that an
+        exact projection would otherwise require. At and above `l_limber`,
+        it falls back to the Limber approximation (:meth:`cl_2h`). Only the
+        2-halo contribution is computed here; add a 1-halo term separately
+        (e.g. from :meth:`cl_1h`) for the full spectrum.
 
         Parameters
         ----------
         halo_model : HaloModel
-            Assembled halo model (cosmology, mass function, bias, concentration).
         tracer1 : Tracer
-            First tracer.
+            First tracer object.
         tracer2 : Tracer or None
-            Second tracer; if None, computes the auto-correlation of tracer1.
+            Second tracer object (if None, uses tracer1).
         l : array-like
-            Multipole values. Must be concrete (not a value being traced by
-            JAX), since choosing which method to use per multipole is a
-            data-dependent shape decision JAX can never trace (with any
-            array library).
-        z : array-like
-            Redshift sampling. Only its minimum, maximum, and length are
-            used, to set up internal grids; each tracer's own redshift
-            support is covered automatically even if narrower than `z`, so
-            it's safe to reuse whatever `z` grid you'd use elsewhere for
-            these tracers.
+            Multipole grid. Must be concrete (not a value being traced by
+            JAX), since the low/high `l_limber` split is a data-dependent
+            shape decision.
+        z : array
+            Redshift array. This must be an array because it defines the
+            integration grid over redshift; only its minimum, maximum, and
+            length are used to set up internal grids for the low-ell
+            branch, and each tracer's own redshift support is covered
+            automatically even if narrower than `z`.
         l_limber : float, default 0.0
             Multipoles below this use the exact low-ell method; multipoles
             at or above it use the Limber approximation. The default, 0.0,
@@ -519,17 +500,6 @@ class Pk:
         -------
         cl_2h : array, shape (N_ell,)
             The 2-halo angular power spectrum, in the same order as `l`.
-
-        Notes
-        -----
-        Gradients via ``jax.grad``/``jax.jacobian`` work with respect to `z`
-        and any parameter reachable through `halo_model`/`tracer1`/
-        `tracer2`. `l`/`l_limber` are concrete Python-level dispatch
-        inputs, not part of either branch's jit cache key -- only the
-        resulting low/high ell *counts* matter for recompilation.
-        `n_chi`/`n_interp`/`bias`/`window` remain static (they drive shapes
-        or dispatch, not physics) and re-trigger a (cached-per-value)
-        recompilation of the affected branch if changed.
         """
         tracer2 = tracer1 if tracer2 is None else tracer2
 
