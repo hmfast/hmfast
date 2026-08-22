@@ -1,8 +1,5 @@
-import functools
-
 import jax
 import jax.numpy as jnp
-import mcfit
 import numpy as np
 
 from hmfast.halos.profiles.profiles_2pt import _fourier_2pt
@@ -381,438 +378,6 @@ def _kr_pkr(hm, k, kp, z_arr):
 
 
 # -------------------------
-# Halo model power spectrum
-# -------------------------
-
-class Pk:
-    """
-    Halo model power spectrum.
-
-    .. math::
-
-        P(k, z) = P_{1h} + P_{2h}
-
-    where the two terms are built from the generalised halo-model mass
-    integral
-
-    .. math::
-
-        I_\\mu^\\beta(k_1, \\dots, k_\\mu, z) = \\int d\\ln M\\,
-        \\frac{dn}{d\\ln M}\\, b_\\beta(M, z) \\prod_{i=1}^{\\mu} u_i(k_i \\,|\\, M, z)
-
-    where :math:`\\mu` is the number of profiles/wavenumbers in the
-    product, :math:`b_\\beta` is the :math:`\\beta`-th order halo bias
-    (:math:`b_0 = 1` unweighted, :math:`b_1` linear), and :math:`u_i` are
-    the Fourier-space profiles (first moments). See :meth:`pk_1h` and
-    :meth:`pk_2h` for how each term is assembled from
-    :math:`I_\\mu^\\beta`.
-    """
-
-    # FFTLog k grid for xi_1h/xi_2h -- set as default in __init__
-    k_grid = None
-
-    def __init__(self, k_grid=None):
-        # FFTLog k grid for xi_1h/xi_2h
-        self.k_grid = k_grid if k_grid is not None else jnp.geomspace(1e-5, 1e3, 256)
-
-        # Define the P2xi object from mcfit, as we need to instantiate it before it can be used in a jitted function
-        self._p2xi = jax.jit(functools.partial(
-            mcfit.P2xi(self.k_grid, lowring=True, backend='jax'),
-            axis=0, extrap=False,
-        ))
-
-    # ------------------------------------------------------------------
-    # 1-halo term
-    # ------------------------------------------------------------------
-
-    def pk_1h(self, halo_model, k, z, profile1, profile2=None, k_damp=0.01):
-        """
-        Compute the 1-halo contribution to the 3D power spectrum.
-
-        .. math::
-
-            P_{1h}(k, z) = I_2^0(k, k, z)
-
-        where :math:`I_2^0` is the unweighted (:math:`\\beta=0`) pair
-        mass integral :math:`I_\\mu^\\beta` with :math:`\\mu=2`,
-        evaluated with both profiles at the same wavenumber :math:`k`.
-        The mass integral is performed over :attr:`m_grid`.
-
-        Parameters
-        ----------
-        halo_model : HaloModel
-        k : float or jnp.ndarray
-            Wavenumber grid in :math:`\\mathrm{Mpc}^{-1}`.
-        z : float or jnp.ndarray
-            Redshift grid.
-        profile1 : HaloProfile
-            First halo profile object.
-        profile2 : HaloProfile or None, default None
-            Second halo profile object. If None, defaults to profile1.
-        k_damp : float, default 0.01
-            Damping wavenumber in :math:`\\mathrm{Mpc}^{-1}` for the low-k suppression factor.
-
-        Returns
-        -------
-        pk_1h : array
-            1-halo power spectrum in :math:`\\mathrm{Mpc}^3`, with shape
-            :math:`(N_k, N_z)`, where singleton dimensions get squeezed before
-            return.
-        """
-        hm = halo_model
-        k, m, z = jnp.atleast_1d(k), hm.m_grid, jnp.atleast_1d(z)
-        profile2 = profile2 if profile2 is not None else profile1
-
-        # Weights and Setup
-        logm = jnp.log(m)
-        dm = jnp.diff(logm)
-        w = jnp.concatenate([jnp.array([dm[0]]), dm[:-1] + dm[1:], jnp.array([dm[-1]])]) * 0.5
-
-        dndlnm = jnp.reshape(hm.halo_mass_function.dndlnm(hm.cosmology, m, z, hm.mass_def), (len(m), len(z)))
-        total_weights = dndlnm * w[:, None]  # (Nm, Nz)
-
-        # Process a single mass bin at a time and extract the uk^2 at the lowest mass for the halo model consistency term
-        def process_bin(i):
-            pair_kernel = _fourier_2pt(hm, profile1, profile2, k, m, z)
-            pair_kernel = jnp.reshape(pair_kernel, (len(k), len(m), len(z)))
-            uk_sq_row = pair_kernel[:, i, :]
-
-            return uk_sq_row * total_weights[i], uk_sq_row
-
-        # vmap through the mass bins
-        integrand_rows, all_sq_profiles = jax.vmap(process_bin)(jnp.arange(len(m)))
-
-        pk1h = jnp.sum(integrand_rows, axis=0)
-
-        # Apply halo model consistency correction: n_min * uk_sq_min
-        uk_sq_min = all_sq_profiles[0]
-        n_min, _, _ = hm._counter_terms(z)
-        correction = n_min[None, :] * uk_sq_min
-        pk1h = pk1h + hm.hm_consistency * correction
-
-        # Apply damping
-        mask = k_damp > 0
-        damping = jnp.where(mask, 1.0 - jnp.exp(-(k / jnp.where(mask, k_damp, 1.0))**2), 1.0)
-
-        return jnp.squeeze(pk1h * damping[:, None])
-
-    # ------------------------------------------------------------------
-    # 2-halo term
-    # ------------------------------------------------------------------
-
-    def pk_2h(self, halo_model, k, z, profile1, profile2=None):
-        """
-        Compute the 2-halo contribution to the 3D power spectrum.
-
-        .. math::
-
-            P_{2h}(k, z) = P_{\\mathrm{lin}}(k, z) \\, I_1^1(k, z) \\, I_1^1(k, z)
-
-        where :math:`I_1^1` is the linearly-biased (:math:`\\beta=1`)
-        single-profile mass integral :math:`I_\\mu^\\beta` with
-        :math:`\\mu=1`, evaluated once per profile at wavenumber
-        :math:`k`. The mass integral is performed over :attr:`m_grid`.
-
-        Parameters
-        ----------
-        halo_model : HaloModel
-        k : float or jnp.ndarray
-            Wavenumber grid in :math:`\\mathrm{Mpc}^{-1}`.
-        z : float or jnp.ndarray
-            Redshift grid.
-        profile1 : HaloProfile
-            First halo profile object.
-        profile2 : HaloProfile or None, default None
-            Second halo profile object. If None, defaults to profile1.
-
-        Returns
-        -------
-        pk_2h : array
-            2-halo power spectrum in :math:`\\mathrm{Mpc}^3`, with shape
-            :math:`(N_k, N_z)`, where singleton dimensions get squeezed before
-            return.
-        """
-        hm = halo_model
-        k, m, z = jnp.atleast_1d(k), hm.m_grid, jnp.atleast_1d(z)
-
-        profile2 = profile2 if profile2 is not None else profile1
-
-        # Weights and Ingredients
-        logm = jnp.log(m)
-        dm = jnp.diff(logm)
-        w = jnp.concatenate([jnp.array([dm[0]]), dm[:-1] + dm[1:], jnp.array([dm[-1]])]) * 0.5
-
-        # Combine hmf, bias, and weights into a single (Nm, Nz) weight grid
-        dndlnm = jnp.reshape(hm.halo_mass_function.dndlnm(hm.cosmology, m, z, hm.mass_def), (len(m), len(z)))
-        bias = jnp.reshape(hm.halo_bias.bias(hm.cosmology, m, z, hm.mass_def), (len(m), len(z)))
-        total_weights = dndlnm * bias * w[:, None]
-
-        def get_I(profile):
-            # This function processes a single index 'i' of the mass axis
-            def process_bin(i):
-                uk_full = jnp.reshape(profile.fourier(hm, k, m, z), (len(k), len(m), len(z)))
-                uk_slice = uk_full[:, i, :]
-                return uk_slice * total_weights[i], uk_slice
-
-            # Vmap over the indices 0...Nm-1, then integrate and pluck index 0 for hm consistency
-            integrand_rows, all_profiles = jax.vmap(process_bin)(jnp.arange(len(m)))
-            integral = jnp.sum(integrand_rows, axis=0)
-            u_k_min = all_profiles[0]  # vmap output is (Nm, Nk, Nz)
-
-            n_min, b1_min, _ = hm._counter_terms(z)
-            correction = b1_min[None, :] * n_min[None, :] * u_k_min
-
-            return integral + hm.hm_consistency * correction
-
-        # Final Power Spectrum
-        I1 = get_I(profile1)
-        I2 = I1 if profile1 is profile2 else get_I(profile2)
-
-        P_lin = hm.cosmology.pk(k, z, linear=True)
-        # Ensure P_lin has shape (N_k, N_z)
-        P_lin = jnp.reshape(P_lin, (len(k), -1))
-
-        return jnp.squeeze(P_lin * I1 * I2)
-
-    # ------------------------------------------------------------------
-    # Correlation function (FFTLog transform of pk_1h / pk_2h)
-    # ------------------------------------------------------------------
-
-    def xi_1h(self, halo_model, r, z, profile1, profile2=None, k_damp=0.01):
-        """
-        Compute the 1-halo contribution to the 3D correlation function.
-
-        .. math::
-
-            \\xi_{1h}(r, z) = \\frac{1}{2\\pi^2} \\int dk\\, k^2\\,
-            P_{1h}(k, z)\\, j_0(kr)
-
-        obtained by an FFTLog transform (:class:`mcfit.P2xi`) of
-        :meth:`pk_1h`, tabulated on this :class:`Pk` instance's internal
-        log-spaced ``k`` grid (:attr:`k_grid`) and interpolated onto the
-        requested ``r``.
-
-        Parameters
-        ----------
-        halo_model : HaloModel
-        r : float or jnp.ndarray
-            Comoving separation grid in :math:`\\mathrm{Mpc}`. Only reliable
-            well inside the range dual to :attr:`k_grid`; values of ``r`` too
-            close to that range's edges are affected by FFTLog ringing.
-        z : float or jnp.ndarray
-            Redshift grid.
-        profile1 : HaloProfile
-            First halo profile object.
-        profile2 : HaloProfile or None, default None
-            Second halo profile object. If None, defaults to profile1.
-        k_damp : float, default 0.01
-            Damping wavenumber in :math:`\\mathrm{Mpc}^{-1}`, passed through
-            to :meth:`pk_1h`.
-
-        Returns
-        -------
-        xi_1h : array
-            1-halo correlation function (dimensionless), with shape
-            :math:`(N_r, N_z)`, where singleton dimensions get squeezed
-            before return.
-        """
-        r, z = jnp.atleast_1d(r), jnp.atleast_1d(z)
-
-        pk = self.pk_1h(halo_model, self.k_grid, z, profile1, profile2, k_damp=k_damp)
-        pk = jnp.reshape(pk, (len(self.k_grid), len(z)))
-
-        r_native, xi_native = self._p2xi(pk)
-        ln_r, ln_r_native = jnp.log(r), jnp.log(r_native)
-
-        # Linear in xi against ln r rather than log-log
-        def interp_col(xi_col):
-            return jnp.interp(ln_r, ln_r_native, xi_col)
-
-        xi = jax.vmap(interp_col, in_axes=1, out_axes=1)(xi_native)
-        return jnp.squeeze(xi)
-
-    def xi_2h(self, halo_model, r, z, profile1, profile2=None):
-        """
-        Compute the 2-halo contribution to the 3D correlation function.
-
-        .. math::
-
-            \\xi_{2h}(r, z) = \\frac{1}{2\\pi^2} \\int dk\\, k^2\\,
-            P_{2h}(k, z)\\, j_0(kr)
-
-        obtained by an FFTLog transform (:class:`mcfit.P2xi`) of
-        :meth:`pk_2h`, tabulated on this :class:`Pk` instance's internal
-        log-spaced ``k`` grid (:attr:`k_grid`) and interpolated onto the
-        requested ``r``.
-
-        Parameters
-        ----------
-        halo_model : HaloModel
-        r : float or jnp.ndarray
-            Comoving separation grid in :math:`\\mathrm{Mpc}`. Only reliable
-            well inside the range dual to :attr:`k_grid`; values of ``r`` too
-            close to that range's edges are affected by FFTLog ringing.
-        z : float or jnp.ndarray
-            Redshift grid.
-        profile1 : HaloProfile
-            First halo profile object.
-        profile2 : HaloProfile or None, default None
-            Second halo profile object. If None, defaults to profile1.
-
-        Returns
-        -------
-        xi_2h : array
-            2-halo correlation function (dimensionless), with shape
-            :math:`(N_r, N_z)`, where singleton dimensions get squeezed
-            before return.
-        """
-        r, z = jnp.atleast_1d(r), jnp.atleast_1d(z)
-
-        pk = self.pk_2h(halo_model, self.k_grid, z, profile1, profile2)
-        pk = jnp.reshape(pk, (len(self.k_grid), len(z)))
-
-        r_native, xi_native = self._p2xi(pk)
-        ln_r, ln_r_native = jnp.log(r), jnp.log(r_native)
-
-        # Linear in xi against ln r rather than log-log
-        def interp_col(xi_col):
-            return jnp.interp(ln_r, ln_r_native, xi_col)
-
-        xi = jax.vmap(interp_col, in_axes=1, out_axes=1)(xi_native)
-        return jnp.squeeze(xi)
-
-    # ------------------------------------------------------------------
-    # Angular power spectrum (Limber projection)
-    # ------------------------------------------------------------------
-
-    def cl_1h(self, halo_model, tracer1, tracer2, l, z, k_damp=0.01):
-        """
-        Compute the 1-halo contribution to the angular power spectrum
-        :math:`C_\\ell^{1h}`.
-
-        The Limber-projected spectrum is obtained by integrating the 1-halo
-        3D power spectrum against the tracer kernels and the comoving volume
-        element. The mass integral is performed over :attr:`m_grid`.
-
-        Parameters
-        ----------
-        halo_model : HaloModel
-        tracer1 : Tracer
-            First tracer object.
-        tracer2 : Tracer or None
-            Second tracer object (if None, uses tracer1).
-        l : float or jnp.ndarray
-            Multipole grid.
-        z : array
-            Redshift array. This must be an array because it defines the
-            integration grid over redshift.
-        k_damp : float, default 0.01
-            Damping wavenumber in :math:`\\mathrm{Mpc}^{-1}` passed through to :meth:`pk_1h`.
-
-        Returns
-        -------
-        cl_1h : array
-            Dimensionless 1-halo angular power spectrum with shape
-            :math:`(N_\\ell,)`, where singleton dimensions get squeezed before
-            return.
-        """
-        hm = halo_model
-        tracer2 = tracer1 if tracer2 is None else tracer2
-
-        # Beyond z_b, freeze pk_1h at z_b and rescale by the growth ratio, as Cosmology.pk() does.
-        z_b = hm.cosmology._z_grid_pk()[-1]
-        in_bounds = z <= z_b
-        growth_ratio_sq = jnp.where(
-            in_bounds, 1.0,
-            (hm.cosmology.growth_factor(z) / hm.cosmology.growth_factor(z_b)) ** 2
-        )
-        z_eval = jnp.where(in_bounds, z, z_b)
-
-        # Define the slice function to map l -> k for a specific z
-        def get_pk_slice(zi, zi_eval):
-            chi_i = hm.cosmology.angular_diameter_distance(zi) * (1 + zi)
-            ki = (l + 0.5) / chi_i
-            pk = self.pk_1h(hm, k=ki, z=jnp.atleast_1d(zi_eval), profile1=tracer1.profile, profile2=tracer2.profile, k_damp=k_damp)
-            return pk.flatten()
-
-        # Get the halo model pk_1h, the kernels, and the Limber weight c/(H chi^2)
-        P_1h_grid = jax.vmap(get_pk_slice)(z, z_eval) * growth_ratio_sq[:, None]
-        # kernel() squeezes singleton dims, so re-expand in case z has length 1.
-        kernel1 = jnp.atleast_1d(tracer1.kernel(hm.cosmology, z))
-        kernel2 = jnp.atleast_1d(tracer2.kernel(hm.cosmology, z))
-        chi = hm.cosmology.angular_diameter_distance(z) * (1.0 + z)
-        limber_weight = hm.cosmology.comoving_volume_element(z) / chi**4
-
-        # Limber integral: C_ell = int dz (c/H chi^2) W1 W2 P
-        integrand = P_1h_grid * (limber_weight[:, None] * kernel1[:, None] * kernel2[:, None])
-
-        return jnp.squeeze(jnp.trapezoid(integrand, x=z, axis=0))
-
-    def cl_2h(self, halo_model, tracer1, tracer2, l, z):
-        """
-        Compute the 2-halo contribution to the angular power spectrum
-        :math:`C_\\ell^{2h}`.
-
-        The Limber-projected spectrum is obtained by integrating the 2-halo
-        3D power spectrum against the tracer kernels and the comoving volume
-        element. The mass integral is performed over :attr:`m_grid`.
-
-        Parameters
-        ----------
-        halo_model : HaloModel
-        tracer1 : Tracer
-            First tracer object.
-        tracer2 : Tracer or None
-            Second tracer object (if None, uses tracer1).
-        l : float or jnp.ndarray
-            Multipole grid.
-        z : array
-            Redshift array. This must be an array because it defines the
-            integration grid over redshift.
-
-        Returns
-        -------
-        cl_2h : array
-            Dimensionless 2-halo angular power spectrum with shape
-            :math:`(N_\\ell,)`, where singleton dimensions get squeezed before
-            return.
-        """
-        hm = halo_model
-        tracer2 = tracer1 if tracer2 is None else tracer2
-
-        # Beyond z_b, freeze pk_2h at z_b and rescale by the growth ratio, as Cosmology.pk() does.
-        z_b = hm.cosmology._z_grid_pk()[-1]
-        in_bounds = z <= z_b
-        growth_ratio_sq = jnp.where(
-            in_bounds, 1.0,
-            (hm.cosmology.growth_factor(z) / hm.cosmology.growth_factor(z_b)) ** 2
-        )
-        z_eval = jnp.where(in_bounds, z, z_b)
-
-        # Define the slice function for Limber integration
-        def get_pk_slice(zi, zi_eval):
-            # Map l to k using the Limber approximation and then get the pk_2h
-            chi_i = hm.cosmology.angular_diameter_distance(zi) * (1 + zi)
-            ki = (l + 0.5) / chi_i
-            return self.pk_2h(hm, k=ki, z=jnp.atleast_1d(zi_eval), profile1=tracer1.profile, profile2=tracer2.profile).flatten()
-
-        # Map over redshift to get P(k=l/chi, z)
-        P_2h_grid = jax.vmap(get_pk_slice)(z, z_eval) * growth_ratio_sq[:, None]
-
-        # Get individual kernels and the Limber weight c/(H chi^2)
-        # kernel() squeezes singleton dims, so re-expand in case z has length 1.
-        kernel1 = jnp.atleast_1d(tracer1.kernel(hm.cosmology, z))
-        kernel2 = jnp.atleast_1d(tracer2.kernel(hm.cosmology, z))
-        chi = hm.cosmology.angular_diameter_distance(z) * (1.0 + z)
-        limber_weight = hm.cosmology.comoving_volume_element(z) / chi**4
-
-        # Limber integral: C_ell = int dz (c/H chi^2) W1 W2 P
-        integrand = P_2h_grid * (limber_weight[:, None] * kernel1[:, None] * kernel2[:, None])
-
-        return jnp.squeeze(jnp.trapezoid(integrand, x=z, axis=0))
-
-
-# -------------------------
 # Halo model bispectrum
 # -------------------------
 
@@ -877,7 +442,7 @@ class Bk:
         mu12 : float or jnp.ndarray
             Cosine of the angle between the :math:`k_1` and :math:`k_2`
             vectors. Must be a scalar or an array of shape :math:`(N_k,)`
-            matching k1, k2. 
+            matching k1, k2.
         z : float or jnp.ndarray
             Redshift grid.
         profile1 : HaloProfile
@@ -959,7 +524,7 @@ class Bk:
         mu12 : float or jnp.ndarray
             Cosine of the angle between the :math:`k_1` and :math:`k_2`
             vectors. Must be a scalar or an array of shape :math:`(N_k,)`
-            matching k1, k2. 
+            matching k1, k2.
         z : float or jnp.ndarray
             Redshift grid.
         profile1 : HaloProfile
@@ -1035,7 +600,7 @@ class Bk:
         mu12 : float or jnp.ndarray
             Cosine of the angle between the :math:`k_1` and :math:`k_2`
             vectors. Must be a scalar or an array of shape :math:`(N_k,)`
-            matching k1, k2. 
+            matching k1, k2.
         z : float or jnp.ndarray
             Redshift grid.
         profile1 : HaloProfile
@@ -1083,7 +648,7 @@ class Bk:
 
         tree_term = B_tree * I1_b1 * I2_b1 * I3_b1
 
-        # Quadratic-bias corrections 
+        # Quadratic-bias corrections
         b2_term = (
             I1_b2 * I2_b1 * I3_b1 * P2 * P3
             + I1_b1 * I2_b2 * I3_b1 * P1 * P3
@@ -1131,8 +696,8 @@ class Tk:
         :math:`u_{1234}(k_1,k_2,k_3,k_4 \\,|\\, M) = u_1(k_1 \\,|\\, M)\\,
         u_2(k_2 \\,|\\, M)\\, u_3(k_3 \\,|\\, M)\\, u_4(k_4 \\,|\\, M)` (and
         similarly for the 3-point sub-clumps entering the 2-halo "13" term).
-        This holds for matter density and electron pressure/density profiles, 
-        but not in general for profiles with non-trivial 
+        This holds for matter density and electron pressure/density profiles,
+        but not in general for profiles with non-trivial
         intra-halo occupancy statistics such as HOD or CIB.
     """
 
@@ -1258,7 +823,7 @@ class Tk:
                     + (v_1 \\leftrightarrow v_2) \\Big]
             \\end{aligned}
 
-        where :math:`I_1^1`, :math:`I_3^1` are the linearly-biased (:math:`\\beta=1`) 
+        where :math:`I_1^1`, :math:`I_3^1` are the linearly-biased (:math:`\\beta=1`)
         single- and triple-profile mass integrals :math:`I_\\mu^\\beta`.
 
         Parameters
@@ -1767,6 +1332,3 @@ class Tk:
         cov = jnp.trapezoid(integrand, x=z, axis=0)
 
         return jnp.squeeze(cov)
-
-
-        
