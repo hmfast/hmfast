@@ -148,10 +148,14 @@ class TestPhysicsLimits:
         pk2h = halo_model.pk_2h(cmb_lensing_tracer, cmb_lensing_tracer, k=k, m=m, z=z)
         pk_lin = halo_model.cosmology.pk(z[0], linear=True)[1]
         pk_lin_interp = log_interp1d_extrap(k, halo_model.cosmology.pk(z[0], linear=True)[0], pk_lin)
-        # At very large scales, P_2h should be close to P_lin (within factor ~2 given approximations)
         ratio = pk2h[:, 0] / pk_lin_interp
-        # The ratio should be order unity (within factor 3, allowing for bias and profile effects)
-        assert jnp.all(ratio > 0.1) and jnp.all(ratio < 10), f"P_2h/P_lin ratio out of range at large scales"
+        # After removing leftover h-units in the consistency counterterms, the
+        # large-scale matter 2-halo term should recover P_lin at the ~few-percent
+        # level (official hmfast convention).
+        assert jnp.all((ratio > 0.8) & (ratio < 1.2)), (
+            f"P_2h/P_lin ratio out of range at large scales: "
+            f"min={float(jnp.min(ratio)):.3f}, max={float(jnp.max(ratio)):.3f}"
+        )
 
     def test_pk_1h_positive(self, halo_model, tsz_tracer):
         """1-halo power spectrum should be non-negative everywhere."""

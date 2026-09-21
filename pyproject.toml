@@ -42,6 +42,7 @@ dev = [
     "black",
     "isort",
     "flake8",
+    "tensorflow-cpu",
 ]
 docs = [
     "sphinx",

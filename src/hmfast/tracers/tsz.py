@@ -70,10 +70,15 @@ class tSZTracer(Tracer):
     
             .. math::
     
-               W_{\\mathrm{kSZ}}(z) = \\frac{\\sigma_T}{m_e c^2} \\frac{1}{1+z}
+               W_{\\mathrm{tSZ}}(z) = \\frac{\\sigma_T}{m_e c^2} \\frac{1}{1+z}
     
         where :math:`\\sigma_T` is the Thomson cross-section, :math:`m_e` is
-        the electron mass, and :math:`z` is the redshift.
+        the electron mass, and :math:`z` is the redshift. The
+        :math:`\\mathrm{Mpc}` unit conversion lives in the projected
+        pressure profile :meth:`~hmfast.halos.profiles.PressureProfile.u_k`,
+        and this kernel is paired with :meth:`HaloModel.cl_1h` which
+        multiplies by the comoving volume element rather than
+        :math:`dV/\\chi^4`.
     
         Parameters
         ----------
@@ -88,13 +93,9 @@ class tSZTracer(Tracer):
             tSZ kernel evaluated at redshift(s) :math:`z`.
         """
         
-        h = cosmology.H0/100 
-        
-        # Get electon mass in eV, Thomson cross section in cm^2, and Mpc/h in cm
         m_e = Const._m_e_ * Const._c_**2 / Const._eV_
         sigma_T = Const._sigma_T_ * 1e6
-        mpc_per_h_to_cm =  Const._Mpc_over_m_ / h
-        return (sigma_T / m_e) / (1+z) # Check this
+        return (sigma_T / m_e) / (1.0 + z)
 
 
 
