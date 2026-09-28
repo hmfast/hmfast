@@ -10,6 +10,7 @@ import jax.numpy as jnp
 import pytest
 
 from hmfast.cosmology import Cosmology
+from hmfast.stats import sigma2_b_disc
 
 
 def _construct_or_skip(emulator_set, **kwargs):
@@ -138,7 +139,7 @@ class TestGrowthAndPerturbations:
 
     # sigma2_b_disc is positive with the expected shape.
     def test_sigma2_b_disc_positive(self, fixed_cosmology):
-        s2b = fixed_cosmology.sigma2_b_disc(jnp.array([0.0, 0.5, 1.0]), f_sky=0.5)
+        s2b = sigma2_b_disc(fixed_cosmology, jnp.array([0.0, 0.5, 1.0]), f_sky=0.5)
         assert jnp.all(s2b > 0) and s2b.shape == (3,)
 
     # velocity_dispersion is positive with the expected shape.

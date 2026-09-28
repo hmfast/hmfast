@@ -53,7 +53,7 @@ from hmfast.halos.profiles import (
     S12CIBProfile,
     Z07GalaxyHODProfile,
 )
-from hmfast.stats import Bk, Pk, Tk, cl_hm, cl_lin, xi_hm, covariance_cng, covariance_ssc
+from hmfast.stats import Bk, Pk, Tk, cl_hm, cl_lin, xi_hm, covariance_cng, covariance_ssc, sigma2_b_disc
 from hmfast.stats import cl as _cl_module
 from hmfast.stats import covariance as _covariance_module
 from hmfast.tracers import (
@@ -172,7 +172,6 @@ case("Cosmology.growth_rate", lambda p: cosmo(p).growth_rate(Z_GRID))
 case("Cosmology.sigma8", lambda p: cosmo(p).sigma8(Z_GRID))
 case("Cosmology.sigma_m", lambda p: cosmo(p).sigma_m(M_GRID, Z_GRID))
 case("Cosmology.sigma_r", lambda p: cosmo(p).sigma_r(R_GRID_SIGMA, Z_GRID))
-case("Cosmology.sigma2_b_disc", lambda p: cosmo(p).sigma2_b_disc(Z_GRID, f_sky=0.4))
 case("Cosmology.velocity_dispersion", lambda p: cosmo(p).velocity_dispersion(Z_GRID))
 case("Cosmology.comoving_volume_element", lambda p: cosmo(p).comoving_volume_element(Z_GRID))
 case("Cosmology.pk[linear]", lambda p: cosmo(p).pk(K_GRID, Z_GRID, linear=True))
@@ -286,6 +285,7 @@ case("covariance_cng",
 case("covariance_ssc",
      lambda p: covariance_ssc(halo_model(p), GAL_TRACER, None, None, None,
                               L_GRID[:3], L_GRID[:3], Z_RANGE, N_Z, f_sky=0.4))
+case("sigma2_b_disc", lambda p: sigma2_b_disc(cosmo(p), Z_GRID, f_sky=0.4))
 
 
 def _leaves(out):
@@ -385,7 +385,7 @@ JITTED_API = [
     (Cosmology, "hubble_parameter"), (Cosmology, "angular_diameter_distance"),
     (Cosmology, "critical_density"), (Cosmology, "omega_m"), (Cosmology, "delta_c"),
     (Cosmology, "growth_factor"), (Cosmology, "growth_rate"), (Cosmology, "sigma8"),
-    (Cosmology, "sigma_m"), (Cosmology, "sigma_r"), (Cosmology, "sigma2_b_disc"),
+    (Cosmology, "sigma_m"), (Cosmology, "sigma_r"),
     (Cosmology, "pk"),
     (MassDefinition, "r_delta"),
     (T08HaloMassFunction, "dndlnm"), (T10HaloMassFunction, "dndlnm"),
@@ -403,6 +403,7 @@ JITTED_API = [
     (Bk, "_bk_1h"), (Bk, "_bk_2h"), (Bk, "_bk_3h"), (Bk, "_bk_tot"),
     (Tk, "tk_1h"), (Tk, "tk_2h"), (Tk, "tk_3h"), (Tk, "tk_4h"), (Tk, "tk_tot"),
     (_covariance_module, "covariance_cng"), (_covariance_module, "covariance_ssc"),
+    (_covariance_module, "sigma2_b_disc"),
 ]
 
 

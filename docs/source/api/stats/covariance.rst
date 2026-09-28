@@ -7,3 +7,4 @@ hmfast.stats.covariance
 
    hmfast.stats.covariance.covariance_cng
    hmfast.stats.covariance.covariance_ssc
+   hmfast.stats.covariance.sigma2_b_disc
