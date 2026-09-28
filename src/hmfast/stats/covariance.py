@@ -7,6 +7,7 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
+import mcfit
 
 from hmfast.halos.profiles.hod import GalaxyHODProfile
 from hmfast.halos.profiles.profiles_2pt import _fourier_2pt
@@ -334,6 +335,73 @@ def covariance_cng(tk, halo_model, tracer1, tracer2, tracer3, tracer4, l1, l2, z
 # Super-sample covariance
 # ------------------------------------------------------------------
 
+# One mcfit plan per emulator set: the disc-window transform depends only on the emulator's k grid.
+_DISC_VAR_TRANSFORMS = {}
+
+
+def _disc_var_transform(cosmology):
+    key = cosmology.emulator_set
+    if key not in _DISC_VAR_TRANSFORMS:
+        k_grid, _ = cosmology._pk_grid()
+        # Build eagerly even when first reached inside jit: mcfit needs a concrete grid to plan on.
+        with jax.ensure_compile_time_eval():
+            # Same as Cosmology's TophatVar, but dim=2 (disc window) instead of dim=3 (sphere).
+            disc_var = mcfit.mcfit(k_grid, mcfit.kernels.Mellin_TophatSq(2), q=1.5, lowring=True, backend='jax')
+            disc_var.prefac *= disc_var.x**2 / (2.0 * jnp.pi)
+        _DISC_VAR_TRANSFORMS[key] = partial(disc_var, extrap=True)
+    return _DISC_VAR_TRANSFORMS[key]
+
+
+@jax.jit
+def sigma2_b_disc(cosmology, z, f_sky=1.0):
+    """
+    Variance of the projected linear density field over a circular
+    disc covering a sky fraction :math:`f_{\\rm sky}`, as a function of
+    redshift -- the super-sample variance entering :func:`covariance_ssc`.
+
+    .. math::
+
+        \\sigma_B^2(z) = \\int_0^\\infty \\frac{k\\,dk}{2\\pi}\\,
+        P_{\\mathrm{L}}(k, z)\\, \\left[\\frac{2 J_1(kR(z))}{kR(z)}\\right]^2,
+
+    where :math:`R(z) = \\chi(z)\\arccos(1 - 2f_{\\rm sky})` is the
+    comoving transverse radius subtended by a circular footprint of
+    solid angle :math:`4\\pi f_{\\rm sky}`. Uses the same FFTLog
+    machinery (via ``mcfit``) as :meth:`~hmfast.cosmology.Cosmology.sigma_m`,
+    just with the 2D projected disc window in place of the 3D spherical top-hat.
+
+    Parameters
+    ----------
+    cosmology : Cosmology
+        Cosmology providing the linear :math:`P(k, z)` and :math:`\\chi(z)`.
+    z : float or jnp.ndarray
+        Redshift(s).
+    f_sky : float, default 1.0
+        Observed sky fraction.
+
+    Returns
+    -------
+    float or jnp.ndarray
+        :math:`\\sigma_B^2(z)`, with shape matching ``z`` (squeezed if
+        scalar).
+    """
+    z_arr = jnp.atleast_1d(z)
+    k_grid, _ = cosmology._pk_grid()
+    pk_grid = jnp.reshape(cosmology.pk(k_grid, z_arr, linear=True), (len(k_grid), len(z_arr)))
+
+    R_grid, var_grid = jax.vmap(_disc_var_transform(cosmology), in_axes=1, out_axes=(0, 0))(pk_grid)
+    R_grid = R_grid[0]  # same R grid for every z -- only depends on k_grid
+
+    chi = cosmology.angular_diameter_distance(z_arr) * (1.0 + z_arr)
+    R_target = chi * jnp.arccos(1.0 - 2.0 * f_sky)
+
+    ln_var = jax.vmap(
+        lambda r_i, var_i: jnp.interp(jnp.log(r_i), jnp.log(R_grid), jnp.log(var_i))
+    )(R_target, var_grid)
+
+    return jnp.squeeze(jnp.exp(ln_var))
+
+
 @partial(jax.jit, static_argnums=(8,), static_argnames=("needs_counterterm1", "needs_counterterm2", "needs_counterterm3", "needs_counterterm4"))
 def covariance_ssc(halo_model, tracer1, tracer2, tracer3, tracer4, l1, l2, z_range, n_z, f_sky=1.0,
                     needs_counterterm1=None, needs_counterterm2=None,
@@ -364,7 +432,7 @@ def covariance_ssc(halo_model, tracer1, tracer2, tracer3, tracer4, l1, l2, z_ran
     with :math:`k_1 = (\\ell_1 + 1/2)/\\chi(z)`,
     :math:`k_2 = (\\ell_2 + 1/2)/\\chi(z)`, :math:`W_i` the tracer
     kernels, and :math:`\\sigma_B^2(z)` the disc-footprint variance (see
-    :meth:`~hmfast.cosmology.Cosmology.sigma2_b_disc`).
+    :func:`sigma2_b_disc`).
 
     As in :func:`covariance_cng`, a ``der_bessel=2`` (RSD) kernel term
     makes :math:`W_1(z)\\,W_2(z)` (or :math:`W_3(z)\\,W_4(z)`)
@@ -479,12 +547,12 @@ def covariance_ssc(halo_model, tracer1, tracer2, tracer3, tracer4, l1, l2, z_ran
         )  # (N_l2,)
 
         kernels = kernel12[:, None] * kernel34[None, :]  # (N_l1, N_l2)
-        sigma2_b = jnp.squeeze(hm.cosmology.sigma2_b_disc(z_i, f_sky=f_sky))
+        sigma2_b = jnp.squeeze(sigma2_b_disc(hm.cosmology, z_i, f_sky=f_sky))
         weight = jnp.squeeze(hm.cosmology.comoving_volume_element(z_i) / chi ** 6)
 
         return response_outer * (kernels * weight * sigma2_b)
 
-    # No 1/(4*pi*f_sky) prefactor here -- f_sky's effect is already fully carried by sigma2_b_disc(z, f_sky).
+    # No 1/(4*pi*f_sky) prefactor here -- f_sky's effect is already fully carried by sigma2_b_disc(cosmology, z, f_sky).
     integrand = jax.vmap(get_cov_slice)(z)  # (Nz, N_l1, N_l2)
     cov = jnp.sum(integrand * z_gl_w[:, None, None], axis=0)
 
