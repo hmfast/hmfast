@@ -241,7 +241,7 @@ def _cl_2h_nonlimber(halo_model, tracer1, tracer2, l, z_range, n_z, z_fid=0.0, n
     D_kz_fns = [
         lambda k, z, t=t: _D_kz(
             cosmology, k, z, z_fid=z_fid, linear=True,
-            mass_integral=lambda k, z: jnp.reshape(halo_model._I(t.profile, k, z, bias_order=1), (len(k), len(z))),
+            mass_integral=lambda k, z: jnp.reshape(halo_model.mass_integral(k, z, t.profile, bias_order=1), (len(k), len(z))),
         )
         for t in tracers
     ]

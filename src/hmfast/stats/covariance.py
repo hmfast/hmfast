@@ -10,11 +10,9 @@ import jax.numpy as jnp
 import mcfit
 
 from hmfast.halos.profiles.hod import GalaxyHODProfile
-from hmfast.halos.profiles.profiles_2pt import _fourier_2pt
 from hmfast.utils import gauss_legendre_nodes_weights
 
 from . import projected_cl as _cl
-from .bk_tk import _pair_integral
 from .pk import Pk as _Pk
 
 
@@ -76,46 +74,6 @@ def _kernel_pair_effective(cosmology, tracer_a, tracer_b, z, l, z_lp, lp1h, lp3h
     return jnp.squeeze(ka * kb, axis=0)  # (Nl,) or (1,)
 
 
-def _pair_integral_2pt(halo_model, p1, p2, k, z):
-    """
-    ∫ dn/dlnM * ⟨p1(k,M,z) p2(k,M,z)⟩_2pt dlnM
-
-    The bias_order=0 (unweighted) pair integral :math:`I_1^2`, built from the
-    specialised 1-halo 2-point kernel :func:`~hmfast.halos.profiles.profiles_2pt._fourier_2pt`
-    instead of a naive ``p1.fourier(k,...) * p2.fourier(k,...)`` product -- the same
-    generalisation :func:`~hmfast.stats.bk_tk._pair_integral`'s own docstring anticipates, applied
-    here specifically for the SSC number-counts counter-term (see
-    :func:`_dPk_response`). Unlike ``_pair_integral``, there is no
-    ``outer``/independent-k1-k2 mode: ``_fourier_2pt`` has no such notion (it
-    takes a single shared ``k`` for both legs), which is all the counter-term
-    ever needs (matching the existing ``i12_uv`` term's own single-k
-    convention in ``_dPk_response``).
-
-    Returns
-    -------
-    array
-        Shape (Nk, Nz), singleton dimensions squeezed.
-    """
-    hm = halo_model
-    z_arr = jnp.atleast_1d(z)
-    logm, w = gauss_legendre_nodes_weights(jnp.log(hm.m_range[0]), jnp.log(hm.m_range[1]), hm.n_m)
-    m = jnp.exp(logm)
-
-    dndlnm = jnp.reshape(
-        hm.halo_mass_function.dndlnm(hm.cosmology, m, z_arr, hm.mass_def),
-        (len(m), len(z_arr)),
-    )
-    total_weights = dndlnm * w[:, None]  # (Nm, Nz), bias_order=0 (unweighted)
-
-    ks = jnp.atleast_1d(k)
-    u2pt = jnp.reshape(_fourier_2pt(hm, p1, p2, ks, m, z_arr), (len(ks), len(m), len(z_arr)))
-
-    n_min, _, _ = hm._counter_terms(z_arr)
-    integral = jnp.sum(u2pt * total_weights[None, :, :], axis=1)  # (Nk, Nz)
-    correction = n_min[None, :] * u2pt[:, 0, :]
-    return jnp.squeeze(integral + hm.hm_consistency * correction)
-
-
 def _dPk_response(halo_model, k, z, profile1, profile2=None,
                    needs_counterterm1=None, needs_counterterm2=None):
     """
@@ -130,11 +88,10 @@ def _dPk_response(halo_model, k, z, profile1, profile2=None,
         P_{\\rm lin}(k,z)\\, I_1^1(k \\,|\\, u)\\, I_1^1(k \\,|\\, v)
         + I_1^2(k \\,|\\, u, v)
 
-    where :math:`I_1^1` is the halo model's linearly-biased single-profile
-    mass integral (:meth:`~hmfast.halos.HaloModel._I` with
-    ``bias_order=1``) and :math:`I_1^2` is the equivalent paired-profile
-    integral (:func:`~hmfast.stats.bk_tk._pair_integral` with ``bias_order=1``, evaluated at
-    matching :math:`k` for both legs).
+    where :math:`I_1^1` and :math:`I_1^2` are the linearly-biased single- and
+    paired-profile mass integrals (:meth:`~hmfast.halos.HaloModel.mass_integral`
+    with ``bias_order=1``), the latter the plain product of first moments at
+    matching :math:`k` for both legs.
 
     If ``needs_counterterm1``/``needs_counterterm2`` mark :math:`u`/:math:`v`
     as discrete number-counts observables (e.g. galaxy clustering/HOD) rather
@@ -147,9 +104,9 @@ def _dPk_response(halo_model, k, z, profile1, profile2=None,
         P_{u,v} = P_{\\rm lin}\\,I_1^1(k\\,|\\,u)\\,I_1^1(k\\,|\\,v) + I_1^{2,\\rm 2pt}(k\\,|\\,u,v)
 
     where :math:`b_u = I_1^1(k\\,|\\,u)` (only included for the legs flagged
-    ``True``) and :math:`I_1^{2,\\rm 2pt}` is :func:`_pair_integral_2pt`, the
-    bias_order=0 pair integral built from the specialised 1-halo 2-point
-    kernel (:func:`~hmfast.halos.profiles.profiles_2pt._fourier_2pt`) rather than a naive profile product.
+    ``True``) and :math:`I_1^{2,\\rm 2pt}` is the unweighted pair integral
+    :meth:`~hmfast.halos.HaloModel.mass_integral` at a shared :math:`k`, which
+    uses the 1-halo second moment rather than a naive profile product.
 
     Parameters
     ----------
@@ -186,12 +143,10 @@ def _dPk_response(halo_model, k, z, profile1, profile2=None,
     k_arr, z_arr = jnp.atleast_1d(k), jnp.atleast_1d(z)
     nk, nz = len(k_arr), len(z_arr)
 
-    i11_u = jnp.reshape(hm._I(profile1, k_arr, z_arr, bias_order=1), (nk, nz))
-    i11_v = jnp.reshape(hm._I(profile2, k_arr, z_arr, bias_order=1), (nk, nz))
-    i12_uv = jnp.reshape(
-        _pair_integral(hm, profile1, profile2, k_arr, k_arr, z_arr, outer=False, bias_order=1),
-        (nk, nz),
-    )
+    i11_u = jnp.reshape(hm.mass_integral(k_arr, z_arr, profile1, bias_order=1), (nk, nz))
+    i11_v = jnp.reshape(hm.mass_integral(k_arr, z_arr, profile2, bias_order=1), (nk, nz))
+    # (k, k) rather than a shared k keeps the plain product of first moments, not the 1-halo second moment.
+    i12_uv = jnp.reshape(hm.mass_integral((k_arr, k_arr), z_arr, (profile1, profile2), bias_order=1), (nk, nz))
     pk_lin = jnp.reshape(hm.cosmology.pk(k_arr, z_arr, linear=True), (nk, nz))
 
     # dlnP/dlnk needs a properly resolved k grid -- a finite difference on a sparse query k_arr is inaccurate.
@@ -205,7 +160,7 @@ def _dPk_response(halo_model, k, z, profile1, profile2=None,
     response = (47.0 / 21.0 - dlnp_dlnk / 3.0) * pk_lin * i11_u * i11_v + i12_uv
 
     if needs_counterterm1 or needs_counterterm2:
-        i02_uv = jnp.reshape(_pair_integral_2pt(hm, profile1, profile2, k_arr, z_arr), (nk, nz))
+        i02_uv = jnp.reshape(hm.mass_integral(k_arr, z_arr, (profile1, profile2), bias_order=0), (nk, nz))
         P_uv = pk_lin * i11_u * i11_v + i02_uv
         b_u = i11_u if needs_counterterm1 else 0.0
         b_v = i11_v if needs_counterterm2 else 0.0

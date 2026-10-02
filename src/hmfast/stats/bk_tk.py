@@ -4,7 +4,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from hmfast.utils import gauss_legendre_nodes_weights
 
 
 # -------------------------
@@ -93,133 +92,7 @@ def _X3(k, kp):
 
 
 
-# -------------------------
-# Halo model mass-integral building blocks
-# -------------------------
-#
-# Shared across Bk and Tk (not tied to either class's state), so kept at
-# module level rather than duplicated as a private method on each.
-
-def _pair_integral(halo_model, p1, p2, k1, k2, z, outer=False, bias_order=1):
-    """
-    ∫ dn/dlnM * b_beta(M) * p1.fourier(k1,M,z) * p2.fourier(k2,M,z) dlnM
-
-    Pair integral with halo bias of order ``beta = bias_order`` included
-    (``0``: unweighted, ``1``: linear bias -- the default, matching every
-    existing caller below, which all omit the argument). Used as a building
-    block for ``Bk.bk_2h`` (``outer=False``: ``k1`` and ``k2`` share a single
-    batch axis, paired elementwise across a set of triangles) and the
-    halo-model trispectrum's 2h/3h terms (``outer=True``: ``k1`` and ``k2``
-    are independent and broadcast into an (N1, N2) grid).
-
-    Future generalisation: replace ``u1 * u2`` with a ``_fourier_2pt``
-    variant that handles different k values when specialised 2-point kernels
-    (HOD, CIB) are needed.
-
-    Returns
-    -------
-    array
-        ``outer=False``: shape (Nk, Nz), singleton dimensions squeezed.
-        ``outer=True``: shape (N1, N2, Nz), not squeezed -- this branch is
-        only ever used as an internal building block of ``Tk.tk_2h``/
-        ``Tk.tk_3h``.
-    """
-    hm = halo_model
-    z_arr = jnp.atleast_1d(z)
-    logm, w = gauss_legendre_nodes_weights(jnp.log(hm.m_range[0]), jnp.log(hm.m_range[1]), hm.n_m)
-    m = jnp.exp(logm)
-
-    dndlnm = jnp.reshape(
-        hm.halo_mass_function.dndlnm(hm.cosmology, m, z_arr, hm.mass_def),
-        (len(m), len(z_arr)),
-    )
-    if bias_order == 0:
-        bias_w = jnp.ones((len(m), len(z_arr)))
-    else:
-        bias_w = jnp.reshape(
-            hm.halo_bias.bias(hm.cosmology, m, z_arr, hm.mass_def, order=bias_order),
-            (len(m), len(z_arr)),
-        )
-    total_weights = dndlnm * bias_w * w[:, None]  # (Nm, Nz)
-
-    k1s, k2s = jnp.atleast_1d(k1), jnp.atleast_1d(k2)
-    u1 = jnp.reshape(p1.fourier(hm, k1s, m, z_arr), (len(k1s), len(m), len(z_arr)))
-    u2 = jnp.reshape(p2.fourier(hm, k2s, m, z_arr), (len(k2s), len(m), len(z_arr)))
-
-    n_min, b1_min, b2_min = hm._counter_terms(z_arr)
-    b_min = {0: jnp.ones_like(b1_min), 1: b1_min, 2: b2_min}[bias_order]
-
-    if outer:
-        u1e = u1[:, None, :, :]  # (N1, 1, Nm, Nz)
-        u2e = u2[None, :, :, :]  # (1, N2, Nm, Nz)
-        integral = jnp.sum(u1e * u2e * total_weights[None, None, :, :], axis=2)  # (N1, N2, Nz)
-        correction = (
-            n_min[None, None, :] * b_min[None, None, :]
-            * u1[:, None, 0, :] * u2[None, :, 0, :]
-        )
-        return integral + hm.hm_consistency * correction
-
-    integral = jnp.sum(u1 * u2 * total_weights[None, :, :], axis=1)  # (Nk, Nz)
-    correction = n_min[None, :] * b_min[None, :] * u1[:, 0, :] * u2[:, 0, :]
-    return jnp.squeeze(integral + hm.hm_consistency * correction)
-
-
-def _triple_integral(halo_model, p_single, p_pair1, p_pair2, k_single, k_pair, z, outer=False):
-    """
-    ∫ dn/dlnM * b1(M) * p_single(k_single,M) * p_pair1(k_pair,M) * p_pair2(k_pair,M) dlnM
-
-    Triple integral with first-order halo bias, generalising ``_pair_integral``
-    to a "1x2" moment: one profile alone at ``k_single``, the other two both
-    at ``k_pair``. Needed by the trispectrum's 2-halo "13" term.
-
-    ``outer=False`` (default) pairs ``k_single``/``k_pair`` elementwise,
-    sharing a single batch axis. ``outer=True`` broadcasts them into an
-    independent (N_single, N_pair) grid, as needed by ``Tk.tk_2h``.
-
-    Returns
-    -------
-    array
-        ``outer=False``: shape (Nk, Nz), singleton dimensions squeezed.
-        ``outer=True``: shape (N_single, N_pair, Nz), not squeezed -- this
-        branch is only ever used as an internal building block of
-        ``Tk.tk_2h``.
-    """
-    hm = halo_model
-    z_arr = jnp.atleast_1d(z)
-    logm, w = gauss_legendre_nodes_weights(jnp.log(hm.m_range[0]), jnp.log(hm.m_range[1]), hm.n_m)
-    m = jnp.exp(logm)
-
-    dndlnm = jnp.reshape(
-        hm.halo_mass_function.dndlnm(hm.cosmology, m, z_arr, hm.mass_def),
-        (len(m), len(z_arr)),
-    )
-    bias_w = jnp.reshape(
-        hm.halo_bias.bias(hm.cosmology, m, z_arr, hm.mass_def, order=1),
-        (len(m), len(z_arr)),
-    )
-    total_weights = dndlnm * bias_w * w[:, None]  # (Nm, Nz)
-
-    k_s, k_p = jnp.atleast_1d(k_single), jnp.atleast_1d(k_pair)
-    u_s = jnp.reshape(p_single.fourier(hm, k_s, m, z_arr), (len(k_s), len(m), len(z_arr)))
-    u_p1 = jnp.reshape(p_pair1.fourier(hm, k_p, m, z_arr), (len(k_p), len(m), len(z_arr)))
-    u_p2 = jnp.reshape(p_pair2.fourier(hm, k_p, m, z_arr), (len(k_p), len(m), len(z_arr)))
-
-    n_min, b1_min, _ = hm._counter_terms(z_arr)
-
-    if outer:
-        u_se = u_s[:, None, :, :]            # (Ns, 1, Nm, Nz)
-        u_pe = (u_p1 * u_p2)[None, :, :, :]  # (1, Np, Nm, Nz)
-        integral = jnp.sum(u_se * u_pe * total_weights[None, None, :, :], axis=2)  # (Ns, Np, Nz)
-        correction = (
-            n_min[None, None, :] * b1_min[None, None, :]
-            * u_s[:, None, 0, :] * u_p1[None, :, 0, :] * u_p2[None, :, 0, :]
-        )
-        return integral + hm.hm_consistency * correction
-
-    integral = jnp.sum(u_s * u_p1 * u_p2 * total_weights[None, :, :], axis=1)  # (Nk, Nz)
-    correction = n_min[None, :] * b1_min[None, :] * u_s[:, 0, :] * u_p1[:, 0, :] * u_p2[:, 0, :]
-    return jnp.squeeze(integral + hm.hm_consistency * correction)
-
+# Shared angle-averaging helper for the Tk kernels
 
 def _kr_pkr(hm, k, kp, z_arr):
     """
@@ -376,29 +249,15 @@ class Bk:
         profile2 = profile2 if profile2 is not None else profile1
         profile3 = profile3 if profile3 is not None else profile1
         z_arr = jnp.atleast_1d(z)
-        logm, w = gauss_legendre_nodes_weights(jnp.log(hm.m_range[0]), jnp.log(hm.m_range[1]), hm.n_m)
-        m = jnp.exp(logm)
-
-        dndlnm = jnp.reshape(
-            hm.halo_mass_function.dndlnm(hm.cosmology, m, z_arr, hm.mass_def),
-            (len(m), len(z_arr)),
-        )
-        total_weights = dndlnm * w[:, None]  # (Nm, Nz)
 
         k1a, k2a = jnp.asarray(k1), jnp.asarray(k2)
         k3 = _ksum(k1a, k2a, jnp.asarray(mu12))
 
         k1s, k2s, k3s = jnp.atleast_1d(k1a), jnp.atleast_1d(k2a), jnp.atleast_1d(k3)
-        u1 = jnp.reshape(profile1.fourier(hm, k1s, m, z_arr), (len(k1s), len(m), len(z_arr)))
-        u2 = jnp.reshape(profile2.fourier(hm, k2s, m, z_arr), (len(k2s), len(m), len(z_arr)))
-        u3 = jnp.reshape(profile3.fourier(hm, k3s, m, z_arr), (len(k3s), len(m), len(z_arr)))
-
-        triple = u1 * u2 * u3  # (1, Nm, Nz)
-        bk1h = jnp.sum(triple * total_weights[None, :, :], axis=1)  # (1, Nz)
-
-        n_min, _, _ = hm._counter_terms(z_arr)
-        correction = n_min[None, :] * u1[:, 0, :] * u2[:, 0, :] * u3[:, 0, :]
-        bk1h = bk1h + hm.hm_consistency * correction
+        bk1h = jnp.reshape(
+            hm.mass_integral((k1s, k2s, k3s), z_arr, (profile1, profile2, profile3), bias_order=0),
+            jnp.broadcast_shapes(k1s.shape, k2s.shape, k3s.shape) + (len(z_arr),),
+        )  # (Nk, Nz)
 
         k_min = jnp.minimum(jnp.minimum(k1a, k2a), k3)
         mask = self.k_damp > 0
@@ -464,13 +323,13 @@ class Bk:
         k1a, k2a = jnp.asarray(k1), jnp.asarray(k2)
         k3 = _ksum(k1a, k2a, jnp.asarray(mu12))
 
-        I1 = hm._I(profile1, k1, z, bias_order=1)
-        I2 = hm._I(profile2, k2, z, bias_order=1)
-        I3 = hm._I(profile3, k3, z, bias_order=1)
+        I1 = hm.mass_integral(k1, z, profile1, bias_order=1)
+        I2 = hm.mass_integral(k2, z, profile2, bias_order=1)
+        I3 = hm.mass_integral(k3, z, profile3, bias_order=1)
 
-        J23 = _pair_integral(hm, profile2, profile3, k2, k3, z)
-        J13 = _pair_integral(hm, profile1, profile3, k1, k3, z)
-        J12 = _pair_integral(hm, profile1, profile2, k1, k2, z)
+        J23 = hm.mass_integral((k2, k3), z, (profile2, profile3), bias_order=1)
+        J13 = hm.mass_integral((k1, k3), z, (profile1, profile3), bias_order=1)
+        J12 = hm.mass_integral((k1, k2), z, (profile1, profile2), bias_order=1)
 
         P1 = jnp.squeeze(hm.cosmology.pk(jnp.atleast_1d(k1), z_arr, linear=True))
         P2 = jnp.squeeze(hm.cosmology.pk(jnp.atleast_1d(k2), z_arr, linear=True))
@@ -542,29 +401,30 @@ class Bk:
         profile3 = profile3 if profile3 is not None else profile1
         z_arr = jnp.atleast_1d(z)
 
-        k1a, k2a = jnp.asarray(k1), jnp.asarray(k2)
-        mu12 = jnp.asarray(mu12)
+        # Every factor is kept at (Nk, Nz) so the k-only F2 kernels broadcast against multiple redshifts.
+        k1a, k2a, mu12 = jnp.broadcast_arrays(jnp.atleast_1d(k1), jnp.atleast_1d(k2), jnp.atleast_1d(mu12))
         k3a = _ksum(k1a, k2a, mu12)
+        shape = (len(k1a), len(z_arr))
 
-        I1_b1 = hm._I(profile1, k1, z, bias_order=1)
-        I2_b1 = hm._I(profile2, k2, z, bias_order=1)
-        I3_b1 = hm._I(profile3, k3a, z, bias_order=1)
-        I1_b2 = hm._I(profile1, k1, z, bias_order=2)
-        I2_b2 = hm._I(profile2, k2, z, bias_order=2)
-        I3_b2 = hm._I(profile3, k3a, z, bias_order=2)
+        I1_b1 = jnp.reshape(hm.mass_integral(k1a, z_arr, profile1, bias_order=1), shape)
+        I2_b1 = jnp.reshape(hm.mass_integral(k2a, z_arr, profile2, bias_order=1), shape)
+        I3_b1 = jnp.reshape(hm.mass_integral(k3a, z_arr, profile3, bias_order=1), shape)
+        I1_b2 = jnp.reshape(hm.mass_integral(k1a, z_arr, profile1, bias_order=2), shape)
+        I2_b2 = jnp.reshape(hm.mass_integral(k2a, z_arr, profile2, bias_order=2), shape)
+        I3_b2 = jnp.reshape(hm.mass_integral(k3a, z_arr, profile3, bias_order=2), shape)
 
-        P1 = jnp.squeeze(hm.cosmology.pk(jnp.atleast_1d(k1), z_arr, linear=True))
-        P2 = jnp.squeeze(hm.cosmology.pk(jnp.atleast_1d(k2), z_arr, linear=True))
-        P3 = jnp.squeeze(hm.cosmology.pk(jnp.atleast_1d(k3a), z_arr, linear=True))
+        P1 = jnp.reshape(hm.cosmology.pk(k1a, z_arr, linear=True), shape)
+        P2 = jnp.reshape(hm.cosmology.pk(k2a, z_arr, linear=True), shape)
+        P3 = jnp.reshape(hm.cosmology.pk(k3a, z_arr, linear=True), shape)
 
         # Tree-level SPT bispectrum with correct cosine convention:
         # mu_ij = (k_k^2 - k_i^2 - k_j^2) / (2 k_i k_j)  [opposite-side law]
         mu23 = _mu(k2a, k3a, k1a)
         mu31 = _mu(k3a, k1a, k2a)
         B_tree = (
-            2.0 * _F2(k1a, k2a, mu12) * P1 * P2
-            + 2.0 * _F2(k2a, k3a, mu23) * P2 * P3
-            + 2.0 * _F2(k3a, k1a, mu31) * P3 * P1
+            2.0 * _F2(k1a, k2a, mu12)[:, None] * P1 * P2
+            + 2.0 * _F2(k2a, k3a, mu23)[:, None] * P2 * P3
+            + 2.0 * _F2(k3a, k1a, mu31)[:, None] * P3 * P1
         )
 
         tree_term = B_tree * I1_b1 * I2_b1 * I3_b1
@@ -763,33 +623,9 @@ class Tk:
         profile3 = profile3 if profile3 is not None else profile1
         profile4 = profile4 if profile4 is not None else profile2
         z_arr = jnp.atleast_1d(z)
-        logm, w = gauss_legendre_nodes_weights(jnp.log(hm.m_range[0]), jnp.log(hm.m_range[1]), hm.n_m)
-        m = jnp.exp(logm)
-
-        dndlnm = jnp.reshape(
-            hm.halo_mass_function.dndlnm(hm.cosmology, m, z_arr, hm.mass_def),
-            (len(m), len(z_arr)),
-        )
-        total_weights = dndlnm * w[:, None]  # (Nm, Nz)
-
         k_us, k_vs = jnp.atleast_1d(k_u), jnp.atleast_1d(k_v)
-        u1 = jnp.reshape(profile1.fourier(hm, k_us, m, z_arr), (len(k_us), len(m), len(z_arr)))
-        u2 = jnp.reshape(profile2.fourier(hm, k_us, m, z_arr), (len(k_us), len(m), len(z_arr)))
-        u3 = jnp.reshape(profile3.fourier(hm, k_vs, m, z_arr), (len(k_vs), len(m), len(z_arr)))
-        u4 = jnp.reshape(profile4.fourier(hm, k_vs, m, z_arr), (len(k_vs), len(m), len(z_arr)))
-
-        u12 = (u1 * u2)[:, None, :, :]  # (Nu, 1, Nm, Nz)
-        u34 = (u3 * u4)[None, :, :, :]  # (1, Nv, Nm, Nz)
-        tk1h = jnp.sum(u12 * u34 * total_weights[None, None, :, :], axis=2)  # (Nu, Nv, Nz)
-
-        n_min, _, _ = hm._counter_terms(z_arr)
-        correction = (
-            n_min[None, None, :]
-            * u1[:, None, 0, :] * u2[:, None, 0, :] * u3[None, :, 0, :] * u4[None, :, 0, :]
-        )
-        tk1h = tk1h + hm.hm_consistency * correction
-
-        return jnp.squeeze(tk1h)
+        ku, kv = k_us[:, None], k_vs[None, :]
+        return hm.mass_integral((ku, ku, kv, kv), z_arr, (profile1, profile2, profile3, profile4), bias_order=0)
 
     # ------------------------------------------------------------------
     # 2-halo term
@@ -874,35 +710,30 @@ class Tk:
         k_us, k_vs = jnp.atleast_1d(k_u), jnp.atleast_1d(k_v)
         nu, nv, nz = len(k_us), len(k_vs), len(z_arr)
 
+        ku, kv = k_us[:, None], k_vs[None, :]
+
+        def i_uv(ks, ps):
+            return jnp.reshape(hm.mass_integral(ks, z_arr, ps, bias_order=1), (nu, nv, nz))
+
         # "22" diagram: two halos, each hosting a pair of legs.
         Pbar = self._Pbar_kernel(hm, k_us, k_vs, z_arr)  # (Nu, Nv, Nz)
-        pair_a = (
-            _pair_integral(hm, profile1, profile3, k_u, k_v, z, outer=True)
-            * _pair_integral(hm, profile2, profile4, k_u, k_v, z, outer=True)
-        )
-        pair_b = (
-            _pair_integral(hm, profile1, profile4, k_u, k_v, z, outer=True)
-            * _pair_integral(hm, profile3, profile2, k_u, k_v, z, outer=True)
-        )
+        pair_a = i_uv((ku, kv), (profile1, profile3)) * i_uv((ku, kv), (profile2, profile4))
+        pair_b = i_uv((ku, kv), (profile1, profile4)) * i_uv((ku, kv), (profile2, profile3))
         tk_22 = Pbar * (pair_a + pair_b)  # (Nu, Nv, Nz)
 
         # "13" diagram: one leg alone in a halo, the other three together.
         P_u = jnp.reshape(hm.cosmology.pk(k_us, z_arr, linear=True), (nu, 1, nz))
         P_v = jnp.reshape(hm.cosmology.pk(k_vs, z_arr, linear=True), (1, nv, nz))
 
-        I1u = jnp.reshape(hm._I(profile1, k_u, z, bias_order=1), (nu, 1, nz))
-        I2u = jnp.reshape(hm._I(profile2, k_u, z, bias_order=1), (nu, 1, nz))
-        I3v = jnp.reshape(hm._I(profile3, k_v, z, bias_order=1), (1, nv, nz))
-        I4v = jnp.reshape(hm._I(profile4, k_v, z, bias_order=1), (1, nv, nz))
+        I1u = jnp.reshape(hm.mass_integral(k_us, z_arr, profile1, bias_order=1), (nu, 1, nz))
+        I2u = jnp.reshape(hm.mass_integral(k_us, z_arr, profile2, bias_order=1), (nu, 1, nz))
+        I3v = jnp.reshape(hm.mass_integral(k_vs, z_arr, profile3, bias_order=1), (1, nv, nz))
+        I4v = jnp.reshape(hm.mass_integral(k_vs, z_arr, profile4, bias_order=1), (1, nv, nz))
 
-        K_u2 = _triple_integral(hm, profile2, profile3, profile4, k_u, k_v, z, outer=True)
-        K_u1 = _triple_integral(hm, profile1, profile3, profile4, k_u, k_v, z, outer=True)
-        K_v4 = jnp.swapaxes(
-            _triple_integral(hm, profile4, profile1, profile2, k_v, k_u, z, outer=True), 0, 1
-        )
-        K_v3 = jnp.swapaxes(
-            _triple_integral(hm, profile3, profile1, profile2, k_v, k_u, z, outer=True), 0, 1
-        )
+        K_u2 = i_uv((ku, kv, kv), (profile2, profile3, profile4))
+        K_u1 = i_uv((ku, kv, kv), (profile1, profile3, profile4))
+        K_v4 = i_uv((kv, ku, ku), (profile4, profile1, profile2))
+        K_v3 = i_uv((kv, ku, ku), (profile3, profile1, profile2))
 
         tk_13 = P_u * (I1u * K_u2 + I2u * K_u1) + P_v * (I3v * K_v4 + I4v * K_v3)  # (Nu, Nv, Nz)
 
@@ -1002,21 +833,26 @@ class Tk:
 
         Bpt = self._Bpt_kernel(hm, k_us, k_vs, z_arr)  # (Nu, Nv, Nz)
 
-        I1u = jnp.reshape(hm._I(profile1, k_u, z, bias_order=1), (nu, 1, nz))
-        I2u = jnp.reshape(hm._I(profile2, k_u, z, bias_order=1), (nu, 1, nz))
-        I3v = jnp.reshape(hm._I(profile3, k_v, z, bias_order=1), (1, nv, nz))
-        I4v = jnp.reshape(hm._I(profile4, k_v, z, bias_order=1), (1, nv, nz))
+        ku, kv = k_us[:, None], k_vs[None, :]
 
-        J24 = _pair_integral(hm, profile2, profile4, k_u, k_v, z, outer=True)
-        J32 = _pair_integral(hm, profile3, profile2, k_u, k_v, z, outer=True)
-        J14 = _pair_integral(hm, profile1, profile4, k_u, k_v, z, outer=True)
-        J31 = _pair_integral(hm, profile3, profile1, k_u, k_v, z, outer=True)
+        def pair_uv(pa, pb):
+            return jnp.reshape(hm.mass_integral((ku, kv), z_arr, (pa, pb), bias_order=1), (nu, nv, nz))
+
+        I1u = jnp.reshape(hm.mass_integral(k_us, z_arr, profile1, bias_order=1), (nu, 1, nz))
+        I2u = jnp.reshape(hm.mass_integral(k_us, z_arr, profile2, bias_order=1), (nu, 1, nz))
+        I3v = jnp.reshape(hm.mass_integral(k_vs, z_arr, profile3, bias_order=1), (1, nv, nz))
+        I4v = jnp.reshape(hm.mass_integral(k_vs, z_arr, profile4, bias_order=1), (1, nv, nz))
+
+        J24 = pair_uv(profile2, profile4)
+        J23 = pair_uv(profile2, profile3)
+        J14 = pair_uv(profile1, profile4)
+        J13 = pair_uv(profile1, profile3)
 
         tk3h = Bpt * (
             I1u * I3v * J24
-            + I1u * I4v * J32
+            + I1u * I4v * J23
             + I3v * I2u * J14
-            + I4v * I2u * J31
+            + I4v * I2u * J13
         )
 
         return jnp.squeeze(tk3h)
@@ -1119,10 +955,10 @@ class Tk:
 
         T_pt = t1113 + t1122  # (Nu, Nv, Nz)
 
-        I1 = jnp.reshape(hm._I(profile1, k_u, z, bias_order=1), (nu, 1, nz))
-        I2 = jnp.reshape(hm._I(profile2, k_u, z, bias_order=1), (nu, 1, nz))
-        I3 = jnp.reshape(hm._I(profile3, k_v, z, bias_order=1), (1, nv, nz))
-        I4 = jnp.reshape(hm._I(profile4, k_v, z, bias_order=1), (1, nv, nz))
+        I1 = jnp.reshape(hm.mass_integral(k_us, z_arr, profile1, bias_order=1), (nu, 1, nz))
+        I2 = jnp.reshape(hm.mass_integral(k_us, z_arr, profile2, bias_order=1), (nu, 1, nz))
+        I3 = jnp.reshape(hm.mass_integral(k_vs, z_arr, profile3, bias_order=1), (1, nv, nz))
+        I4 = jnp.reshape(hm.mass_integral(k_vs, z_arr, profile4, bias_order=1), (1, nv, nz))
 
         return jnp.squeeze(T_pt * I1 * I2 * I3 * I4)
 

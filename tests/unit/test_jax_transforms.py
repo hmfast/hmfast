@@ -203,7 +203,7 @@ case("B13Concentration.c_delta",
 
 # --- halo model ------------------------------------------------------------------
 case("HaloModel._counter_terms", lambda p: halo_model(p)._counter_terms(Z_GRID))
-case("HaloModel._I", lambda p: halo_model(p)._I(NFW, K_GRID, Z_GRID, bias_order=1))
+case("HaloModel.mass_integral", lambda p: halo_model(p).mass_integral(K_GRID, Z_GRID, NFW, bias_order=1))
 
 # --- profiles --------------------------------------------------------------------
 for _name, _prof, _md in [
