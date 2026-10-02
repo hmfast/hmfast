@@ -170,11 +170,11 @@ class TestMatterPowerSpectrumCCL:
         k_min, k_max = float(k_grid_native.min()), float(k_grid_native.max())
         k_beyond = jnp.array([k_min * 0.5, k_max * 2.0])
 
-        pk_noext = fixed_cosmology.pk(k_beyond, jnp.array([1.0]), linear=True, extrapolate_k=False)
+        pk_noext = fixed_cosmology.update(extrapolate_k=False).pk(k_beyond, jnp.array([1.0]), linear=True)
         assert jnp.all(jnp.isnan(pk_noext))
 
         pk_ext = np.asarray(
-            fixed_cosmology.pk(k_beyond, jnp.array([1.0]), linear=True, extrapolate_k=True)
+            fixed_cosmology.update(extrapolate_k=True).pk(k_beyond, jnp.array([1.0]), linear=True)
         ).flatten()
         pk_ccl = pyccl.linear_matter_power(cosmo_ccl_pkl, np.asarray(k_beyond), z_to_a(1.0))
         assert np.allclose(pk_ext, pk_ccl, rtol=0.01)
