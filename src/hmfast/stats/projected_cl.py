@@ -1,6 +1,6 @@
 """
 Angular power spectrum (C_ell): Limber and non-Limber, halo-model and
-linear-bias engines. Every name except the public cl_hm/cl_lin functions at
+linear-bias engines. Every name except the public cl/cl_linbias functions at
 the bottom of this module is a private helper.
 """
 
@@ -33,9 +33,11 @@ def _extended_limber_kernel_grid(cosmology, l, z, chi, P_grid, pk_fn):
     # NaN past it, so fall back to no growth correction there instead.
     z_b = cosmology._z_grid_pk()[-1]
     in_bounds_lp = z_lp_raw <= z_b
-    growth_ratio_lp = jnp.where(in_bounds_lp, 1.0, cosmology.growth_factor(z_lp_raw) / cosmology.growth_factor(z_b))
+    if cosmology.extrapolate_z:
+        growth_ratio_sq_lp = jnp.where(in_bounds_lp, 1.0, (cosmology.growth_factor(z_lp_raw) / cosmology.growth_factor(z_b)) ** 2)
+    else:
+        growth_ratio_sq_lp = jnp.ones_like(z_lp_raw)  # never evaluate the NaN growth_factor: masking it still leaves NaN reverse-mode gradients
     z_lp = jnp.where(in_bounds_lp, z_lp_raw, z_b)
-    growth_ratio_sq_lp = jnp.nan_to_num(growth_ratio_lp**2, nan=1.0)
 
     k_l = lp1h[None, :] / chi[:, None]  # (Nz, Nl) -- the SAME k as P_grid, at the shifted z'
     pk_pair = lambda k_i, z_i: jnp.squeeze(pk_fn(jnp.atleast_1d(k_i), jnp.atleast_1d(z_i)))
@@ -211,7 +213,7 @@ def _nonlimber_cl(cosmology, tracer1, tracer2, l, z_range, n_z, D_kz_fns, bias_s
 
 
 # ------------------------------------------------------------------
-# Halo-model Cl (backs cl_hm below)
+# Halo-model Cl (backs cl below)
 # ------------------------------------------------------------------
 
 def _D_kz(cosmology, k, z, z_fid=0.0, linear=True, mass_integral=None):
@@ -231,7 +233,7 @@ def _D_kz(cosmology, k, z, z_fid=0.0, linear=True, mass_integral=None):
 
 @partial(jax.jit, static_argnums=(5,), static_argnames=("n_fft", "n_interp", "bias", "window"))
 def _cl_2h_nonlimber(halo_model, tracer1, tracer2, l, z_range, n_z, z_fid=0.0, n_fft=None, n_interp=200, bias=0.1, window=0.2):
-    """Non-Limber 2-halo Cl via _nonlimber_cl; backs cl_hm below l_limber. l/z_range may both be traced."""
+    """Non-Limber 2-halo Cl via _nonlimber_cl; backs cl below l_limber. l/z_range may both be traced."""
     tracer2 = tracer1 if tracer2 is None else tracer2
     tracers = (tracer1,) if tracer2 is tracer1 else (tracer1, tracer2)
     cosmology = halo_model.cosmology
@@ -295,7 +297,7 @@ def _effective_kernel_limber(tracer, cosmology, z, l, z_lp, lp1h, lp3h, sqell, b
 
 @partial(jax.jit, static_argnums=(6,), static_argnames=("include_1h", "include_2h"))
 def _cl_limber(pk_obj, halo_model, tracer1, tracer2, l, z_range, n_z, include_1h=False, include_2h=True):
-    """Limber Cl for either/both halo terms; helper behind the Limber branch of cl_hm.
+    """Limber Cl for either/both halo terms; helper behind the Limber branch of cl.
 
     l may be traced; pk_obj is a registered Pk pytree (its k_damp attribute is a dynamic
     leaf), so it is no longer marked static. An RSD (der_bessel=2) term adds ~1.7x cost
@@ -352,13 +354,13 @@ def _cl_limber(pk_obj, halo_model, tracer1, tracer2, l, z_range, n_z, include_1h
 
 
 # ------------------------------------------------------------------
-# Linear-bias Cl (backs cl_lin below)
+# Linear-bias Cl (backs cl_linbias below)
 # ------------------------------------------------------------------
 
 @partial(jax.jit, static_argnums=(5,), static_argnames=("n_fft", "n_interp", "bias", "window", "linear"))
 def _cl_linear_nonlimber(cosmology, tracer1, tracer2, l, z_range, n_z, linear=True,
                           z_fid=0.0, n_fft=None, n_interp=200, bias=0.1, window=0.2):
-    """Non-Limber linearly-biased Cl via _nonlimber_cl; helper behind cl_lin below l_limber."""
+    """Non-Limber linearly-biased Cl via _nonlimber_cl; helper behind cl_linbias below l_limber."""
     tracer2 = tracer1 if tracer2 is None else tracer2
     tracers = (tracer1,) if tracer2 is tracer1 else (tracer1, tracer2)
     # A tracer's bias only scales its der_bessel=0 (density) term, never an RSD, magnification or IA term.
@@ -375,7 +377,7 @@ def _cl_linear_nonlimber(cosmology, tracer1, tracer2, l, z_range, n_z, linear=Tr
 
 @partial(jax.jit, static_argnums=(5,), static_argnames=("linear",))
 def _cl_linear_limber(cosmology, tracer1, tracer2, l, z_range, n_z, linear=True):
-    """Limber helper behind cl_lin: raw cosmology.pk(...) in place of pk_1h/pk_2h, tracer
+    """Limber helper behind cl_linbias: raw cosmology.pk(...) in place of pk_1h/pk_2h, tracer
     bias in place of halo occupation. An RSD (der_bessel=2) kernel term is projected via the
     same extended-Limber correction as cl_limber's halo-model engine."""
     tracer2 = tracer1 if tracer2 is None else tracer2
@@ -419,7 +421,7 @@ def _cl_linear_limber(cosmology, tracer1, tracer2, l, z_range, n_z, linear=True)
 # ------------------------------------------------------------------
 
 @partial(jax.jit, static_argnums=(6,), static_argnames=("l_limber", "n_fft", "n_interp", "bias", "window"))
-def cl_hm(pk, halo_model, tracer1, tracer2, l, z_range, n_z, l_limber=0.0,
+def cl(pk, halo_model, tracer1, tracer2, l, z_range, n_z, l_limber=0.0,
           z_fid=0.0, n_fft=None, n_interp=200, bias=0.1, window=0.2):
     """
     Halo-model angular power spectrum :math:`C_\\ell`, combining the
@@ -503,7 +505,7 @@ def cl_hm(pk, halo_model, tracer1, tracer2, l, z_range, n_z, l_limber=0.0,
 
     Returns
     -------
-    cl_hm : array
+    cl : array
         Dimensionless halo-model angular power spectrum with shape
         :math:`(N_\\ell,)`, where singleton dimensions get squeezed before
         return.
@@ -522,19 +524,19 @@ def cl_hm(pk, halo_model, tracer1, tracer2, l, z_range, n_z, l_limber=0.0,
 
 
 @partial(jax.jit, static_argnums=(5,), static_argnames=("linear", "l_limber", "n_fft", "n_interp", "bias", "window"))
-def cl_lin(cosmology, tracer1, tracer2, l, z_range, n_z, linear=True,
+def cl_linbias(cosmology, tracer1, tracer2, l, z_range, n_z, linear=True,
            l_limber=0.0, z_fid=0.0, n_fft=None, n_interp=200, bias=0.1, window=0.2):
     """
     Angular power spectrum for linearly-biased or unbiased tracers, with
     no halo-model mass integral. Companion to
-    :func:`cl_hm`: uses each tracer's own scalar/array bias
+    :func:`cl`: uses each tracer's own scalar/array bias
     (from a ``bias`` attribute, e.g. ``GalaxyTracer``; tracers without
     one, e.g. CMB/galaxy lensing, are treated as unbiased) in place of
     the halo-model mass integral, and the raw matter power spectrum in
     place of ``Pk.pk_1h``/``Pk.pk_2h``. Takes a ``Cosmology`` directly,
-    unlike :func:`cl_hm`, since no halo-model mass integral
+    unlike :func:`cl`, since no halo-model mass integral
     is performed. Below ``l_limber``, uses an exact SwiftCl-style FFTLog
-    projection (mirroring ``cl_hm``'s non-Limber 2-halo branch); at or above it,
+    projection (mirroring ``cl``'s non-Limber 2-halo branch); at or above it,
     uses the Limber approximation (the default, ``l_limber=0.0``, uses
     Limber everywhere).
 
@@ -554,7 +556,7 @@ def cl_lin(cosmology, tracer1, tracer2, l, z_range, n_z, linear=True,
     l : array-like
         Multipole grid. Must be concrete (not a value being traced by JAX),
         since the low/high `l_limber` split is a data-dependent shape
-        decision (matches `cl_hm`).
+        decision (matches `cl`).
     z_range : tuple
         ``(z_min, z_max)`` spanning the redshift integration grid (Limber
         branch) and the internal FFTLog chi grid (non-Limber branch).
@@ -588,7 +590,7 @@ def cl_lin(cosmology, tracer1, tracer2, l, z_range, n_z, linear=True,
 
     Returns
     -------
-    cl_lin : array
+    cl_linbias : array
         Dimensionless linearly-biased angular power spectrum with shape
         :math:`(N_\\ell,)`, where singleton dimensions get squeezed before
         return.

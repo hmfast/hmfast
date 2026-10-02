@@ -19,7 +19,7 @@ from hmfast.halos.concentration import D08Concentration
 from hmfast.halos.massdef import MassDefinition
 from hmfast.halos.massfunc import T08HaloMassFunction
 from hmfast.halos.profiles import GNFWPressureProfile, NFWMatterProfile, Z07GalaxyHODProfile
-from hmfast.stats import Pk, cl_hm
+from hmfast.stats import Pk, cl
 from hmfast.tracers import GalaxyTracer, tSZTracer
 
 pytestmark = pytest.mark.accuracy
@@ -56,10 +56,10 @@ def _evaluate(cosmology, name, m, z, x):
     hm = _halo_model(cosmology, m)
     if name == "Cl_yy":
         t = tSZTracer(profile=_gnfw(x), z_max=Z_RANGE[1])
-        return np.asarray(cl_hm(PK, hm, t, t, ELL, Z_RANGE, z))
+        return np.asarray(cl(PK, hm, t, t, ELL, Z_RANGE, z))
     if name == "Cl_gg":
         t = GalaxyTracer(profile=HOD)
-        return np.asarray(cl_hm(PK, hm, t, t, ELL, Z_RANGE, z))
+        return np.asarray(cl(PK, hm, t, t, ELL, Z_RANGE, z))
     p = NFWMatterProfile() if name == "Pk_mm" else _gnfw(x)
     return np.asarray(PK.pk_1h(hm, K, Z_PK, p) + PK.pk_2h(hm, K, Z_PK, p))
 
