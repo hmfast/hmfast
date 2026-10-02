@@ -36,7 +36,7 @@ class GalaxyTracer(Tracer):
         I_{\\mathrm{mag}}(z) = \\int_z^\\infty dz_s\\, \\left(1 - \\tfrac{5}{2}s(z_s)\\right)
         \\frac{dN}{dz}(z_s)\\, \\frac{\\chi(z_s)-\\chi(z)}{\\chi(z_s)}.
 
-    If ``rsd=True``, a redshift-space distortion term:
+    If ``has_rsd=True``, a redshift-space distortion term:
 
     .. math::
 
@@ -59,14 +59,14 @@ class GalaxyTracer(Tracer):
         compute a linearly-biased angular power spectrum; has no effect when this tracer is used
         with a full halo-model calculation, where bias is instead handled through the halo
         occupation profile. Defaults to `None` (unbiased).
-    rsd : bool
+    has_rsd : bool
         Whether :meth:`kernel` includes a redshift-space distortion term. Defaults to
         `False`.
     """
 
     _required_profile_type = GalaxyHODProfile
 
-    def __init__(self, profile=None, dndz=None, mag_bias=None, bias=None, rsd=False):
+    def __init__(self, profile=None, dndz=None, mag_bias=None, bias=None, has_rsd=False):
         super().__init__(profile=profile or Z07GalaxyHODProfile())
 
         if dndz is None:
@@ -80,7 +80,7 @@ class GalaxyTracer(Tracer):
         self.mag_bias = mag_bias
 
         self.bias = bias
-        self.rsd = bool(rsd)
+        self.has_rsd = bool(has_rsd)
 
 
     @property
@@ -113,22 +113,22 @@ class GalaxyTracer(Tracer):
         # The profile IS the leaf. JAX will automatically
         # drill down into the profile's own 5 leaves.
         leaves = (self.profile, self._dndz_data, self._mag_bias_data, self._bias_data)
-        aux_data = (self.rsd,)
+        aux_data = (self.has_rsd,)
         return (leaves, aux_data)
 
     @classmethod
     def _tree_unflatten(cls, aux_data, leaves):
         profile, dndz_data, mag_bias_data, bias_data = leaves
-        rsd, = aux_data
+        has_rsd, = aux_data
         obj = cls.__new__(cls)
         obj.profile = profile
         obj._dndz_data = dndz_data
         obj._mag_bias_data = mag_bias_data
         obj._bias_data = bias_data
-        obj.rsd = rsd
+        obj.has_rsd = has_rsd
         return obj
 
-    def update(self, profile=None, dndz=None, mag_bias=None, bias=None, rsd=None):
+    def update(self, profile=None, dndz=None, mag_bias=None, bias=None, has_rsd=None):
         """
         Return a new GalaxyTracer instance with updated attributes using PyTree logic.
 
@@ -142,7 +142,7 @@ class GalaxyTracer(Tracer):
             New magnification-bias slope (z, s(z)). If None, it is unchanged.
         bias : array_like, optional
             New linear galaxy bias (z, b(z)). If None, it is unchanged.
-        rsd : bool, optional
+        has_rsd : bool, optional
             Whether to include a redshift-space distortion term. If None, it is unchanged.
 
         Returns
@@ -155,8 +155,8 @@ class GalaxyTracer(Tracer):
         new_dndz = self._prepare_z_function(dndz) if dndz is not None else flat[1]
         new_mag_bias = self._prepare_z_function(mag_bias, normalize=False) if mag_bias is not None else flat[2]
         new_bias = self._prepare_z_function(bias, normalize=False) if bias is not None else flat[3]
-        new_rsd = bool(rsd) if rsd is not None else aux[0]
-        return self._tree_unflatten((new_rsd,), (new_profile, new_dndz, new_mag_bias, new_bias))
+        new_has_rsd = bool(has_rsd) if has_rsd is not None else aux[0]
+        return self._tree_unflatten((new_has_rsd,), (new_profile, new_dndz, new_mag_bias, new_bias))
 
 
     def _density_kernel(self, cosmology, z):
@@ -181,7 +181,7 @@ class GalaxyTracer(Tracer):
 
     def _kernel_mag_bias(self, cosmology, z):
         """
-        Magnification-bias term (:math:`n=0`, projected with :math:`j_\\ell`) of the galaxy kernel, from the
+        Magnification-bias term (:math:`n=-1`, :math:`a=1`: projected with :math:`\\ell(\\ell+1)\\, j_\\ell/(k\\chi)^2`) of the galaxy kernel, from the
         ``mag_bias`` log-slope :math:`s(z)`:
 
         .. math::
@@ -222,11 +222,6 @@ class GalaxyTracer(Tracer):
         """
         Radial kernel terms of the galaxy counts tracer.
 
-        Each term is a pair :math:`(W, n)`, where :math:`W(\\chi)` is a radial
-        kernel and :math:`n` selects the spherical Bessel derivative
-        :math:`j_\\ell^{(n)}(k\\chi)` the term is projected with in an angular
-        power spectrum.
-
         Parameters
         ----------
         cosmology : Cosmology
@@ -236,17 +231,24 @@ class GalaxyTracer(Tracer):
 
         Returns
         -------
-        list of tuple of (array_like, int)
-            - :math:`(W_g, 0)`: galaxy density term, projected with :math:`j_\\ell`.
-            - :math:`(W_g^{\\mathrm{mag}}, 0)`: magnification-bias term, projected with :math:`j_\\ell`.
-            - :math:`(W_g^{\\mathrm{RSD}}, 2)`: redshift-space distortion term, projected with :math:`j_\\ell''`; included only if ``rsd=True``.
+        list of tuple of (array_like, int, int)
+            One ``(W, n, a)`` per term, specifying how it is projected into :math:`C_\\ell`:
+            :math:`W` is the radial kernel, :math:`n` the order of the spherical Bessel
+            derivative :math:`j^{(n)}_\\ell(k\\chi)` (with :math:`n=-1` meaning
+            :math:`j_\\ell(k\\chi)/(k\\chi)^2`), and :math:`a` the order of the angular derivative,
+            which sets the :math:`\\ell`-dependent prefactor (:math:`1`, :math:`\\ell(\\ell+1)` or
+            :math:`\\sqrt{(\\ell+2)!/(\\ell-2)!}` for :math:`a = 0, 1, 2`).
+
+            - ``(W_g, 0, 0)``: density kernel :math:`W_g` above.
+            - ``(W_mag, -1, 1)``: magnification-bias kernel :math:`W_g^{\\rm mag}` above.
+            - ``(W_RSD, 2, 0)``: redshift-space distortion kernel :math:`W_g^{\\rm RSD}` above; included only if ``has_rsd=True``.
         """
         terms = [
-            (self._kernel_primary(cosmology, z), 0),
-            (self._kernel_mag_bias(cosmology, z), 0),
+            (self._kernel_primary(cosmology, z), 0, 0),
+            (self._kernel_mag_bias(cosmology, z), -1, 1),
         ]
-        if self.rsd:
-            terms.append((self._kernel_rsd(cosmology, z), 2))
+        if self.has_rsd:
+            terms.append((self._kernel_rsd(cosmology, z), 2, 0))
         return terms
 
 

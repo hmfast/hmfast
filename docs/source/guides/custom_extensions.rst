@@ -124,8 +124,8 @@ Not physical — only intended as a tiny runnable example users can adapt::
     def __init__(self, profile):
       super().__init__(profile=profile)
     def kernel(self, cosmology, z):
-      # trivial der_bessel=0 (density-type) kernel term, weight of 1 at every z
-      return [(jnp.ones_like(z), 0)]
+      # one (W, der_bessel, der_angles) term: density-type (j_l, no angular prefactor), weight of 1 at every z
+      return [(jnp.ones_like(z), 0, 0)]
     def tree_flatten(self):
       return (self.profile,), None
     @classmethod

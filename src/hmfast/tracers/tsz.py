@@ -121,11 +121,6 @@ class tSZTracer(Tracer):
         """
         Radial kernel terms of the thermal Sunyaev-Zeldovich tracer.
 
-        Each term is a pair :math:`(W, n)`, where :math:`W(\\chi)` is a radial
-        kernel and :math:`n` selects the spherical Bessel derivative
-        :math:`j_\\ell^{(n)}(k\\chi)` the term is projected with in an angular
-        power spectrum.
-
         Parameters
         ----------
         cosmology : Cosmology
@@ -135,10 +130,17 @@ class tSZTracer(Tracer):
 
         Returns
         -------
-        list of tuple of (array_like, int)
-            - :math:`(W_{\\mathrm{tSZ}}, 0)`: tSZ term, projected with :math:`j_\\ell`.
+        list of tuple of (array_like, int, int)
+            One ``(W, n, a)`` per term, specifying how it is projected into :math:`C_\\ell`:
+            :math:`W` is the radial kernel, :math:`n` the order of the spherical Bessel
+            derivative :math:`j^{(n)}_\\ell(k\\chi)` (with :math:`n=-1` meaning
+            :math:`j_\\ell(k\\chi)/(k\\chi)^2`), and :math:`a` the order of the angular derivative,
+            which sets the :math:`\\ell`-dependent prefactor (:math:`1`, :math:`\\ell(\\ell+1)` or
+            :math:`\\sqrt{(\\ell+2)!/(\\ell-2)!}` for :math:`a = 0, 1, 2`).
+
+            - ``(W_tSZ, 0, 0)``: tSZ kernel :math:`W_{\\rm tSZ}` above.
         """
-        return [(self._kernel_primary(cosmology, z), 0)]
+        return [(self._kernel_primary(cosmology, z), 0, 0)]
 
 
 

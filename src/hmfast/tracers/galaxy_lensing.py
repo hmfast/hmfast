@@ -15,7 +15,7 @@ class GalaxyLensingTracer(Tracer):
     """
     Galaxy weak lensing tracer.
 
-    The kernel has two contributions. The lensing convergence term:
+    The kernel has two contributions. The lensing shear term:
 
     .. math::
 
@@ -53,12 +53,15 @@ class GalaxyLensingTracer(Tracer):
     ia_bias : tuple of jnp.ndarray
         Intrinsic-alignment (NLA) amplitude stored as :math:`(z, A_{IA}(z))`.
         Defaults to :math:`A_{IA}(z)\\equiv 0` (no intrinsic alignments).
+    has_shear : bool
+        Whether :meth:`kernel` includes the lensing shear term. Set to `False` for an
+        intrinsic-alignment-only tracer, which requires ``ia_bias``. Defaults to `True`.
     """
 
     _required_profile_type = MatterProfile
 
 
-    def __init__(self, profile=None, dndz=None, ia_bias=None):
+    def __init__(self, profile=None, dndz=None, ia_bias=None, has_shear=True):
 
         super().__init__(profile=profile or NFWMatterProfile())
 
@@ -69,9 +72,12 @@ class GalaxyLensingTracer(Tracer):
         else:
             self.dndz = dndz
 
+        if not has_shear and ia_bias is None:
+            raise ValueError("GalaxyLensingTracer with has_shear=False needs an intrinsic-alignment amplitude ia_bias.")
         if ia_bias is None:
             ia_bias = (jnp.array([0.0, 1.0]), jnp.array([0.0, 0.0]))
         self.ia_bias = ia_bias
+        self.has_shear = bool(has_shear)
 
 
     @property
@@ -96,19 +102,21 @@ class GalaxyLensingTracer(Tracer):
     def _tree_flatten(self):
         # Exactly like HOD: Profile is leaf 1, dndz array/tuple is leaf 2
         leaves = (self.profile, self._dndz_data, self._ia_bias_data)
-        aux_data = None
+        aux_data = (self.has_shear,)
         return (leaves, aux_data)
 
     @classmethod
     def _tree_unflatten(cls, aux_data, leaves):
         profile, dndz_data, ia_bias_data = leaves
+        has_shear, = aux_data
         obj = cls.__new__(cls)
         obj.profile = profile
         obj._dndz_data = dndz_data
         obj._ia_bias_data = ia_bias_data
+        obj.has_shear = has_shear
         return obj
 
-    def update(self, profile=None, dndz=None, ia_bias=None):
+    def update(self, profile=None, dndz=None, ia_bias=None, has_shear=None):
         """
         Return a new GalaxyLensingTracer instance with updated attributes using PyTree logic.
 
@@ -120,6 +128,8 @@ class GalaxyLensingTracer(Tracer):
             New redshift distribution (z, dN/dz). If None, the distribution is unchanged.
         ia_bias : array_like, optional
             New intrinsic-alignment amplitude (z, A_IA(z)). If None, it is unchanged.
+        has_shear : bool, optional
+            Whether to include the lensing shear term. If None, it is unchanged.
 
         Returns
         -------
@@ -130,7 +140,8 @@ class GalaxyLensingTracer(Tracer):
         new_profile = profile if profile is not None else flat[0]
         new_dndz = self._prepare_z_function(dndz) if dndz is not None else flat[1]
         new_ia_bias = self._prepare_z_function(ia_bias, normalize=False) if ia_bias is not None else flat[2]
-        return self._tree_unflatten(aux, (new_profile, new_dndz, new_ia_bias))
+        new_has_shear = bool(has_shear) if has_shear is not None else aux[0]
+        return self._tree_unflatten((new_has_shear,), (new_profile, new_dndz, new_ia_bias))
 
 
     # --- End JAX PyTree Registration ---
@@ -138,7 +149,7 @@ class GalaxyLensingTracer(Tracer):
 
     def _kernel_primary(self, cosmology, z):
         """
-        Weak lensing convergence term (:math:`n=0`, projected with :math:`j_\\ell`) of the galaxy lensing
+        Weak lensing shear term (:math:`n=-1`, :math:`a=2`: projected with :math:`f^{(2)}_\\ell\\, j_\\ell/(k\\chi)^2`) of the galaxy lensing
         kernel:
 
         .. math::
@@ -172,7 +183,7 @@ class GalaxyLensingTracer(Tracer):
 
     def _kernel_ia(self, cosmology, z):
         """
-        Intrinsic-alignment (NLA) term (:math:`n=0`, projected with :math:`j_\\ell`) of the galaxy lensing
+        Intrinsic-alignment (NLA) term (:math:`n=-1`, :math:`a=2`: projected with :math:`f^{(2)}_\\ell\\, j_\\ell/(k\\chi)^2`) of the galaxy lensing
         kernel, controlled by ``ia_bias``.
         """
         cparams = cosmology._cosmo_params()
@@ -196,11 +207,6 @@ class GalaxyLensingTracer(Tracer):
         """
         Radial kernel terms of the galaxy weak lensing tracer.
 
-        Each term is a pair :math:`(W, n)`, where :math:`W(\\chi)` is a radial
-        kernel and :math:`n` selects the spherical Bessel derivative
-        :math:`j_\\ell^{(n)}(k\\chi)` the term is projected with in an angular
-        power spectrum.
-
         Parameters
         ----------
         cosmology : Cosmology
@@ -210,14 +216,21 @@ class GalaxyLensingTracer(Tracer):
 
         Returns
         -------
-        list of tuple of (array_like, int)
-            - :math:`(W_{\\kappa_g}, 0)`: lensing convergence term, projected with :math:`j_\\ell`.
-            - :math:`(W_g^{\\mathrm{IA}}, 0)`: intrinsic-alignment term, projected with :math:`j_\\ell`; identically zero for the default ``ia_bias``.
+        list of tuple of (array_like, int, int)
+            One ``(W, n, a)`` per term, specifying how it is projected into :math:`C_\\ell`:
+            :math:`W` is the radial kernel, :math:`n` the order of the spherical Bessel
+            derivative :math:`j^{(n)}_\\ell(k\\chi)` (with :math:`n=-1` meaning
+            :math:`j_\\ell(k\\chi)/(k\\chi)^2`), and :math:`a` the order of the angular derivative,
+            which sets the :math:`\\ell`-dependent prefactor (:math:`1`, :math:`\\ell(\\ell+1)` or
+            :math:`\\sqrt{(\\ell+2)!/(\\ell-2)!}` for :math:`a = 0, 1, 2`).
+
+            - ``(W_κ_g, -1, 2)``: shear kernel :math:`W_{\\kappa_g}` above; included only if ``has_shear=True``.
+            - ``(W_IA, -1, 2)``: intrinsic-alignment kernel :math:`W_g^{\\rm IA}` above; zero for the default ``ia_bias``.
         """
-        return [
-            (self._kernel_primary(cosmology, z), 0),
-            (self._kernel_ia(cosmology, z), 0),
-        ]
+        terms = [(self._kernel_ia(cosmology, z), -1, 2)]
+        if self.has_shear:
+            terms.insert(0, (self._kernel_primary(cosmology, z), -1, 2))
+        return terms
 
 
 jax.tree_util.register_pytree_node(

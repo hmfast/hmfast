@@ -12,13 +12,26 @@ class Tracer(ABC):
     Parent tracer class from which other tracer classes inherit.
 
     Child tracers must implement :meth:`kernel`, returning a list of
-    :math:`(W, n)` terms, where :math:`W(\\chi)` is a radial kernel and
-    :math:`n` selects the spherical Bessel derivative :math:`j_\\ell^{(n)}(k\\chi)`
-    the term is projected with in an angular power spectrum:
+    :math:`(W, n, a)` terms that enter an angular power spectrum as
 
     .. math::
 
-        \\Delta_\\ell(k) = \\int d\\chi\\, W(\\chi)\\, j_\\ell^{(n)}(k\\chi).
+        \\Delta_\\ell(k) = \\sum_{\\rm terms} f^{(a)}_\\ell \\int d\\chi\\, W(\\chi)\\, j^{(n)}_\\ell(k\\chi),
+
+    where :math:`W(\\chi)` is a radial kernel, :math:`j^{(-1)}_\\ell(x) \\equiv j_\\ell(x)/x^2`
+    (Poisson-equation tracers: lensing, magnification, intrinsic alignments),
+    :math:`j^{(n)}_\\ell` for :math:`n = 0, 1, 2` is the :math:`n`-th derivative of the
+    spherical Bessel function, and :math:`f^{(a)}_\\ell` is the angular prefactor
+
+    .. math::
+
+        f^{(0)}_\\ell = 1, \\qquad f^{(1)}_\\ell = \\ell(\\ell+1), \\qquad
+        f^{(2)}_\\ell = \\sqrt{\\frac{(\\ell+2)!}{(\\ell-2)!}},
+
+    from the angular Laplacian (:math:`a=1`, convergence and magnification) or the
+    spin-2 angular derivatives (:math:`a=2`, shear and intrinsic alignments). In the
+    Limber approximation an :math:`n=-1` term contributes
+    :math:`W\\, f^{(a)}_\\ell/(\\ell+1/2)^2`.
 
     When used in the halo model, child tracers must also define a ``profile``
     attribute with an appropriate profile object.
@@ -147,10 +160,10 @@ class Tracer(ABC):
         """
         Radial kernel terms of the tracer, to be implemented by child tracers.
 
-        Each term is a pair :math:`(W, n)`, where :math:`W(\\chi)` is a radial
-        kernel and :math:`n` selects the spherical Bessel derivative
-        :math:`j_\\ell^{(n)}(k\\chi)` the term is projected with in an angular
-        power spectrum.
+        Each term is a triple :math:`(W, n, a)`, where :math:`W(\\chi)` is a radial
+        kernel, :math:`n` selects the spherical Bessel function
+        :math:`j_\\ell^{(n)}(k\\chi)` the term is projected with, and :math:`a`
+        selects the angular prefactor :math:`f^{(a)}_\\ell` (see :class:`Tracer`).
 
         Parameters
         ----------
@@ -161,9 +174,16 @@ class Tracer(ABC):
 
         Returns
         -------
-        list of tuple of (array_like, int)
-            One :math:`(W, n)` pair per kernel term.
+        list of tuple of (array_like, int, int)
+            One :math:`(W, n, a)` triple per kernel term.
         """
         pass
+
+    def _kernel_terms(self, cosmology, z):
+        """kernel(), checked to return only (W, n, a) triples."""
+        terms = self.kernel(cosmology, z)
+        if any(len(term) != 3 for term in terms):
+            raise ValueError(f"{type(self).__name__}.kernel() must return (W, der_bessel, der_angles) triples.")
+        return terms
    
   
