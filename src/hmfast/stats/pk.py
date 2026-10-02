@@ -1,8 +1,6 @@
 import jax
 import jax.numpy as jnp
 
-from hmfast.halos.profiles.profiles_2pt import _fourier_2pt
-from hmfast.utils import gauss_legendre_nodes_weights
 
 # -------------------------
 # Halo model power spectrum
@@ -117,31 +115,7 @@ class Pk:
         k, z = jnp.atleast_1d(k), jnp.atleast_1d(z)
         profile2 = profile2 if profile2 is not None else profile1
 
-        # Weights and Setup
-        logm, w = gauss_legendre_nodes_weights(jnp.log(hm.m_range[0]), jnp.log(hm.m_range[1]), hm.n_m)
-        m = jnp.exp(logm)
-
-        dndlnm = jnp.reshape(hm.halo_mass_function.dndlnm(hm.cosmology, m, z, hm.mass_def), (len(m), len(z)))
-        total_weights = dndlnm * w[:, None]  # (Nm, Nz)
-
-        # Process a single mass bin at a time and extract the uk^2 at the lowest mass for the halo model consistency term
-        def process_bin(i):
-            pair_kernel = _fourier_2pt(hm, profile1, profile2, k, m, z)
-            pair_kernel = jnp.reshape(pair_kernel, (len(k), len(m), len(z)))
-            uk_sq_row = pair_kernel[:, i, :]
-
-            return uk_sq_row * total_weights[i], uk_sq_row
-
-        # vmap through the mass bins
-        integrand_rows, all_sq_profiles = jax.vmap(process_bin)(jnp.arange(len(m)))
-
-        pk1h = jnp.sum(integrand_rows, axis=0)
-
-        # Apply halo model consistency correction: n_min * uk_sq_min
-        uk_sq_min = all_sq_profiles[0]
-        n_min, _, _ = hm._counter_terms(z)
-        correction = n_min[None, :] * uk_sq_min
-        pk1h = pk1h + hm.hm_consistency * correction
+        pk1h = jnp.reshape(hm.mass_integral(k, z, (profile1, profile2), bias_order=0), (len(k), len(z)))
 
         # Apply damping
         mask = self.k_damp > 0
@@ -191,35 +165,8 @@ class Pk:
 
         profile2 = profile2 if profile2 is not None else profile1
 
-        # Weights and Ingredients
-        logm, w = gauss_legendre_nodes_weights(jnp.log(hm.m_range[0]), jnp.log(hm.m_range[1]), hm.n_m)
-        m = jnp.exp(logm)
-
-        # Combine hmf, bias, and weights into a single (Nm, Nz) weight grid
-        dndlnm = jnp.reshape(hm.halo_mass_function.dndlnm(hm.cosmology, m, z, hm.mass_def), (len(m), len(z)))
-        bias = jnp.reshape(hm.halo_bias.bias(hm.cosmology, m, z, hm.mass_def), (len(m), len(z)))
-        total_weights = dndlnm * bias * w[:, None]
-
-        def get_I(profile):
-            # This function processes a single index 'i' of the mass axis
-            def process_bin(i):
-                uk_full = jnp.reshape(profile.fourier(hm, k, m, z), (len(k), len(m), len(z)))
-                uk_slice = uk_full[:, i, :]
-                return uk_slice * total_weights[i], uk_slice
-
-            # Vmap over the indices 0...Nm-1, then integrate and pluck index 0 for hm consistency
-            integrand_rows, all_profiles = jax.vmap(process_bin)(jnp.arange(len(m)))
-            integral = jnp.sum(integrand_rows, axis=0)
-            u_k_min = all_profiles[0]  # vmap output is (Nm, Nk, Nz)
-
-            n_min, b1_min, _ = hm._counter_terms(z)
-            correction = b1_min[None, :] * n_min[None, :] * u_k_min
-
-            return integral + hm.hm_consistency * correction
-
-        # Final Power Spectrum
-        I1 = get_I(profile1)
-        I2 = I1 if profile1 is profile2 else get_I(profile2)
+        I1 = jnp.reshape(hm.mass_integral(k, z, profile1, bias_order=1), (len(k), len(z)))
+        I2 = I1 if profile1 is profile2 else jnp.reshape(hm.mass_integral(k, z, profile2, bias_order=1), (len(k), len(z)))
 
         P_lin = hm.cosmology.pk(k, z, linear=True)
         # Ensure P_lin has shape (N_k, N_z)

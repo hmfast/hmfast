@@ -12,6 +12,7 @@ from hmfast.halos.massfunc import T08HaloMassFunction, TW10SubHaloMassFunction
 from hmfast.halos.bias import T10HaloBias
 from hmfast.halos.concentration import D08Concentration, B13Concentration
 from hmfast.halos.massdef import MassDefinition
+from hmfast.halos.profiles.profiles_2pt import _fourier_2pt
 from hmfast.cosmology import Cosmology
 from hmfast.utils import gauss_legendre_nodes_weights
 
@@ -204,79 +205,100 @@ class HaloModel:
         return n_min, b1_min, b2_min
 
 
-    @partial(jax.jit, static_argnums=(4,))
-    def _I(self, profile, k, z, bias_order=1):
+    @partial(jax.jit, static_argnames=("bias_order",))
+    def mass_integral(self, k, z, profiles, bias_order=0):
         """
-        Generalised halo model mass integral.
+        Generalised halo-model mass integral :math:`I_\\mu^\\beta`.
 
         .. math::
 
-            I^\\beta(k, z) = \\int \\frac{dn}{d\\ln M}\\, b_\\beta(M, z)\\,
-            u(k \\mid M, z)\\, d\\ln M
+            I_\\mu^\\beta(k_1, \\ldots, k_\\mu, z) = \\int \\frac{dn}{d\\ln M}\\,
+            b_\\beta(M, z) \\prod_{i=1}^{\\mu} u_i(k_i \\mid M, z)\\, d\\ln M
 
-        where :math:`b_\\beta` is the :math:`\\beta`-th order bias
-        (:math:`b_0 = 1`, :math:`b_1` linear bias, :math:`b_2` quadratic bias)
-        and :math:`u(k \\mid M, z)` is the Fourier-space tracer profile.
+        where :math:`b_\\beta` is the :math:`\\beta`-th order halo bias
+        (:math:`b_0 = 1`, :math:`b_1` linear, :math:`b_2` quadratic) and
+        :math:`u_i` is the Fourier-space profile of the :math:`i`-th leg. This
+        is the building block of every halo-model term in :class:`~hmfast.stats.Pk`,
+        :class:`~hmfast.stats.Bk` and :class:`~hmfast.stats.Tk`; e.g.
+        :math:`P_{2h} = P_{\\mathrm{lin}} I_1^1 I_1^1` and :math:`P_{1h} = I_2^0`.
 
-        This integral is the fundamental building block for the 2h power spectrum
-        (``bias_order=1``) and all three bispectrum terms.
+        For two legs sharing a single ``k`` (:math:`\\mu=2`), the product
+        :math:`u_1 u_2` is replaced by the 1-halo second moment, which for
+        HOD x HOD and CIB x CIB pairs includes the central/satellite pair
+        counting. All other cases, including every :math:`\\mu \\ge 3`, use the
+        plain product of first moments.
 
-        The halo-model consistency counterterm is included:
-        a point mass at the minimum grid mass contributes ``n_min * b_beta_min * u(k, m_min)``.
+        When :attr:`hm_consistency` is set, the unresolved haloes below
+        :attr:`m_range` are represented by a point mass at the lowest
+        quadrature node :math:`m_0`, contributing
+        :math:`n_{\\min}\\, b_{\\beta,\\min} \\prod_i u_i(k_i \\mid m_0, z)`.
+
+        The result carries the units of the product of the profiles; for
+        :class:`~hmfast.halos.profiles.NFWMatterProfile`,
+        :math:`I_1^0, I_1^1 \\to 1` and :math:`I_1^2 \\to 0` as :math:`k \\to 0`.
 
         Parameters
         ----------
-        profile : HaloProfile
-            Halo profile.
-        k : array-like
-            Wavenumber grid in :math:`\\mathrm{Mpc}^{-1}`.
-        z : array-like
+        k : array-like or tuple of array-like
+            Wavenumbers in :math:`\\mathrm{Mpc}^{-1}`. A single array is shared
+            by all legs. A tuple gives one array per leg; the arrays are
+            broadcast against each other, so equal shapes pair the legs
+            elementwise and e.g. ``(k_u[:, None], k_v[None, :])`` gives every
+            :math:`(k_u, k_v)` combination.
+        z : float or jnp.ndarray
             Redshift grid.
-        bias_order : int, default 1
-            Bias order ``beta``. Accepted values: ``0`` (unweighted), ``1`` (linear bias),
-            ``2`` (quadratic bias).
+        profiles : HaloProfile or tuple of HaloProfile
+            One profile per leg; any :math:`\\mu \\ge 1` (static).
+        bias_order : int, default 0
+            Bias order :math:`\\beta \\in \\{0, 1, 2\\}` (static).
 
         Returns
         -------
         array
-            Integral with shape :math:`(N_k, N_z)`, where singleton dimensions are squeezed.
+            Integral with shape ``broadcast(k shapes) + (N_z,)``, where singleton
+            dimensions are squeezed.
+
+        Raises
+        ------
+        ValueError
+            If ``profiles`` is empty, ``k`` and ``profiles`` differ in length,
+            or ``bias_order`` is not 0, 1 or 2.
         """
-        k, z = jnp.atleast_1d(k), jnp.atleast_1d(z)
+        profiles = tuple(profiles) if isinstance(profiles, (tuple, list)) else (profiles,)
+        shared_k = not isinstance(k, tuple)
+        ks = (k,) * len(profiles) if shared_k else k
+        if len(profiles) == 0:
+            raise ValueError("mass_integral needs at least one profile.")
+        if len(ks) != len(profiles):
+            raise ValueError(f"Got {len(profiles)} profiles but {len(ks)} wavenumber arrays.")
+        if bias_order not in (0, 1, 2):
+            raise ValueError(f"bias_order must be 0, 1 or 2, got {bias_order}.")
+
+        z = jnp.atleast_1d(z)
         logm, w = gauss_legendre_nodes_weights(jnp.log(self.m_range[0]), jnp.log(self.m_range[1]), self.n_m)
         m = jnp.exp(logm)
+        n_m, n_z = len(m), len(z)
 
-        dndlnm = jnp.reshape(
-            self.halo_mass_function.dndlnm(self.cosmology, m, z, self.mass_def),
-            (len(m), len(z)),
-        )
-
-        if bias_order == 0:
-            bias_w = jnp.ones((len(m), len(z)))
-        elif bias_order == 1:
-            bias_w = jnp.reshape(
-                self.halo_bias.bias(self.cosmology, m, z, self.mass_def, order=1),
-                (len(m), len(z)),
-            )
-        elif bias_order == 2:
-            bias_w = jnp.reshape(
-                self.halo_bias.bias(self.cosmology, m, z, self.mass_def, order=2),
-                (len(m), len(z)),
+        total_weights = jnp.reshape(self.halo_mass_function.dndlnm(self.cosmology, m, z, self.mass_def), (n_m, n_z)) * w[:, None]
+        if bias_order > 0:
+            total_weights = total_weights * jnp.reshape(
+                self.halo_bias.bias(self.cosmology, m, z, self.mass_def, order=bias_order), (n_m, n_z)
             )
 
-        total_weights = dndlnm * bias_w * w[:, None]  # (Nm, Nz)
+        if shared_k and len(profiles) == 2:
+            k_arr = jnp.atleast_1d(k)
+            u = jnp.reshape(_fourier_2pt(self, profiles[0], profiles[1], k_arr.ravel(), m, z), k_arr.shape + (n_m, n_z))
+        else:
+            u = 1.0
+            for profile, k_i in zip(profiles, ks):
+                k_i = jnp.atleast_1d(k_i)
+                u = u * jnp.reshape(profile.fourier(self, k_i.ravel(), m, z), k_i.shape + (n_m, n_z))
 
-        uk = jnp.reshape(profile.fourier(self, k, m, z), (len(k), len(m), len(z)))  # (Nk, Nm, Nz)
-        integral = jnp.sum(uk * total_weights[None, :, :], axis=1)  # (Nk, Nz)
+        integral = jnp.sum(u * total_weights, axis=-2)  # (..., Nz)
 
-        u_k_min = uk[:, 0, :]  # profile at m_grid[0] (Nk, Nz)
         n_min, b1_min, b2_min = self._counter_terms(z)
-
-        if bias_order == 0:
-            correction = n_min[None, :] * u_k_min
-        elif bias_order == 1:
-            correction = n_min[None, :] * b1_min[None, :] * u_k_min
-        elif bias_order == 2:
-            correction = n_min[None, :] * b2_min[None, :] * u_k_min
+        b_min = (jnp.ones_like(n_min), b1_min, b2_min)[bias_order]
+        correction = n_min * b_min * u[..., 0, :]  # point mass at the lowest mass node
 
         return jnp.squeeze(integral + self.hm_consistency * correction)
 

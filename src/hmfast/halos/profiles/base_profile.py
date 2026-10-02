@@ -25,6 +25,14 @@ class HankelTransform:
         x_padded = float(x[0]) * np.exp(h * np.arange(len(x) + self._n_pad))
         self._hankel = mcfit.Hankel(x_padded, nu=nu, lowring=True, backend="jax")
         self._hankel_jit = jax.jit(functools.partial(self._hankel, extrap=False))
+        # Value-based identity: profiles on the same grid share one jit cache entry instead of recompiling.
+        self._key = (np.asarray(x, dtype=np.float64).tobytes(), float(nu), float(pad_decades))
+
+    def __eq__(self, other):
+        return isinstance(other, HankelTransform) and self._key == other._key
+
+    def __hash__(self):
+        return hash(self._key)
 
     def transform(self, f_theta):
         """
