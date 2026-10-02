@@ -76,7 +76,7 @@ _ALL_TRACER_CLASSES = [
 def _kernel_scalar(tracer, cosmology, z):
     """Sum every term's weight from kernel() into one array, for tests that only care
     about the kernel's overall value/gradient rather than its per-term breakdown."""
-    weights = [weight for weight, _ in tracer.kernel(cosmology, z)]
+    weights = [weight for weight, _, _ in tracer.kernel(cosmology, z)]
     total = weights[0]
     for w in weights[1:]:
         total = total + w
@@ -146,9 +146,9 @@ class TestDndzNormalization:
 
 
 class TestKernelShapeAndSqueeze:
-    # kernel() returns a list of (weight, der_bessel) terms; each weight follows the same
-    # broadcast-then-squeeze convention as profile real()/fourier(), and der_bessel is a
-    # plain non-negative int.
+    # kernel() returns a list of (weight, der_bessel, der_angles) terms; each weight follows the same
+    # broadcast-then-squeeze convention as profile real()/fourier(), der_bessel is a plain int >= -1,
+    # and der_angles is 0, 1 or 2.
     @pytest.mark.parametrize("tracer_cls", _ALL_TRACER_CLASSES)
     @pytest.mark.parametrize(
         "z_key,expected_shape",
@@ -165,9 +165,10 @@ class TestKernelShapeAndSqueeze:
         tracer = _build_default(tracer_cls)
         terms = tracer.kernel(fixed_cosmology, z_vals[z_key])
         assert isinstance(terms, list) and len(terms) >= 1
-        for weight, der_bessel in terms:
+        for weight, der_bessel, der_angles in terms:
             assert jnp.shape(weight) == expected_shape
-            assert isinstance(der_bessel, int) and der_bessel >= 0
+            assert isinstance(der_bessel, int) and der_bessel >= -1
+            assert isinstance(der_angles, int) and der_angles in (0, 1, 2)
 
 
 class TestKernelZMaxTruncation:

@@ -52,7 +52,7 @@ def _ccl_cosmology(cosmology):
 def _kernel_scalar(tracer, cosmology, z):
     """Sum every term's weight from kernel() into one array, matching CCL's own
     get_kernel() (which has no notion of a per-term breakdown)."""
-    weights = [weight for weight, _ in tracer.kernel(cosmology, z)]
+    weights = [weight for weight, _, _ in tracer.kernel(cosmology, z)]
     total = weights[0]
     for w in weights[1:]:
         total = total + w

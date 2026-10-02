@@ -238,9 +238,9 @@ for _name, _tracer in [
     ("CMBLensingTracer", CMBLENS_TRACER),
     ("CIBTracer", CIB_TRACER),
 ]:
-    # kernel() returns (weight, der_bessel) pairs; der_bessel is a Python int, so weights only.
+    # kernel() returns (weight, der_bessel, der_angles) triples; the tags are Python ints, so weights only.
     case(f"{_name}.kernel",
-         (lambda t: lambda p: [w for w, _ in t.kernel(cosmo(p), Z_GRID)])(_tracer))
+         (lambda t: lambda p: [w for w, _, _ in t.kernel(cosmo(p), Z_GRID)])(_tracer))
 
 # --- 2-point statistics ----------------------------------------------------------
 case("Pk.pk_1h", lambda p: PK0.pk_1h(halo_model(p), K_GRID, Z_SINGLE, NFW))

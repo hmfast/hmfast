@@ -37,8 +37,8 @@ def _extended_limber_grid_for_pair(hm, tracer_a, tracer_b, profile_a, profile_b,
     cosmology = hm.cosmology
     z_arr = jnp.atleast_1d(z)
     needs_extended = (
-        any(der_bessel != 0 for _, der_bessel in tracer_a.kernel(cosmology, z_arr))
-        or any(der_bessel != 0 for _, der_bessel in tracer_b.kernel(cosmology, z_arr))
+        any(der_bessel > 0 for _, der_bessel, _ in tracer_a._kernel_terms(cosmology, z_arr))
+        or any(der_bessel > 0 for _, der_bessel, _ in tracer_b._kernel_terms(cosmology, z_arr))
     )
     if not needs_extended:
         return None, None, None, None
@@ -58,15 +58,15 @@ def _kernel_pair_effective(cosmology, tracer_a, tracer_b, z, l, z_lp, lp1h, lp3h
     Product of two tracers' effective per-``(z,l)`` Limber kernels
     (:func:`hmfast.stats.cl._effective_kernel_limber`), evaluated at a single ``z``
     (called once per redshift slice inside ``covariance_cng``/``covariance_ssc``'s
-    ``vmap`` over ``z``). Every ``der_bessel=0`` term of each tracer (density,
-    magnification bias, IA, ...) is summed directly; a ``der_bessel=2`` (RSD) term is
+    ``vmap`` over ``z``). Every ``der_bessel=0`` term of each tracer (density, tSZ, ...)
+    is summed directly; a ``der_bessel=-1`` term (lensing, magnification bias, IA) picks
+    up :math:`f^{(a)}_\\ell/(\\ell+1/2)^2`; a ``der_bessel=2`` (RSD) term is
     projected through the extended-Limber correction (``z_lp``/``lp1h``/``lp3h``/
     ``sqell``, or ``None`` if neither tracer needs it -- see
     :func:`_extended_limber_grid_for_pair`).
 
     Returns shape ``(Nl,)``: a plain per-``z`` scalar broadcastable against ``Nl`` when
-    neither tracer has an RSD term (identical to the old ``_kernel_density`` product),
-    ``l``-dependent otherwise.
+    every term of both tracers is ``(W, 0, 0)``, ``l``-dependent otherwise.
     """
     z_arr = jnp.atleast_1d(z)
     ka = _cl._effective_kernel_limber(tracer_a, cosmology, z_arr, l, z_lp, lp1h, lp3h, sqell)
@@ -244,9 +244,10 @@ def covariance_cng(tk, halo_model, tracer1, tracer2, tracer3, tracer4, l1, l2, z
     :meth:`~hmfast.stats.bk_tk.Tk.tk_2h`, :meth:`~hmfast.stats.bk_tk.Tk.tk_3h`,
     :meth:`~hmfast.stats.bk_tk.Tk.tk_4h`).
 
-    Every ``der_bessel=0`` term of a tracer's kernel (density,
-    magnification bias, intrinsic alignment, ...) enters :math:`W_i(z)`
-    directly. A ``der_bessel=2`` (RSD) term instead makes :math:`W_1(z)\\,
+    Every ``der_bessel=0`` term of a tracer's kernel (density, tSZ, ...) enters
+    :math:`W_i(z)` directly, and a ``der_bessel=-1`` term (lensing, magnification bias,
+    intrinsic alignment) enters as :math:`W_i(z)\\, f^{(a)}_{\\ell}/(\\ell+1/2)^2`.
+    A ``der_bessel=2`` (RSD) term instead makes :math:`W_1(z)\\,
     W_2(z)` (or :math:`W_3(z)\\,W_4(z)`) depend on :math:`\\ell_1` (or
     :math:`\\ell_2`) too, via the same extended-Limber correction
     (Chisari et al. 2019 Sec. 2.4.1) used by
@@ -438,8 +439,9 @@ def covariance_ssc(halo_model, tracer1, tracer2, tracer3, tracer4, l1, l2, z_ran
     makes :math:`W_1(z)\\,W_2(z)` (or :math:`W_3(z)\\,W_4(z)`)
     :math:`\\ell`-dependent via the extended-Limber correction (see
     :func:`_extended_limber_grid_for_pair`, :func:`_kernel_pair_effective`);
-    every ``der_bessel=0`` term (density, magnification bias, IA, ...)
-    enters :math:`W_i(z)` directly, unaffected.
+    every ``der_bessel=0`` term (density, tSZ, ...) enters :math:`W_i(z)` directly,
+    and every ``der_bessel=-1`` term (lensing, magnification bias, IA) as
+    :math:`W_i(z)\\, f^{(a)}_{\\ell}/(\\ell+1/2)^2`.
 
     For a profile pair :math:`(u,v)`, the response (Wagner et al. 2015;
     Takada & Hu 2013) is
