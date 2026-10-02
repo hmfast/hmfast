@@ -53,7 +53,7 @@ from hmfast.halos.profiles import (
     S12CIBProfile,
     Z07GalaxyHODProfile,
 )
-from hmfast.stats import Bk, Pk, Tk, cl, cl_linbias, xi_hm, cov_cng, cov_ssc, sigma2_b_disc
+from hmfast.stats import Bk, Pk, Tk, cl, cl_linbias, corr_3d, corr_angular, cov_cng, cov_ssc, sigma2_b_disc
 from hmfast.stats import projected_cl as _cl_module
 from hmfast.stats import covariance as _covariance_module
 from hmfast.tracers import (
@@ -78,6 +78,10 @@ Z_RANGE = (Z_GRID[0], Z_GRID[-1])
 L_GRID = jnp.geomspace(20.0, 1000.0, N_L)
 K_GRID_BT = jnp.geomspace(1e-2, 2.0, N_KBT)
 Z_SINGLE = jnp.array([0.5])
+# FFTLog transforms plan on concrete, log-uniform input grids.
+K_FFT = np.geomspace(1e-3, 10.0, 32)
+L_FFT = np.geomspace(10.0, 1e4, 32)
+THETA_GRID = jnp.geomspace(0.05, 1.0, N_R)
 
 # The traced parameter vector: (H0, omega_cdm, omega_b, A_s, n_s).
 PARAMS = jnp.array([67.36, 0.12011, 0.02242, 2.1005e-9, 0.9665])
@@ -147,13 +151,6 @@ def case(name, fn):
 def broken(name, fn, reason):
     CASES.append(pytest.param(fn, id=name, marks=pytest.mark.xfail(strict=True, reason=reason)))
 
-
-_P2XI_BUILT_UNDER_TRACE = (
-    "stats/pk.py::_p2xi constructs mcfit.P2xi(k, ...) on every call, so inside a jit it "
-    "is built under the trace; mcfit plans on concrete values. Cosmology._pk_grid() now "
-    "hands it a real numpy grid, but the plan itself still has to be built once, outside "
-    "any trace, for xi_hm to be traceable."
-)
 
 # _hankel_A_table needs a complex log-gamma, which jax.scipy.special only grew in 0.10.
 _NEEDS_LOGGAMMA = pytest.mark.skipif(
@@ -248,8 +245,8 @@ case("Pk.pk_2h", lambda p: PK.pk_2h(halo_model(p), K_GRID, Z_SINGLE, NFW))
 case("Pk.pk_tot", lambda p: PK0.pk_tot(halo_model(p), K_GRID, Z_SINGLE, NFW))
 case("Pk.pk_tot[1h only]",
      lambda p: Pk(k_damp=0.0, include_2h=False).pk_tot(halo_model(p), K_GRID, Z_SINGLE, NFW))
-broken("xi_hm", lambda p: xi_hm(PK, halo_model(p), R_GRID, Z_SINGLE, NFW),
-       _P2XI_BUILT_UNDER_TRACE)
+case("corr_3d[pk_tot]", lambda p: corr_3d(K_FFT, PK.pk_tot(halo_model(p), K_FFT, Z_SINGLE, NFW), R_GRID))
+case("corr_3d[pk_nl]", lambda p: corr_3d(K_FFT, cosmo(p).pk(K_FFT, Z_GRID, linear=False), R_GRID))
 case("cl[limber]",
      lambda p: cl(PK, halo_model(p), GAL_TRACER, GAL_TRACER, L_GRID, Z_RANGE, N_Z))
 CASES.append(pytest.param(
@@ -259,6 +256,10 @@ case("cl[1h only]",
      lambda p: cl(Pk(k_damp=0.0, include_2h=False), halo_model(p), GAL_TRACER, GAL_TRACER, L_GRID, Z_RANGE, N_Z))
 case("cl_linbias",
      lambda p: cl_linbias(cosmo(p), GAL_TRACER_BIASED, GAL_TRACER_BIASED, L_GRID, Z_RANGE, N_Z))
+for _type in ("NN", "NG", "GG+", "GG-"):
+    case(f"corr_angular[{_type}]",
+         (lambda t: lambda p: corr_angular(
+             L_FFT, cl_linbias(cosmo(p), GLENS_TRACER, GLENS_TRACER, L_FFT, Z_RANGE, N_Z), THETA_GRID, type=t))(_type))
 
 # --- higher-order statistics and covariances -------------------------------------
 case("Bk.bk_1h",

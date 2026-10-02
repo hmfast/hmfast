@@ -106,6 +106,9 @@ class Cosmology:
         energy models, and for masses/neutrino content where the
         non-relativistic approximation for massive neutrinos breaks down
         before then.
+    extrapolate_k : bool
+        If True (default), :meth:`pk` power-law extrapolates in log-log beyond
+        the emulators' trained :math:`k` range; if False, it returns NaN there.
     ncdm_mode : {"cb", "m"}
         Mean density, :math:`\\bar\\rho_{cb}` (default) or :math:`\\bar\\rho_m`, used for
         :math:`M(R)` in :math:`\\sigma(M)` and the mass function. :math:`\\sigma(M)` always uses
@@ -120,6 +123,7 @@ class Cosmology:
                  f_ede=None, z_c=None, theta_i=None, r=None,                                                                # EDE
                  T_cmb=None,                                                                                                # Non-emulator
                  extrapolate_z=False,                                                                                      # z-extrapolation
+                 extrapolate_k=True,                                                                                       # k-extrapolation
                  ncdm_mode="cb",                                                                                           # Halo-model field
                  pknl_mode="hmcode",                                                                                       # Nonlinear P(k)
         ):
@@ -138,6 +142,7 @@ class Cosmology:
         _check_fixed(emulator_set, passed)
         self.emulator_set = emulator_set
         self.extrapolate_z = extrapolate_z
+        self.extrapolate_k = extrapolate_k
         self.ncdm_mode = ncdm_mode
         self.pknl_mode = pknl_mode
         self._emu = {}  # This will be treated as static
@@ -167,18 +172,19 @@ class Cosmology:
             self.T_cmb
         )
         # 2. Aux data: Static metadata and cached helper objects.
-        aux_data = (self.emulator_set, self.extrapolate_z, self.ncdm_mode, self.pknl_mode, self._emu, self._tophat_instance)
+        aux_data = (self.emulator_set, self.extrapolate_z, self.extrapolate_k, self.ncdm_mode, self.pknl_mode, self._emu, self._tophat_instance)
         return (children, aux_data)
 
     @classmethod
     def _tree_unflatten(cls, aux_data, children):
         # Reconstruct using the static metadata
-        emulator_set, extrapolate_z, ncdm_mode, pknl_mode, _emu, _tophat_instance = aux_data
+        emulator_set, extrapolate_z, extrapolate_k, ncdm_mode, pknl_mode, _emu, _tophat_instance = aux_data
 
         # We bypass __init__ to avoid re-triggering the Loader logic
         obj = cls.__new__(cls)
         obj.emulator_set = emulator_set
         obj.extrapolate_z = extrapolate_z
+        obj.extrapolate_k = extrapolate_k
         obj.ncdm_mode = ncdm_mode
         obj.pknl_mode = pknl_mode
         obj._emu = _emu
@@ -194,7 +200,7 @@ class Cosmology:
     
     def update(self, H0=None, omega_cdm=None, omega_b=None, A_s=None, n_s=None,
         tau=None, m_ncdm=None, N_ur=None, w0=None, f_ede=None, z_c=None,
-        theta_i=None, r=None, T_cmb=None, extrapolate_z=None,
+        theta_i=None, r=None, T_cmb=None, extrapolate_z=None, extrapolate_k=None,
         ncdm_mode=None, pknl_mode=None):
         """
         Return a new Cosmology instance with updated parameters.
@@ -207,6 +213,8 @@ class Cosmology:
             Cosmological parameters to update. 
         extrapolate_z : bool or None
             If not None, replaces :attr:`extrapolate_z`.
+        extrapolate_k : bool or None
+            If not None, replaces :attr:`extrapolate_k`.
         ncdm_mode : {"cb", "m"} or None
             If not None, replaces :attr:`ncdm_mode`.
         pknl_mode : {"hmcode", "halofit"} or None
@@ -238,10 +246,11 @@ class Cosmology:
             raise ValueError(f'ncdm_mode must be "cb" or "m", got {ncdm_mode!r}.')
         if pknl_mode is not None and pknl_mode not in ("hmcode", "halofit"):
             raise ValueError(f'pknl_mode must be "hmcode" or "halofit", got {pknl_mode!r}.')
-        emulator_set, old_extrapolate_z, old_ncdm_mode, old_pknl_mode, _emu, _tophat_instance = aux_data
+        emulator_set, old_extrapolate_z, old_extrapolate_k, old_ncdm_mode, old_pknl_mode, _emu, _tophat_instance = aux_data
         aux_data = (
             emulator_set,
             old_extrapolate_z if extrapolate_z is None else extrapolate_z,
+            old_extrapolate_k if extrapolate_k is None else extrapolate_k,
             old_ncdm_mode if ncdm_mode is None else ncdm_mode,
             old_pknl_mode if pknl_mode is None else pknl_mode,
             _emu, _tophat_instance,
@@ -1018,8 +1027,8 @@ class Cosmology:
     # Matter power spectra
     # ------------------------------------------------------------------
 
-    @partial(jax.jit, static_argnums=(3, 4))
-    def pk(self, k, z, linear=True, extrapolate_k=True):
+    @partial(jax.jit, static_argnums=(3,))
+    def pk(self, k, z, linear=True):
         """
         Get the matter power spectrum :math:`P(k, z)` interpolated at
         requested wavenumbers `k` and redshifts `z`.
@@ -1032,11 +1041,6 @@ class Cosmology:
             Redshift(s) at which to evaluate the power spectrum.
         linear : bool
             True for linear :math:`P(k)`, False for nonlinear :math:`P(k)` (source set by :attr:`pknl_mode`).
-        extrapolate_k : bool, default True
-            If True, wavenumbers outside the emulator's k-grid are
-            power-law extrapolated in log-log space. If False, values
-            falling outside the emulator's trained k-range will be set
-            to NaN.
 
         Returns
         -------
@@ -1072,7 +1076,7 @@ class Cosmology:
 
         pk_for_z = jax.vmap(predict_for_z)(z)  # shape (Nz, Nk)
         pk_out = jnp.transpose(pk_for_z)  # shape (Nk, Nz)
-        if not extrapolate_k:
+        if not self.extrapolate_k:
             in_k_bounds = (k >= k_grid[0]) & (k <= k_grid[-1])
             pk_out = jnp.where(in_k_bounds[:, None], pk_out, jnp.nan)
         if self.extrapolate_z:

@@ -5,4 +5,5 @@ hmfast.stats.correlations
    :toctree: generated
    :nosignatures:
 
-   hmfast.stats.correlations.xi_hm
+   hmfast.stats.correlations.corr_3d
+   hmfast.stats.correlations.corr_angular
