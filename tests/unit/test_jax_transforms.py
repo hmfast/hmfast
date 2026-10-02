@@ -123,9 +123,9 @@ BK0 = Bk(k_damp=0.0)  # damping disabled, for cases that used to pass k_damp=0.0
 MASS_TRANSLATOR_200M_500C = mass_translator(MD_200M, MD_500C, CONC)
 
 
-def cosmo(p):
+def cosmo(p, pknl_mode=None):
     """Cosmology rebuilt from the traced parameter vector."""
-    return BASE_COSMO.update(H0=p[0], omega_cdm=p[1], omega_b=p[2], A_s=p[3], n_s=p[4])
+    return BASE_COSMO.update(H0=p[0], omega_cdm=p[1], omega_b=p[2], A_s=p[3], n_s=p[4], pknl_mode=pknl_mode)
 
 
 def halo_model(p, mass_def=MD_200M):
@@ -176,6 +176,7 @@ case("Cosmology.velocity_dispersion", lambda p: cosmo(p).velocity_dispersion(Z_G
 case("Cosmology.comoving_volume_element", lambda p: cosmo(p).comoving_volume_element(Z_GRID))
 case("Cosmology.pk[linear]", lambda p: cosmo(p).pk(K_GRID, Z_GRID, linear=True))
 case("Cosmology.pk[nonlinear]", lambda p: cosmo(p).pk(K_GRID, Z_GRID, linear=False))
+case("Cosmology.pk[halofit]", lambda p: cosmo(p, pknl_mode="halofit").pk(K_GRID, Z_GRID, linear=False))
 case("Cosmology.cl[tt]", lambda p: cosmo(p).cl_cmb("tt", jnp.arange(2, 50)))
 case("Cosmology.derived_parameters", lambda p: cosmo(p).derived_parameters())
 
@@ -453,3 +454,69 @@ def test_profile_parameter_sweep_does_not_recompile(profile, method, mass_def, n
     jax.block_until_ready(getattr(profile.update(**new_params), method)(hm, arg, M_GRID, Z_SINGLE))
 
     assert inspect.getattr_static(type(profile), method)._cache_size() == n_compiles
+
+
+# Differentiability of the full pipeline: for a few key observables, the autodiff Jacobian with respect to the
+# cosmological and profile parameters (all in log space) matches a central finite difference, and forward- and
+# reverse-mode agree. Together these cover the emulators, mass function and bias, the analytic (NFW, HOD) and Hankel
+# (GNFW) profile paths, the Limber projection, and the 3D power spectrum.
+
+def _gnfw_tsz(e):
+    return TSZ_TRACER.update(profile=GNFW.update(P0=e[5], beta=e[6], B=e[7]))
+
+
+def _hod_galaxy(e):
+    return GAL_TRACER.update(profile=HOD.update(alpha_s=e[5], M1_prime=e[6], sigma_log10M=e[7]))
+
+
+def _cl_gy(e):
+    t_g = GAL_TRACER.update(profile=HOD.update(alpha_s=e[5]))
+    t_y = TSZ_TRACER.update(profile=GNFW.update(beta=e[6]))
+    return cl_hm(PK, halo_model(e[:5]), t_g, t_y, L_GRID, Z_RANGE, N_Z)
+
+
+LOG_PARAMS = jnp.log(PARAMS)
+GRADIENT_CASES = {
+    "cl_yy": (lambda th: (lambda e: cl_hm(PK, halo_model(e[:5]), _gnfw_tsz(e), _gnfw_tsz(e), L_GRID, Z_RANGE, N_Z))(jnp.exp(th)),
+              jnp.concatenate([LOG_PARAMS, jnp.log(jnp.array([6.41, 4.13, 1.4]))])),
+    "cl_gg": (lambda th: (lambda e: cl_hm(PK, halo_model(e[:5]), _hod_galaxy(e), _hod_galaxy(e), L_GRID, Z_RANGE, N_Z))(jnp.exp(th)),
+              jnp.concatenate([LOG_PARAMS, jnp.log(jnp.array([1.0, 1e13, 0.2]))])),
+    "cl_gy": (lambda th: _cl_gy(jnp.exp(th)), jnp.concatenate([LOG_PARAMS, jnp.log(jnp.array([1.0, 4.13]))])),
+    "cl_kgkg": (lambda th: cl_hm(PK, halo_model(jnp.exp(th)), GLENS_TRACER, GLENS_TRACER, L_GRID, Z_RANGE, N_Z), LOG_PARAMS),
+    "pk_mm": (lambda th: (lambda hm: PK.pk_1h(hm, K_GRID, Z_SINGLE, NFW) + PK.pk_2h(hm, K_GRID, Z_SINGLE, NFW))(
+        halo_model(jnp.exp(th))), LOG_PARAMS),
+    "cl_kgkg_nl[hmcode]": (lambda th: cl_lin(cosmo(jnp.exp(th), "hmcode"), GLENS_TRACER, GLENS_TRACER, L_GRID, Z_RANGE, N_Z,
+                                             linear=False), LOG_PARAMS),
+    "cl_kgkg_nl[halofit]": (lambda th: cl_lin(cosmo(jnp.exp(th), "halofit"), GLENS_TRACER, GLENS_TRACER, L_GRID, Z_RANGE, N_Z,
+                                              linear=False), LOG_PARAMS),
+}
+
+
+def _jacobian_errors(name, step=1e-4):
+    fn, theta0 = GRADIENT_CASES[name]
+    f = jax.jit(fn)
+    jac_fwd = np.asarray(jax.jit(jax.jacfwd(fn))(theta0))
+    jac_rev = np.asarray(jax.jit(jax.jacrev(fn))(theta0))
+    eye = np.eye(theta0.shape[0])
+    jac_fd = np.stack([(np.asarray(f(theta0 + step * e)) - np.asarray(f(theta0 - step * e))) / (2 * step) for e in eye], axis=-1)
+    scale = np.max(np.abs(jac_fwd), axis=0)  # each parameter's largest sensitivity
+    return jac_fwd, np.max(np.abs(jac_fwd - jac_fd) / scale), np.max(np.abs(jac_fwd - jac_rev) / scale)
+
+
+# Central-difference step 1e-4 in ln(theta); errors are relative to each parameter's largest sensitivity. A broken
+# gradient is off by O(1), so these ~5x-measured bounds leave room (measured: 1.3e-6, 2.0e-5, 1.2e-5, 1.3e-5, 2.8e-9, 2.1e-6, 1.8e-6).
+GRADIENT_FD_TOL = {"cl_yy": 1e-5, "cl_gg": 1e-4, "cl_gy": 6e-5, "cl_kgkg": 6e-5, "pk_mm": 1.5e-8,
+                   "cl_kgkg_nl[hmcode]": 1e-5, "cl_kgkg_nl[halofit]": 1e-5}
+
+
+@pytest.mark.parametrize("name", GRADIENT_CASES)
+def test_gradient_matches_finite_difference(name):
+    jac, fd_err, _ = _jacobian_errors(name)
+    assert np.all(np.isfinite(jac)) and np.all(np.any(jac != 0, axis=0)), "a parameter has no effect or a NaN gradient"
+    assert fd_err < GRADIENT_FD_TOL[name]
+
+
+@pytest.mark.parametrize("name", GRADIENT_CASES)
+def test_forward_and_reverse_mode_agree(name):
+    _, _, mode_err = _jacobian_errors(name)
+    assert mode_err < 1e-10  # measured <= 2.0e-14

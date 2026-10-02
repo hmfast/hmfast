@@ -18,6 +18,16 @@ from hmfast.halos.concentration import (
 from hmfast.halos.massdef import MassDefinition
 
 
+def pytest_collection_modifyitems(config, items):
+    """Skip the slow `accuracy` benchmarks unless a -m expression selects them."""
+    if "accuracy" in (config.getoption("-m") or ""):
+        return
+    skip = pytest.mark.skip(reason="grid-convergence benchmark; run with -m accuracy")
+    for item in items:
+        if "accuracy" in item.keywords:
+            item.add_marker(skip)
+
+
 @pytest.fixture(scope="session")
 def fixed_cosmology():
     """

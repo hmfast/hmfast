@@ -98,7 +98,7 @@ class NFWMatterProfile(MatterProfile):
         z = jnp.atleast_1d(z)
         #m_internal = m * cparams["h"]
 
-        rho_mean_0 = cparams["Rho_crit_0"] * cparams["Omega0_cb"]  # divide by the cb density
+        rho_mean_0 = cparams["Rho_crit_0"] * cparams["Omega0_m"]  # delta_m = rho_halo / rho_m; neutrinos stay smooth
         # Normalized real-space profile (unit mass)
         u_r_norm = jnp.reshape(self._u_r_nfw(halo_model, r, m, z), (len(r), len(m), len(z)))
         # Mass-weighted profile
@@ -140,7 +140,7 @@ class NFWMatterProfile(MatterProfile):
         _, u_m = self._u_k_nfw(halo_model, k, m, z)
         u_m = jnp.reshape(u_m, (len(k), len(m), len(z)))
         
-        rho_mean_0 = cparams["Rho_crit_0"] * cparams["Omega0_cb"]  # divide by the cb density
+        rho_mean_0 = cparams["Rho_crit_0"] * cparams["Omega0_m"]  # delta_m = rho_halo / rho_m; neutrinos stay smooth
         m_over_rho_mean = (m / rho_mean_0)[:, None]  # shape (N_m, 1)
         m_over_rho_mean = jnp.broadcast_to(m_over_rho_mean, u_m.shape)
 

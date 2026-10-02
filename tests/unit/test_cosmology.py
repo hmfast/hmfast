@@ -295,14 +295,63 @@ class TestUpdateAndPytree:
         with pytest.raises(TypeError):
             fixed_cosmology.update(emulator_set="mnu:v1")
 
-    # Cosmology survives a JAX pytree flatten/unflatten round trip, preserving all 15 leaves and both aux_data fields.
+    # Cosmology survives a JAX pytree flatten/unflatten round trip: lcdm:v1 has 7 leaves (6 base + T_cmb), fixed extension parameters are None.
     def test_pytree_roundtrip(self, fixed_cosmology):
         leaves, treedef = jax.tree_util.tree_flatten(fixed_cosmology)
-        assert len(leaves) == 15
+        assert len(leaves) == 7
         rt = jax.tree_util.tree_unflatten(treedef, leaves)
         assert rt.emulator_set == fixed_cosmology.emulator_set
         assert rt.extrapolate_z == fixed_cosmology.extrapolate_z
         assert rt.H0 == fixed_cosmology.H0 and rt.omega_cdm == fixed_cosmology.omega_cdm
+
+
+class TestFixedExtensionParameters:
+    # Passing an extension parameter the emulator set was not trained on raises at construction.
+    @pytest.mark.parametrize("emulator_set,param,value", [
+        ("lcdm:v1", "m_ncdm", 0.1),
+        ("lcdm:v1", "w0", -1.0),
+        ("mnu:v1", "N_ur", 3.0),
+        ("wcdm:v1", "f_ede", 0.2),
+    ])
+    def test_constructor_raises(self, emulator_set, param, value):
+        with pytest.raises(ValueError, match=param):
+            Cosmology(emulator_set=emulator_set, **{param: value})
+
+    # update() applies the same check, including under jit where the value is a tracer.
+    def test_update_raises(self, fixed_cosmology):
+        with pytest.raises(ValueError, match="m_ncdm"):
+            fixed_cosmology.update(m_ncdm=0.1)
+        with pytest.raises(ValueError, match="w0"):
+            jax.jit(lambda w0: fixed_cosmology.update(w0=w0).hubble_parameter(1.0))(-0.9)
+
+    # Fixed extension parameters are stored as None; T_cmb stays settable on every set.
+    def test_fixed_params_are_none_and_T_cmb_is_free(self, fixed_cosmology):
+        assert fixed_cosmology.m_ncdm is None and fixed_cosmology.w0 is None
+        assert fixed_cosmology.update(T_cmb=2.8).T_cmb == 2.8
+
+
+class TestHalofit:
+    # pknl_mode="halofit" changes only the nonlinear P(k); the linear P(k) is untouched.
+    def test_only_nonlinear_pk_changes(self, fixed_cosmology):
+        halofit = fixed_cosmology.update(pknl_mode="halofit")
+        k, z = jnp.geomspace(1e-3, 10.0, 20), jnp.array([0.0, 1.0])
+        assert jnp.array_equal(halofit.pk(k, z, linear=True), fixed_cosmology.pk(k, z, linear=True))
+        assert not jnp.allclose(halofit.pk(k, z, linear=False), fixed_cosmology.pk(k, z, linear=False))
+
+    # Halofit tends to linear on large scales (ratio ~0.9999 at k=1e-4) and exceeds it once nonlinear (~9.8 at k=1).
+    def test_linear_limit_and_nonlinear_boost(self, fixed_cosmology):
+        halofit = fixed_cosmology.update(pknl_mode="halofit")
+        k = jnp.array([1e-4, 1.0])
+        ratio = halofit.pk(k, 0.0, linear=False) / halofit.pk(k, 0.0, linear=True)
+        assert jnp.isclose(ratio[0], 1.0, rtol=1e-3)
+        assert ratio[1] > 1.5
+
+    # An unknown pknl_mode raises, from both the constructor and update().
+    def test_invalid_mode_raises(self, fixed_cosmology):
+        with pytest.raises(ValueError, match="pknl_mode"):
+            Cosmology(pknl_mode="emulator")
+        with pytest.raises(ValueError, match="pknl_mode"):
+            fixed_cosmology.update(pknl_mode="emulator")
 
 
 class TestGradients:

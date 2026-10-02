@@ -5,23 +5,41 @@ import numpy as np
 import jax.scipy as jscipy
 from typing import Dict, Union
 from mcfit import TophatVar
-from hmfast.emulator_load import EmulatorLoader, EmulatorLoaderPCA
+from hmfast.cosmology.emulator_load import EmulatorLoader, EmulatorLoaderPCA
 from hmfast.download import _get_default_data_path
+from hmfast.cosmology.halofit import halofit
 from hmfast.utils import Const, log_interp1d_extrap, dopri5_integrate
 from functools import partial
 
 jax.config.update("jax_enable_x64", True)
 
 
+# "free": extension parameters the emulator set takes as inputs, all others fixed at _DEFAULTS; "deg_ncdm": degenerate massive states (default 1).
 _COSMO_MODELS = {
-    "lcdm:v1": {"suffix": "v1", "subdir": "lcdm"},
-    "mnu:v1": {"suffix": "mnu_v1", "subdir": "mnu"},
-    "neff:v1": {"suffix": "neff_v1", "subdir": "neff"},
-    "wcdm:v1": {"suffix": "w_v1", "subdir": "wcdm"},
-    "ede:v1": {"suffix": "v1", "subdir": "ede"},
-    "mnu-3states:v1": {"suffix": "v1", "subdir": "mnu-3states"},
-    "ede:v2": {"suffix": "v2", "subdir": "ede"},
+    "lcdm:v1": {"suffix": "v1", "subdir": "lcdm", "free": ()},
+    "mnu:v1": {"suffix": "mnu_v1", "subdir": "mnu", "free": ("m_ncdm",)},
+    "neff:v1": {"suffix": "neff_v1", "subdir": "neff", "free": ("N_ur",)},
+    "wcdm:v1": {"suffix": "w_v1", "subdir": "wcdm", "free": ("w0",)},
+    "ede:v1": {"suffix": "v1", "subdir": "ede", "free": ("m_ncdm", "N_ur", "f_ede", "z_c", "theta_i", "r"), "deg_ncdm": 3.0},
+    "mnu-3states:v1": {"suffix": "v1", "subdir": "mnu-3states", "free": ("m_ncdm",), "deg_ncdm": 3.0},
+    "ede:v2": {"suffix": "v2", "subdir": "ede", "free": ("m_ncdm", "N_ur", "f_ede", "z_c", "theta_i", "r"), "deg_ncdm": 3.0},
 }
+
+_DEFAULTS = {"m_ncdm": 0.06, "N_ur": 3.046, "w0": -1.0, "f_ede": 0.1, "z_c": 3162.278, "theta_i": 1.57, "r": 0.01,
+             "T_cmb": 2.7255}
+
+
+def _is_free(emulator_set, name):
+    # T_cmb is not an emulator input but only enters the analytic background, so it stays settable everywhere.
+    return name == "T_cmb" or name in _COSMO_MODELS[emulator_set]["free"]
+
+
+def _check_fixed(emulator_set, passed):
+    """Raise if an extension parameter is passed explicitly but is not an input of the emulator set."""
+    fixed = [name for name, value in passed.items() if value is not None and not _is_free(emulator_set, name)]
+    if fixed:
+        raise ValueError(f"{', '.join(fixed)} cannot be set with emulator_set={emulator_set!r}, which fixes "
+                         + ", ".join(f"{name}={_DEFAULTS[name]}" for name in fixed) + ".")
 
 
 
@@ -31,6 +49,9 @@ class Cosmology:
 
     Provides access to cosmological parameters and emulator-based predictions for distances, Hubble parameter, power spectra, CMB spectra, and derived parameters.
     Note that using parameters outside the emulator training bounds will result in NaN outputs.
+    Extension parameters that are not inputs of the selected emulator set are
+    stored as ``None`` (so they are not pytree leaves), take their default
+    value internally, and raise a ``ValueError`` if set explicitly.
 
     Attributes
     ----------
@@ -53,7 +74,8 @@ class Cosmology:
     tau : float
         Optical depth to reionization, :math:`\\tau`.
     m_ncdm : float
-        Total non-cold dark matter mass, used if a massive-neutrino cosmological model is selected.
+        Non-cold dark matter mass, used if a massive-neutrino cosmological model is selected. This is the
+        mass per state for ``"mnu-3states:v1"`` and the EDE sets, which have three degenerate states.
     N_ur : float
         Effective number of ultra-relativistic species, :math:`N_{\\mathrm{ur}}`,
         used if a model with additional radiation degrees of freedom is
@@ -78,21 +100,28 @@ class Cosmology:
         Tensor-to-scalar ratio, used if a cosmological model including primordial tensors is selected.
     T_cmb : float
         CMB temperature today in Kelvin, used when non-emulator background quantities require it.
-    deg_ncdm : float
-        Degeneracy factor for the non-cold dark matter species, used if a massive-neutrino cosmological model is selected.
     extrapolate_z : bool
         If True, redshifts above the emulators' trained maximum are
         extrapolated. This is less accurate for early dark
         energy models, and for masses/neutrino content where the
         non-relativistic approximation for massive neutrinos breaks down
         before then.
+    ncdm_mode : {"cb", "m"}
+        Mean density, :math:`\\bar\\rho_{cb}` (default) or :math:`\\bar\\rho_m`, used for
+        :math:`M(R)` in :math:`\\sigma(M)` and the mass function. :math:`\\sigma(M)` always uses
+        the total-matter linear spectrum, and everything else uses total matter.
+    pknl_mode : {"hmcode", "halofit"}
+        Source of the nonlinear :math:`P(k)`: the HMcode emulator (default), or halofit
+        (Takahashi et al. 2012, with the Bird et al. 2012 neutrino correction) applied to the emulated linear :math:`P(k)`.
     """
     def __init__(self, emulator_set="lcdm:v1",
                  H0=68.0, omega_cdm=0.12, omega_b=0.02246576, A_s=2.1053e-9, n_s=0.965, tau=0.0544,                       # LCDM
-                 m_ncdm=0.06, N_ur=3.046, w0=-0.95,                                                                         # wCDM, Neff, MNU
-                 f_ede=0.1, z_c=3162.278, theta_i=1.57, r=0.01,                                                             # EDE
-                 T_cmb=2.7255, deg_ncdm=1.0,                                                                                # Non-emulator
+                 m_ncdm=None, N_ur=None, w0=None,                                                                           # wCDM, Neff, MNU
+                 f_ede=None, z_c=None, theta_i=None, r=None,                                                                # EDE
+                 T_cmb=None,                                                                                                # Non-emulator
                  extrapolate_z=False,                                                                                      # z-extrapolation
+                 ncdm_mode="cb",                                                                                           # Halo-model field
+                 pknl_mode="hmcode",                                                                                       # Nonlinear P(k)
         ):
 
         # Static Metadata
@@ -101,8 +130,16 @@ class Cosmology:
             raise ValueError(
                 f"Unknown emulator_set {emulator_set!r}. Allowed values are: {allowed_models}."
             )
+        if ncdm_mode not in ("cb", "m"):
+            raise ValueError(f'ncdm_mode must be "cb" or "m", got {ncdm_mode!r}.')
+        if pknl_mode not in ("hmcode", "halofit"):
+            raise ValueError(f'pknl_mode must be "hmcode" or "halofit", got {pknl_mode!r}.')
+        passed = dict(m_ncdm=m_ncdm, N_ur=N_ur, w0=w0, f_ede=f_ede, z_c=z_c, theta_i=theta_i, r=r, T_cmb=T_cmb)
+        _check_fixed(emulator_set, passed)
         self.emulator_set = emulator_set
         self.extrapolate_z = extrapolate_z
+        self.ncdm_mode = ncdm_mode
+        self.pknl_mode = pknl_mode
         self._emu = {}  # This will be treated as static
         # Eagerly load these emulators to keep Python-side loader state out of jitted paths and avoid JAX tracer errors.
         if os.environ.get("READTHEDOCS") != "True":
@@ -112,9 +149,9 @@ class Cosmology:
 
         # Cosmological params (leaves) to be changed without recompiling jit
         self.H0, self.omega_cdm, self.omega_b, self.A_s, self.n_s, self.tau = H0, omega_cdm, omega_b, A_s, n_s, tau
-        self.m_ncdm, self.N_ur, self.w0 = m_ncdm, N_ur, w0
-        self.f_ede, self.z_c, self.theta_i, self.r = f_ede, z_c, theta_i, r
-        self.T_cmb, self.deg_ncdm = T_cmb, deg_ncdm
+        # Fixed extension parameters stay None, so they drop out of the pytree.
+        for name, value in passed.items():
+            setattr(self, name, (_DEFAULTS[name] if value is None else value) if _is_free(emulator_set, name) else None)
 
 
     # ------------------------------------------------------------------
@@ -122,40 +159,43 @@ class Cosmology:
     # ------------------------------------------------------------------
 
     def _tree_flatten(self):
-        # 1. Children: Only the 15 numerical parameters JAX should "see"
+        # 1. Children: the numerical parameters JAX should "see" (fixed extension parameters are None)
         children = (
             self.H0, self.omega_cdm, self.omega_b, self.A_s, self.n_s, self.tau,
             self.m_ncdm, self.N_ur, self.w0, 
             self.f_ede, self.z_c, self.theta_i, self.r,
-            self.T_cmb, self.deg_ncdm
+            self.T_cmb
         )
         # 2. Aux data: Static metadata and cached helper objects.
-        aux_data = (self.emulator_set, self.extrapolate_z, self._emu, self._tophat_instance)
+        aux_data = (self.emulator_set, self.extrapolate_z, self.ncdm_mode, self.pknl_mode, self._emu, self._tophat_instance)
         return (children, aux_data)
 
     @classmethod
     def _tree_unflatten(cls, aux_data, children):
         # Reconstruct using the static metadata
-        emulator_set, extrapolate_z, _emu, _tophat_instance = aux_data
+        emulator_set, extrapolate_z, ncdm_mode, pknl_mode, _emu, _tophat_instance = aux_data
 
         # We bypass __init__ to avoid re-triggering the Loader logic
         obj = cls.__new__(cls)
         obj.emulator_set = emulator_set
         obj.extrapolate_z = extrapolate_z
+        obj.ncdm_mode = ncdm_mode
+        obj.pknl_mode = pknl_mode
         obj._emu = _emu
         obj._tophat_instance = _tophat_instance
 
-        # Assign the 15 parameter children to the object
+        # Assign the parameter children to the object
         (obj.H0, obj.omega_cdm, obj.omega_b, obj.A_s, obj.n_s, obj.tau,
          obj.m_ncdm, obj.N_ur, obj.w0, 
          obj.f_ede, obj.z_c, obj.theta_i, obj.r,
-         obj.T_cmb, obj.deg_ncdm) = children
+         obj.T_cmb) = children
         
         return obj
     
     def update(self, H0=None, omega_cdm=None, omega_b=None, A_s=None, n_s=None,
         tau=None, m_ncdm=None, N_ur=None, w0=None, f_ede=None, z_c=None,
-        theta_i=None, r=None, T_cmb=None, deg_ncdm=None, extrapolate_z=None):
+        theta_i=None, r=None, T_cmb=None, extrapolate_z=None,
+        ncdm_mode=None, pknl_mode=None):
         """
         Return a new Cosmology instance with updated parameters.
 
@@ -163,10 +203,14 @@ class Cosmology:
 
         Parameters
         ----------
-        H0, omega_cdm, omega_b, A_s, n_s, tau, m_ncdm, N_ur, w0, f_ede, z_c, theta_i, r, T_cmb, deg_ncdm : float or None
+        H0, omega_cdm, omega_b, A_s, n_s, tau, m_ncdm, N_ur, w0, f_ede, z_c, theta_i, r, T_cmb : float or None
             Cosmological parameters to update. 
         extrapolate_z : bool or None
             If not None, replaces :attr:`extrapolate_z`.
+        ncdm_mode : {"cb", "m"} or None
+            If not None, replaces :attr:`ncdm_mode`.
+        pknl_mode : {"hmcode", "halofit"} or None
+            If not None, replaces :attr:`pknl_mode`.
 
         Returns
         -------
@@ -179,19 +223,29 @@ class Cosmology:
             'H0', 'omega_cdm', 'omega_b', 'A_s', 'n_s', 'tau',
             'm_ncdm', 'N_ur', 'w0',
             'f_ede', 'z_c', 'theta_i', 'r',
-            'T_cmb', 'deg_ncdm'
+            'T_cmb'
         ]
         values = [
             H0, omega_cdm, omega_b, A_s, n_s, tau,
             m_ncdm, N_ur, w0,
             f_ede, z_c, theta_i, r,
-            T_cmb, deg_ncdm
+            T_cmb
         ]
+        _check_fixed(self.emulator_set, dict(zip(names[6:], values[6:])))
         # Only update values that are not None
         new_leaves = [v if v is not None else old for v, old in zip(values, leaves)]
-        if extrapolate_z is not None:
-            emulator_set, _, _emu, _tophat_instance = aux_data
-            aux_data = (emulator_set, extrapolate_z, _emu, _tophat_instance)
+        if ncdm_mode is not None and ncdm_mode not in ("cb", "m"):
+            raise ValueError(f'ncdm_mode must be "cb" or "m", got {ncdm_mode!r}.')
+        if pknl_mode is not None and pknl_mode not in ("hmcode", "halofit"):
+            raise ValueError(f'pknl_mode must be "hmcode" or "halofit", got {pknl_mode!r}.')
+        emulator_set, old_extrapolate_z, old_ncdm_mode, old_pknl_mode, _emu, _tophat_instance = aux_data
+        aux_data = (
+            emulator_set,
+            old_extrapolate_z if extrapolate_z is None else extrapolate_z,
+            old_ncdm_mode if ncdm_mode is None else ncdm_mode,
+            old_pknl_mode if pknl_mode is None else pknl_mode,
+            _emu, _tophat_instance,
+        )
         return self._tree_unflatten(aux_data, new_leaves)
             
     # ------------------------------------------------------------------
@@ -234,6 +288,7 @@ class Cosmology:
         Converts the class attributes into a dictionary format 
         required by the underlying emulator predictions.
         """
+        ext = {name: _DEFAULTS[name] if getattr(self, name) is None else getattr(self, name) for name in _DEFAULTS}
         return {
             'H0': self.H0,
             'omega_cdm': self.omega_cdm,
@@ -241,15 +296,15 @@ class Cosmology:
             'ln10^{10}A_s': jnp.log(1.0e10 * self.A_s),
             'n_s': self.n_s,
             'tau_reio': self.tau,
-            'm_ncdm': self.m_ncdm,
-            'N_ur': self.N_ur,
-            'w0_fld': self.w0,
-            'fEDE': self.f_ede,
-            'log10z_c': jnp.log10(self.z_c),
-            'thetai_scf': self.theta_i,
-            'r': self.r,
-            'T_cmb': self.T_cmb,
-            'deg_ncdm': self.deg_ncdm
+            'm_ncdm': ext['m_ncdm'],
+            'N_ur': ext['N_ur'],
+            'w0_fld': ext['w0'],
+            'fEDE': ext['f_ede'],
+            'log10z_c': jnp.log10(ext['z_c']),
+            'thetai_scf': ext['theta_i'],
+            'r': ext['r'],
+            'T_cmb': ext['T_cmb'],
+            'deg_ncdm': _COSMO_MODELS[self.emulator_set].get("deg_ncdm", 1.0)
         }
 
     @partial(jax.jit, static_argnums=(0,))
@@ -261,8 +316,9 @@ class Cosmology:
         emulators; all other bounds follow the shared emulator training ranges.
         """
         ns_min, ns_max = (0.8812, 1.0492) if self.emulator_set == "lcdm:v1" else (0.8, 1.2)
-        ln_1e10_As = jnp.log(1.0e10 * self.A_s)
-        log10_z_c = jnp.log10(self.z_c)
+        p = self._to_dict()
+        ln_1e10_As = p['ln10^{10}A_s']
+        log10_z_c = p['log10z_c']
 
         return (
             (ln_1e10_As >= 2.5) & (ln_1e10_As <= 3.5)
@@ -271,13 +327,13 @@ class Cosmology:
             & (self.H0 >= 39.99) & (self.H0 <= 100.01)
             & (self.n_s >= ns_min) & (self.n_s <= ns_max)
             & (self.tau >= 0.02) & (self.tau <= 0.12)
-            & (self.m_ncdm >= 0.0) & (self.m_ncdm <= 0.33333)
-            & (self.w0 >= -2.0) & (self.w0 <= -0.33)
-            & (self.N_ur >= 0.49) & (self.N_ur <= 4.49)
-            & (self.theta_i >= 0.1) & (self.theta_i <= 3.1)
+            & (p['m_ncdm'] >= 0.0) & (p['m_ncdm'] <= 0.33333)
+            & (p['w0_fld'] >= -2.0) & (p['w0_fld'] <= -0.33)
+            & (p['N_ur'] >= 0.49) & (p['N_ur'] <= 4.49)
+            & (p['thetai_scf'] >= 0.1) & (p['thetai_scf'] <= 3.1)
             & (log10_z_c >= 3.0) & (log10_z_c <= 4.3)
-            & (self.f_ede >= 0.001) & (self.f_ede <= 0.5)
-            & (self.r >= 0.0) & (self.r <= 0.3)
+            & (p['fEDE'] >= 0.001) & (p['fEDE'] <= 0.5)
+            & (p['r'] >= 0.0) & (p['r'] <= 0.3)
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -350,9 +406,8 @@ class Cosmology:
         sigma_grid = jnp.exp(0.5 * jnp.log(var))
         # Mass grid, shape: (n_R,)
         rho_crit_0 = cparams["Rho_crit_0"]
-        # Halos collapse out of the cold+baryon field; neutrinos free-stream out.
-        Omega0_cb = cparams['Omega0_cb']
-        M_grid = 4.0 * jnp.pi / 3.0 * Omega0_cb * rho_crit_0 * (R_grid ** 3)
+        # Lagrangian mass of the field halos form from (set by ncdm_mode).
+        M_grid = 4.0 * jnp.pi / 3.0 * cparams['Omega0_halo'] * rho_crit_0 * (R_grid ** 3)
 
         ln_x = jnp.log1p(z_grid)
         ln_M = jnp.log(M_grid)
@@ -368,8 +423,8 @@ class Cosmology:
 
         .. math::
 
-            \\sigma^2(M, z) = \\frac{1}{2\\pi^2} \\int_0^\\infty dk\, k^2\,
-            P_{\\mathrm{L}}(k, z)\, \\hat{W}^2(kR),
+            \\sigma^2(M, z) = \\frac{1}{2\\pi^2} \\int_0^\\infty dk\\, k^2\\,
+            P_{\\mathrm{L}}(k, z)\\, \\hat{W}^2(kR),
 
         with Fourier-space top-hat window
 
@@ -412,8 +467,8 @@ class Cosmology:
 
         .. math::
 
-            \\sigma^2(R, z) = \\frac{1}{2\\pi^2} \\int_0^\\infty dk\, k^2\,
-            P_{\\mathrm{L}}(k, z)\, \\hat{W}^2(kR),
+            \\sigma^2(R, z) = \\frac{1}{2\\pi^2} \\int_0^\\infty dk\\, k^2\\,
+            P_{\\mathrm{L}}(k, z)\\, \\hat{W}^2(kR),
 
         with Fourier-space top-hat window
 
@@ -438,7 +493,7 @@ class Cosmology:
 
         r = jnp.atleast_1d(r)
         cparams = self._cosmo_params()
-        rho_mean_0 = cparams["Omega0_cb"] * cparams["Rho_crit_0"]
+        rho_mean_0 = cparams["Omega0_halo"] * cparams["Rho_crit_0"]
         m = 4.0 * jnp.pi / 3.0 * rho_mean_0 * r**3
 
         return self.sigma_m(m, z)
@@ -466,7 +521,7 @@ class Cosmology:
             return self.H0 * jnp.sqrt(
                 (p['Omega0_m_nonu'] + p['Omega0_ncdm']) * zp1 ** 3
                 + p['Omega0_r'] * zp1 ** 4
-                + p['Omega_Lambda'] * zp1 ** (3.0 * (1.0 + self.w0))
+                + p['Omega_Lambda'] * zp1 ** (3.0 * (1.0 + p['w0_fld']))
             )
         # Force the non-extrapolated path to avoid recursing into this method via jnp.where's eager evaluation.
         correction = (self.update(extrapolate_z=False).hubble_parameter(z_max) / hz_flrw(z_max)) ** 2
@@ -606,6 +661,9 @@ class Cosmology:
             - ``Omega0_m_nonu``: Present-day matter density parameter excluding
               massive neutrinos
             - ``Omega0_cb``: Present-day CDM+baryon density parameter
+            - ``Omega0_halo``: Density parameter of the field halos form from:
+              ``Omega0_cb`` if :attr:`ncdm_mode` is ``"cb"``,
+              ``Omega0_m`` if it is ``"m"``
             - ``Rho_crit_0``: Present-day critical density in :math:`M_\\odot \\, \\mathrm{Mpc}^{-3}`
     
         """
@@ -626,8 +684,9 @@ class Cosmology:
         p['Omega0_m'] = p['Omega_cdm'] + p['Omega_b'] + p['Omega0_ncdm']
         p['Omega0_r'] = p['Omega0_ur']+p['Omega0_g']
         p['Omega0_m_nonu'] = p['Omega0_m'] - p['Omega0_ncdm']
-        # Exposed for users; the halo model and lensing kernels both use Omega0_m.
         p['Omega0_cb'] = p['Omega0_m_nonu']
+        # sigma(M) and the mass function use Omega0_halo; matter profiles, counterterms and lensing use Omega0_m.
+        p['Omega0_halo'] = p['Omega0_cb'] if self.ncdm_mode == "cb" else p['Omega0_m']
 
         # Critical density
         H0 = p['H0'] / (c / 1e3) # Convert to H0 over c (c being in km/s)
@@ -972,7 +1031,7 @@ class Cosmology:
         z : float or jnp.ndarray
             Redshift(s) at which to evaluate the power spectrum.
         linear : bool
-            True for linear :math:`P(k)`, False for nonlinear :math:`P(k)`.
+            True for linear :math:`P(k)`, False for nonlinear :math:`P(k)` (source set by :attr:`pknl_mode`).
         extrapolate_k : bool, default True
             If True, wavenumbers outside the emulator's k-grid are
             power-law extrapolated in log-log space. If False, values
@@ -995,9 +1054,10 @@ class Cosmology:
             z = jnp.where(in_z_bounds, z, z_max)
 
         params_base = self._to_dict()
-        key = "PKL" if linear else "PKNL"
-        emu = self._load_emulator(key)
+        use_halofit = not linear and self.pknl_mode == "halofit"
+        emu = self._load_emulator("PKL" if linear or use_halofit else "PKNL")
         k_grid, pk_power_fac = self._pk_grid()
+        cparams = self._cosmo_params()
 
         # Predict on the emulator grid for each redshift, then interpolate
         def predict_for_z(z_i):
@@ -1005,6 +1065,9 @@ class Cosmology:
             params["z_pk_save_nonclass"] = z_i
             pk_log = emu.predictions(params)
             pk_vals = 10.0 ** pk_log * pk_power_fac
+            if use_halofit:
+                pk_vals = halofit(k_grid, pk_vals, self.omega_m(z_i), cparams['Omega0_m'], cparams['w0_fld'],
+                                  cparams['Omega0_ncdm'] / cparams['Omega0_m'], cparams['h'])
             return log_interp1d_extrap(k, k_grid, pk_vals)
 
         pk_for_z = jax.vmap(predict_for_z)(z)  # shape (Nz, Nk)

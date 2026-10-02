@@ -39,7 +39,7 @@ class T10HaloBias(HaloBias):
         Parameters
         ----------
         nu : array-like
-            Peak height :math:`\nu = \delta_c / \sigma(M, z)`.
+            Peak height :math:`\\nu = \\delta_c / \\sigma(M, z)`.
         delta_c : float or array-like
             Spherical-collapse threshold.
         delta_mean : float or array-like
@@ -76,7 +76,7 @@ class T10HaloBias(HaloBias):
         Parameters
         ----------
         nu : array-like
-            Squared peak height :math:`\nu = (\delta_c / \sigma(M, z))^2`.
+            Squared peak height :math:`\\nu = (\\delta_c / \\sigma(M, z))^2`.
         delta_c : float or array-like
             Spherical-collapse threshold.
         z : float or array-like

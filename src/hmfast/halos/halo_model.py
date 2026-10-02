@@ -180,7 +180,8 @@ class HaloModel:
         m = jnp.exp(logm)
         z = jnp.atleast_1d(z)
         cparams = self.cosmology._cosmo_params()
-        rho_mean_0 = cparams["Rho_crit_0"] * cparams["Omega0_cb"]
+        # Same density as the matter profile, so the 2-halo term recovers P_lin on large scales.
+        rho_mean_0 = cparams["Rho_crit_0"] * cparams["Omega0_m"]
         m_over_rho_mean = (m / rho_mean_0)[:, None]  # (Nm, 1)
     
     
