@@ -53,8 +53,8 @@ from hmfast.halos.profiles import (
     S12CIBProfile,
     Z07GalaxyHODProfile,
 )
-from hmfast.stats import Bk, Pk, Tk, cl_hm, cl_lin, xi_hm, covariance_cng, covariance_ssc, sigma2_b_disc
-from hmfast.stats import cl as _cl_module
+from hmfast.stats import Bk, Pk, Tk, cl, cl_linbias, xi_hm, cov_cng, cov_ssc, sigma2_b_disc
+from hmfast.stats import projected_cl as _cl_module
 from hmfast.stats import covariance as _covariance_module
 from hmfast.tracers import (
     CIBTracer,
@@ -250,15 +250,15 @@ case("Pk.pk_tot[1h only]",
      lambda p: Pk(k_damp=0.0, include_2h=False).pk_tot(halo_model(p), K_GRID, Z_SINGLE, NFW))
 broken("xi_hm", lambda p: xi_hm(PK, halo_model(p), R_GRID, Z_SINGLE, NFW),
        _P2XI_BUILT_UNDER_TRACE)
-case("cl_hm[limber]",
-     lambda p: cl_hm(PK, halo_model(p), GAL_TRACER, GAL_TRACER, L_GRID, Z_RANGE, N_Z))
+case("cl[limber]",
+     lambda p: cl(PK, halo_model(p), GAL_TRACER, GAL_TRACER, L_GRID, Z_RANGE, N_Z))
 CASES.append(pytest.param(
-    lambda p: cl_hm(PK, halo_model(p), GAL_TRACER, GAL_TRACER, L_GRID, Z_RANGE, N_Z, l_limber=100.0),
-    id="cl_hm[non-limber]", marks=_NEEDS_LOGGAMMA))
-case("cl_hm[1h only]",
-     lambda p: cl_hm(Pk(k_damp=0.0, include_2h=False), halo_model(p), GAL_TRACER, GAL_TRACER, L_GRID, Z_RANGE, N_Z))
-case("cl_lin",
-     lambda p: cl_lin(cosmo(p), GAL_TRACER_BIASED, GAL_TRACER_BIASED, L_GRID, Z_RANGE, N_Z))
+    lambda p: cl(PK, halo_model(p), GAL_TRACER, GAL_TRACER, L_GRID, Z_RANGE, N_Z, l_limber=100.0),
+    id="cl[non-limber]", marks=_NEEDS_LOGGAMMA))
+case("cl[1h only]",
+     lambda p: cl(Pk(k_damp=0.0, include_2h=False), halo_model(p), GAL_TRACER, GAL_TRACER, L_GRID, Z_RANGE, N_Z))
+case("cl_linbias",
+     lambda p: cl_linbias(cosmo(p), GAL_TRACER_BIASED, GAL_TRACER_BIASED, L_GRID, Z_RANGE, N_Z))
 
 # --- higher-order statistics and covariances -------------------------------------
 case("Bk.bk_1h",
@@ -280,11 +280,11 @@ case("Tk.tk_tot",
 case("Tk.tk_tot[2h only]",
      lambda p: Tk(include_1h=False, include_3h=False, include_4h=False).tk_tot(
          halo_model(p), K_GRID_BT, K_GRID_BT, Z_SINGLE, NFW))
-case("covariance_cng",
-     lambda p: covariance_cng(TK, halo_model(p), GAL_TRACER, None, None, None,
+case("cov_cng",
+     lambda p: cov_cng(TK, halo_model(p), GAL_TRACER, None, None, None,
                               L_GRID[:3], L_GRID[:3], Z_RANGE, N_Z))
-case("covariance_ssc",
-     lambda p: covariance_ssc(halo_model(p), GAL_TRACER, None, None, None,
+case("cov_ssc",
+     lambda p: cov_ssc(halo_model(p), GAL_TRACER, None, None, None,
                               L_GRID[:3], L_GRID[:3], Z_RANGE, N_Z, f_sky=0.4))
 case("sigma2_b_disc", lambda p: sigma2_b_disc(cosmo(p), Z_GRID, f_sky=0.4))
 
@@ -400,10 +400,10 @@ JITTED_API = [
     (Z07GalaxyHODProfile, "ng_bar"), (Z07GalaxyHODProfile, "galaxy_bias"),
     (S12CIBProfile, "real"), (S12CIBProfile, "fourier"), (S12CIBProfile, "mean_emissivity"),
     (Pk, "pk_1h"), (Pk, "pk_2h"), (Pk, "pk_tot"),
-    (_cl_module, "cl_hm"), (_cl_module, "cl_lin"),
+    (_cl_module, "cl"), (_cl_module, "cl_linbias"),
     (Bk, "_bk_1h"), (Bk, "_bk_2h"), (Bk, "_bk_3h"), (Bk, "_bk_tot"),
     (Tk, "tk_1h"), (Tk, "tk_2h"), (Tk, "tk_3h"), (Tk, "tk_4h"), (Tk, "tk_tot"),
-    (_covariance_module, "covariance_cng"), (_covariance_module, "covariance_ssc"),
+    (_covariance_module, "cov_cng"), (_covariance_module, "cov_ssc"),
     (_covariance_module, "sigma2_b_disc"),
 ]
 
@@ -472,22 +472,22 @@ def _hod_galaxy(e):
 def _cl_gy(e):
     t_g = GAL_TRACER.update(profile=HOD.update(alpha_s=e[5]))
     t_y = TSZ_TRACER.update(profile=GNFW.update(beta=e[6]))
-    return cl_hm(PK, halo_model(e[:5]), t_g, t_y, L_GRID, Z_RANGE, N_Z)
+    return cl(PK, halo_model(e[:5]), t_g, t_y, L_GRID, Z_RANGE, N_Z)
 
 
 LOG_PARAMS = jnp.log(PARAMS)
 GRADIENT_CASES = {
-    "cl_yy": (lambda th: (lambda e: cl_hm(PK, halo_model(e[:5]), _gnfw_tsz(e), _gnfw_tsz(e), L_GRID, Z_RANGE, N_Z))(jnp.exp(th)),
+    "cl_yy": (lambda th: (lambda e: cl(PK, halo_model(e[:5]), _gnfw_tsz(e), _gnfw_tsz(e), L_GRID, Z_RANGE, N_Z))(jnp.exp(th)),
               jnp.concatenate([LOG_PARAMS, jnp.log(jnp.array([6.41, 4.13, 1.4]))])),
-    "cl_gg": (lambda th: (lambda e: cl_hm(PK, halo_model(e[:5]), _hod_galaxy(e), _hod_galaxy(e), L_GRID, Z_RANGE, N_Z))(jnp.exp(th)),
+    "cl_gg": (lambda th: (lambda e: cl(PK, halo_model(e[:5]), _hod_galaxy(e), _hod_galaxy(e), L_GRID, Z_RANGE, N_Z))(jnp.exp(th)),
               jnp.concatenate([LOG_PARAMS, jnp.log(jnp.array([1.0, 1e13, 0.2]))])),
     "cl_gy": (lambda th: _cl_gy(jnp.exp(th)), jnp.concatenate([LOG_PARAMS, jnp.log(jnp.array([1.0, 4.13]))])),
-    "cl_kgkg": (lambda th: cl_hm(PK, halo_model(jnp.exp(th)), GLENS_TRACER, GLENS_TRACER, L_GRID, Z_RANGE, N_Z), LOG_PARAMS),
+    "cl_kgkg": (lambda th: cl(PK, halo_model(jnp.exp(th)), GLENS_TRACER, GLENS_TRACER, L_GRID, Z_RANGE, N_Z), LOG_PARAMS),
     "pk_mm": (lambda th: (lambda hm: PK.pk_1h(hm, K_GRID, Z_SINGLE, NFW) + PK.pk_2h(hm, K_GRID, Z_SINGLE, NFW))(
         halo_model(jnp.exp(th))), LOG_PARAMS),
-    "cl_kgkg_nl[hmcode]": (lambda th: cl_lin(cosmo(jnp.exp(th), "hmcode"), GLENS_TRACER, GLENS_TRACER, L_GRID, Z_RANGE, N_Z,
+    "cl_kgkg_nl[hmcode]": (lambda th: cl_linbias(cosmo(jnp.exp(th), "hmcode"), GLENS_TRACER, GLENS_TRACER, L_GRID, Z_RANGE, N_Z,
                                              linear=False), LOG_PARAMS),
-    "cl_kgkg_nl[halofit]": (lambda th: cl_lin(cosmo(jnp.exp(th), "halofit"), GLENS_TRACER, GLENS_TRACER, L_GRID, Z_RANGE, N_Z,
+    "cl_kgkg_nl[halofit]": (lambda th: cl_linbias(cosmo(jnp.exp(th), "halofit"), GLENS_TRACER, GLENS_TRACER, L_GRID, Z_RANGE, N_Z,
                                               linear=False), LOG_PARAMS),
 }
 

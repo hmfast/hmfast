@@ -13,14 +13,14 @@ from hmfast.halos.profiles.hod import GalaxyHODProfile
 from hmfast.halos.profiles.profiles_2pt import _fourier_2pt
 from hmfast.utils import gauss_legendre_nodes_weights
 
-from . import cl as _cl
+from . import projected_cl as _cl
 from .bk_tk import _pair_integral
 from .pk import Pk as _Pk
 
 
 def _extended_limber_grid_for_pair(hm, tracer_a, tracer_b, profile_a, profile_b, z, l, chi, k_damp=0.01):
     """
-    Extended-Limber shifted-grid quantities (see :func:`hmfast.stats.cl._extended_limber_kernel_grid`)
+    Extended-Limber shifted-grid quantities (see :func:`hmfast.stats.projected_cl._extended_limber_kernel_grid`)
     for one leg of a covariance -- ``tracer_a``/``tracer_b`` share a single multipole
     ``l`` and wavenumber :math:`k=(\\ell+1/2)/\\chi`, exactly as the two tracers of a
     single :math:`C_\\ell` would. Returns ``(None, None, None, None)`` if neither
@@ -30,7 +30,7 @@ def _extended_limber_grid_for_pair(hm, tracer_a, tracer_b, profile_a, profile_b,
     The reference :math:`P(k,z)` used for the correction is this leg's own halo-model
     :math:`P_{1h}+P_{2h}` (built from ``profile_a``, ``profile_b``) -- the same
     :math:`P(k,z)` that would enter this leg's own :math:`C_\\ell` if computed directly
-    via :func:`~hmfast.stats.cl.cl_hm`, so that
+    via :func:`~hmfast.stats.cl`, so that
     RSD's projection correction is treated consistently between the trispectrum/
     covariance code here and the two-point ``C_\\ell`` code in ``stats/cl.py``.
     """
@@ -56,8 +56,8 @@ def _extended_limber_grid_for_pair(hm, tracer_a, tracer_b, profile_a, profile_b,
 def _kernel_pair_effective(cosmology, tracer_a, tracer_b, z, l, z_lp, lp1h, lp3h, sqell):
     """
     Product of two tracers' effective per-``(z,l)`` Limber kernels
-    (:func:`hmfast.stats.cl._effective_kernel_limber`), evaluated at a single ``z``
-    (called once per redshift slice inside ``covariance_cng``/``covariance_ssc``'s
+    (:func:`hmfast.stats.projected_cl._effective_kernel_limber`), evaluated at a single ``z``
+    (called once per redshift slice inside ``cov_cng``/``cov_ssc``'s
     ``vmap`` over ``z``). Every ``der_bessel=0`` term of each tracer (density, tSZ, ...)
     is summed directly; a ``der_bessel=-1`` term (lensing, magnification bias, IA) picks
     up :math:`f^{(a)}_\\ell/(\\ell+1/2)^2`; a ``der_bessel=2`` (RSD) term is
@@ -219,7 +219,7 @@ def _dPk_response(halo_model, k, z, profile1, profile2=None,
 # ------------------------------------------------------------------
 
 @partial(jax.jit, static_argnums=(9,))
-def covariance_cng(tk, halo_model, tracer1, tracer2, tracer3, tracer4, l1, l2, z_range, n_z, f_sky=1.0):
+def cov_cng(tk, halo_model, tracer1, tracer2, tracer3, tracer4, l1, l2, z_range, n_z, f_sky=1.0):
     """
     Connected (non-Gaussian) covariance between two Limber-projected
     angular power spectra :math:`C_{\\ell_1}^{12}` and
@@ -251,7 +251,7 @@ def covariance_cng(tk, halo_model, tracer1, tracer2, tracer3, tracer4, l1, l2, z
     W_2(z)` (or :math:`W_3(z)\\,W_4(z)`) depend on :math:`\\ell_1` (or
     :math:`\\ell_2`) too, via the same extended-Limber correction
     (Chisari et al. 2019 Sec. 2.4.1) used by
-    :func:`~hmfast.stats.cl.cl_hm`
+    :func:`~hmfast.stats.cl`
     (see :func:`_extended_limber_grid_for_pair`,
     :func:`_kernel_pair_effective`).
 
@@ -358,7 +358,7 @@ def sigma2_b_disc(cosmology, z, f_sky=1.0):
     """
     Variance of the projected linear density field over a circular
     disc covering a sky fraction :math:`f_{\\rm sky}`, as a function of
-    redshift -- the super-sample variance entering :func:`covariance_ssc`.
+    redshift -- the super-sample variance entering :func:`cov_ssc`.
 
     .. math::
 
@@ -404,7 +404,7 @@ def sigma2_b_disc(cosmology, z, f_sky=1.0):
 
 
 @partial(jax.jit, static_argnums=(8,), static_argnames=("needs_counterterm1", "needs_counterterm2", "needs_counterterm3", "needs_counterterm4"))
-def covariance_ssc(halo_model, tracer1, tracer2, tracer3, tracer4, l1, l2, z_range, n_z, f_sky=1.0,
+def cov_ssc(halo_model, tracer1, tracer2, tracer3, tracer4, l1, l2, z_range, n_z, f_sky=1.0,
                     needs_counterterm1=None, needs_counterterm2=None,
                     needs_counterterm3=None, needs_counterterm4=None):
     """
@@ -415,7 +415,7 @@ def covariance_ssc(halo_model, tracer1, tracer2, tracer3, tracer4, l1, l2, z_ran
     footprint, which are not measured directly but instead shift the
     mean background density of the observed volume -- rescaling every
     halo-model quantity inside it. Structurally a sibling of
-    :func:`covariance_cng`: the same Limber-collapsed single
+    :func:`cov_cng`: the same Limber-collapsed single
     line-of-sight integral and tracer-kernel product, but with the real
     trispectrum replaced by a factorised power-spectrum *response*
     product, and one extra ingredient, the survey-footprint variance of
@@ -435,7 +435,7 @@ def covariance_ssc(halo_model, tracer1, tracer2, tracer3, tracer4, l1, l2, z_ran
     kernels, and :math:`\\sigma_B^2(z)` the disc-footprint variance (see
     :func:`sigma2_b_disc`).
 
-    As in :func:`covariance_cng`, a ``der_bessel=2`` (RSD) kernel term
+    As in :func:`cov_cng`, a ``der_bessel=2`` (RSD) kernel term
     makes :math:`W_1(z)\\,W_2(z)` (or :math:`W_3(z)\\,W_4(z)`)
     :math:`\\ell`-dependent via the extended-Limber correction (see
     :func:`_extended_limber_grid_for_pair`, :func:`_kernel_pair_effective`);

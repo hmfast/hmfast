@@ -14,7 +14,7 @@ class GalaxyTracer(Tracer):
     """
     Galaxy counts tracer.
 
-    The kernel has up to three contributions. The galaxy density term:
+    The kernel has up to three contributions. If ``has_density=True``, the galaxy density term:
 
     .. math::
 
@@ -51,14 +51,18 @@ class GalaxyTracer(Tracer):
         Halo occupation distribution profile used to model galaxy number counts.
     dndz : tuple of jnp.ndarray
         Normalized galaxy redshift distribution stored as :math:`(z, dN/dz)`.
-    mag_bias : tuple of jnp.ndarray
-        Magnification-bias log-slope of number counts (w.r.t. magnitude) stored as
-        :math:`(z, s(z))`. Defaults to :math:`s(z)\\equiv 2/5` (no magnification bias).
+    has_density : bool
+        Whether :meth:`kernel` includes the galaxy density term. Defaults to `True`. Set to
+        `False` for e.g. a magnification-only or RSD-only tracer; unlike CCL, ``bias=None``
+        does not remove the density term.
     bias : tuple of jnp.ndarray or None
         Linear galaxy bias stored as :math:`(z, b(z))`. Only used when this tracer is used to
         compute a linearly-biased angular power spectrum; has no effect when this tracer is used
         with a full halo-model calculation, where bias is instead handled through the halo
         occupation profile. Defaults to `None` (unbiased).
+    mag_bias : tuple of jnp.ndarray
+        Magnification-bias log-slope of number counts (w.r.t. magnitude) stored as
+        :math:`(z, s(z))`. Defaults to :math:`s(z)\\equiv 2/5` (no magnification bias).
     has_rsd : bool
         Whether :meth:`kernel` includes a redshift-space distortion term. Defaults to
         `False`.
@@ -66,7 +70,8 @@ class GalaxyTracer(Tracer):
 
     _required_profile_type = GalaxyHODProfile
 
-    def __init__(self, profile=None, dndz=None, mag_bias=None, bias=None, has_rsd=False):
+    def __init__(self, profile=None, dndz=None, has_density=True, bias=None, mag_bias=None, has_rsd=False):
+        self._check_has_density(has_density)
         super().__init__(profile=profile or Z07GalaxyHODProfile())
 
         if dndz is None:
@@ -79,9 +84,16 @@ class GalaxyTracer(Tracer):
             mag_bias = (jnp.array([0.0, 1.0]), jnp.array([0.4, 0.4]))
         self.mag_bias = mag_bias
 
+        self.has_density = has_density
         self.bias = bias
         self.has_rsd = bool(has_rsd)
 
+    @staticmethod
+    def _check_has_density(value):
+        """Reject non-bool ``has_density``, so a positional call written for the pre-``has_density`` signature fails loudly."""
+        if not isinstance(value, bool):
+            raise TypeError(f"GalaxyTracer: has_density must be a bool, got {type(value).__name__}. "
+                            "Pass bias, mag_bias and has_rsd by keyword.")
 
     @property
     def dndz(self):
@@ -113,22 +125,23 @@ class GalaxyTracer(Tracer):
         # The profile IS the leaf. JAX will automatically
         # drill down into the profile's own 5 leaves.
         leaves = (self.profile, self._dndz_data, self._mag_bias_data, self._bias_data)
-        aux_data = (self.has_rsd,)
+        aux_data = (self.has_rsd, self.has_density)
         return (leaves, aux_data)
 
     @classmethod
     def _tree_unflatten(cls, aux_data, leaves):
         profile, dndz_data, mag_bias_data, bias_data = leaves
-        has_rsd, = aux_data
+        has_rsd, has_density = aux_data
         obj = cls.__new__(cls)
         obj.profile = profile
         obj._dndz_data = dndz_data
         obj._mag_bias_data = mag_bias_data
         obj._bias_data = bias_data
         obj.has_rsd = has_rsd
+        obj.has_density = has_density
         return obj
 
-    def update(self, profile=None, dndz=None, mag_bias=None, bias=None, has_rsd=None):
+    def update(self, profile=None, dndz=None, has_density=None, bias=None, mag_bias=None, has_rsd=None):
         """
         Return a new GalaxyTracer instance with updated attributes using PyTree logic.
 
@@ -138,10 +151,12 @@ class GalaxyTracer(Tracer):
             New HOD profile to use for the tracer. If None, the profile is unchanged.
         dndz : array_like, optional
             New redshift distribution (z, dN/dz). If None, the distribution is unchanged.
-        mag_bias : array_like, optional
-            New magnification-bias slope (z, s(z)). If None, it is unchanged.
+        has_density : bool, optional
+            Whether to include the galaxy density term. If None, it is unchanged.
         bias : array_like, optional
             New linear galaxy bias (z, b(z)). If None, it is unchanged.
+        mag_bias : array_like, optional
+            New magnification-bias slope (z, s(z)). If None, it is unchanged.
         has_rsd : bool, optional
             Whether to include a redshift-space distortion term. If None, it is unchanged.
 
@@ -150,13 +165,16 @@ class GalaxyTracer(Tracer):
         GalaxyTracer
             New tracer instance with updated attributes.
         """
+        if has_density is not None:
+            self._check_has_density(has_density)
         flat, aux = self._tree_flatten()
         new_profile = profile if profile is not None else flat[0]
         new_dndz = self._prepare_z_function(dndz) if dndz is not None else flat[1]
         new_mag_bias = self._prepare_z_function(mag_bias, normalize=False) if mag_bias is not None else flat[2]
         new_bias = self._prepare_z_function(bias, normalize=False) if bias is not None else flat[3]
         new_has_rsd = bool(has_rsd) if has_rsd is not None else aux[0]
-        return self._tree_unflatten((new_has_rsd,), (new_profile, new_dndz, new_mag_bias, new_bias))
+        new_has_density = has_density if has_density is not None else aux[1]
+        return self._tree_unflatten((new_has_rsd, new_has_density), (new_profile, new_dndz, new_mag_bias, new_bias))
 
 
     def _density_kernel(self, cosmology, z):
@@ -239,14 +257,13 @@ class GalaxyTracer(Tracer):
             which sets the :math:`\\ell`-dependent prefactor (:math:`1`, :math:`\\ell(\\ell+1)` or
             :math:`\\sqrt{(\\ell+2)!/(\\ell-2)!}` for :math:`a = 0, 1, 2`).
 
-            - ``(W_g, 0, 0)``: density kernel :math:`W_g` above.
+            - ``(W_g, 0, 0)``: density kernel :math:`W_g` above; included only if ``has_density=True``.
             - ``(W_mag, -1, 1)``: magnification-bias kernel :math:`W_g^{\\rm mag}` above.
             - ``(W_RSD, 2, 0)``: redshift-space distortion kernel :math:`W_g^{\\rm RSD}` above; included only if ``has_rsd=True``.
         """
-        terms = [
-            (self._kernel_primary(cosmology, z), 0, 0),
-            (self._kernel_mag_bias(cosmology, z), -1, 1),
-        ]
+        terms = [(self._kernel_mag_bias(cosmology, z), -1, 1)]
+        if self.has_density:
+            terms.insert(0, (self._kernel_primary(cosmology, z), 0, 0))
         if self.has_rsd:
             terms.append((self._kernel_rsd(cosmology, z), 2, 0))
         return terms
