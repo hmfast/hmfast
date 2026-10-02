@@ -1,5 +1,5 @@
-hmfast.stats.cl
-===============
+Projected spectra
+=================
 
 .. autosummary::
    :toctree: generated
