@@ -7,8 +7,8 @@ hmfast.halos.profiles
 
    hmfast.halos.profiles.HaloProfile
 
-ICM density profiles
-----------------
+Electron density profiles
+-------------------------
 
 .. autosummary::
    :toctree: generated
@@ -17,8 +17,8 @@ ICM density profiles
    hmfast.halos.profiles.DensityProfile
    hmfast.halos.profiles.B16DensityProfile
 
-ICM pressure profiles
------------------
+Electron pressure profiles
+--------------------------
 
 .. autosummary::
    :toctree: generated

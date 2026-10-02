@@ -148,7 +148,7 @@ class T08HaloMassFunction(HaloMassFunction):
         dlnnu_dlnm = dlnnu_dlnm_interp(pts)
 
         cparams = cosmology._cosmo_params()
-        rho_mean_0 = cparams['Omega0_cb'] * cparams['Rho_crit_0']
+        rho_mean_0 = cparams['Omega0_halo'] * cparams['Rho_crit_0']
         dn_dlnm = hmf * rho_mean_0 * jnp.abs(dlnnu_dlnm) / m[:, None]
 
         return jnp.squeeze(dn_dlnm)
@@ -290,7 +290,7 @@ class T10HaloMassFunction(HaloMassFunction):
         dlnnu_dlnm = dlnnu_dlnm_interp(pts)
 
         cparams = cosmology._cosmo_params()
-        rho_mean_0 = cparams['Omega0_cb'] * cparams['Rho_crit_0']
+        rho_mean_0 = cparams['Omega0_halo'] * cparams['Rho_crit_0']
         dn_dlnm = hmf * rho_mean_0 * jnp.abs(dlnnu_dlnm) / m[:, None]
 
         return jnp.squeeze(dn_dlnm)

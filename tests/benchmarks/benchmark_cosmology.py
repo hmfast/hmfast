@@ -22,6 +22,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from hmfast.cosmology import Cosmology
+
 pyccl = pytest.importorskip("pyccl")
 pytestmark = pytest.mark.ccl
 
@@ -50,7 +52,7 @@ def cosmo_ccl_bg(fixed_cosmology):
         Omega_c=fixed_cosmology.omega_cdm / h**2,
         Omega_b=fixed_cosmology.omega_b / h**2,
         h=h, A_s=fixed_cosmology.A_s, n_s=fixed_cosmology.n_s,
-        m_nu=[0.0, 0.0, float(fixed_cosmology.m_ncdm)], mass_split="list",
+        m_nu=[0.0, 0.0, float(fixed_cosmology._cosmo_params()["m_ncdm"])], mass_split="list",
         transfer_function="boltzmann_class",
     )
 
@@ -63,7 +65,7 @@ def cosmo_ccl_pkl(fixed_cosmology):
         Omega_c=fixed_cosmology.omega_cdm / h**2,
         Omega_b=fixed_cosmology.omega_b / h**2,
         h=h, A_s=fixed_cosmology.A_s, n_s=fixed_cosmology.n_s,
-        m_nu=[0.0, 0.0, float(fixed_cosmology.m_ncdm)], mass_split="list",
+        m_nu=[0.0, 0.0, float(fixed_cosmology._cosmo_params()["m_ncdm"])], mass_split="list",
         transfer_function="boltzmann_class", matter_power_spectrum="linear",
     )
 
@@ -77,7 +79,7 @@ def cosmo_ccl_pknl(fixed_cosmology):
         Omega_c=fixed_cosmology.omega_cdm / h**2,
         Omega_b=fixed_cosmology.omega_b / h**2,
         h=h, A_s=fixed_cosmology.A_s, n_s=fixed_cosmology.n_s,
-        m_nu=[0.0, 0.0, float(fixed_cosmology.m_ncdm)], mass_split="list",
+        m_nu=[0.0, 0.0, float(fixed_cosmology._cosmo_params()["m_ncdm"])], mass_split="list",
         transfer_function="boltzmann_camb", matter_power_spectrum="camb",
     )
 
@@ -196,6 +198,45 @@ class TestMatterPowerSpectrumCCL:
         growth_ratio_ccl = (D_ccl_beyond / D_ccl_zmax) ** 2
 
         assert np.allclose(growth_ratio_hmf, growth_ratio_ccl, rtol=0.005)
+
+
+# EDE sets are excluded: CCL cannot represent an EDE background, and halofit is not calibrated for it.
+HALOFIT_CASES = [
+    ("lcdm:v1", {}),
+    ("wcdm:v1", {"w0": -0.8}),
+    ("mnu:v1", {"m_ncdm": 0.3}),
+    ("mnu-3states:v1", {"m_ncdm": 0.1}),
+    ("neff:v1", {"N_ur": 3.5}),
+]
+
+
+class TestHalofitCCL:
+    # pknl_mode="halofit" matches CCL's halofit run on hmfast's own P_lin, per emulator set (rtol 0.2%, observed max ~0.078/0.080/0.080/0.079/0.085%).
+    @pytest.mark.parametrize("emulator_set,extension", HALOFIT_CASES, ids=[c[0] for c in HALOFIT_CASES])
+    def test_pk_halofit_matches_ccl(self, fixed_cosmology, emulator_set, extension):
+        cosmo = Cosmology(
+            emulator_set=emulator_set, H0=fixed_cosmology.H0, omega_cdm=fixed_cosmology.omega_cdm,
+            omega_b=fixed_cosmology.omega_b, A_s=fixed_cosmology.A_s, n_s=fixed_cosmology.n_s,
+            pknl_mode="halofit", **extension,
+        )
+        p = cosmo._cosmo_params()
+        m_nu = [p["m_ncdm"]] * 3 if emulator_set == "mnu-3states:v1" else [0.0, 0.0, p["m_ncdm"]]
+
+        a_wide = np.sort(1.0 / (1.0 + np.linspace(0.0, 3.0, 50)))
+        k_ref = np.asarray(cosmo._pk_grid()[0])
+        pk_lin = np.asarray(cosmo.pk(jnp.asarray(k_ref), jnp.asarray(1.0 / a_wide - 1.0), linear=True)).T
+        cosmo_ccl = pyccl.CosmologyCalculator(
+            Omega_c=float(p["Omega_cdm"]), Omega_b=float(p["Omega_b"]), h=float(p["h"]),
+            A_s=cosmo.A_s, n_s=cosmo.n_s, m_nu=[float(m) for m in m_nu], mass_split="list",
+            w0=float(p["w0_fld"]), Neff=float(cosmo.derived_parameters()["Neff"]),
+            pk_linear={"a": a_wide, "k": k_ref, "delta_matter:delta_matter": pk_lin},
+            nonlinear_model="halofit",
+        )
+
+        k_test = np.geomspace(1e-3, 10.0, 40)
+        pk_hmf = np.asarray(cosmo.pk(jnp.asarray(k_test), jnp.asarray(Z_LIST), linear=False))
+        for i, z in enumerate(Z_LIST):
+            assert np.allclose(pk_hmf[:, i], pyccl.nonlin_matter_power(cosmo_ccl, k_test, z_to_a(z)), rtol=0.002)
 
 
 class TestDensitiesAndMatterFractionCCL:

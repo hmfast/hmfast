@@ -14,7 +14,7 @@ from hmfast.utils import Const
 
 class PressureProfile(HaloProfile):
     """
-    Parent ICM pressure profile class from which pressure profile classes inherit.
+    Parent electron pressure profile class from which pressure profile classes inherit.
 
     Child profile classes must implement :meth:`real` and :meth:`fourier`.
     """
