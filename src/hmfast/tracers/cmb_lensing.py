@@ -84,6 +84,10 @@ class CMBLensingTracer(Tracer):
         """Source-plane redshift: z_source, or the derived z_star if z_source is None."""
         return cosmology.derived_parameters()["z_star"] if self.z_source is None else jnp.asarray(self.z_source)
 
+    def _z_max(self, cosmology):
+        """Redshift above which every kernel term vanishes: the source plane."""
+        return self._z_source(cosmology)
+
     def _chi_source(self, cosmology):
         """Comoving distance to the source plane: chi(z_source), or the derived chi_star if z_source is None."""
         if self.z_source is None:

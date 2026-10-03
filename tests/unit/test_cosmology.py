@@ -1,34 +1,26 @@
 """
 Unit tests for hmfast.cosmology.Cosmology: construction/validation, the full
 background/growth/power-spectrum/CMB API, NaN/bounds behavior, extrapolate_z,
-update()/pytree behavior, gradients, and light coverage of the non-lcdm
-emulator sets. Primary focus is lcdm:v1. No external ground truth here -- see
-tests/benchmarks/benchmark_cosmology.py for CCL cross-checks.
+update()/pytree behavior, and light coverage of the non-lcdm emulator sets.
+Primary focus is lcdm:v1. No external ground truth here -- see
+tests/benchmarks/benchmark_cosmology.py for CCL cross-checks. Gradients are
+checked in test_jax_transforms.py.
 """
 import jax
 import jax.numpy as jnp
 import pytest
 
 from hmfast.cosmology import Cosmology
-from hmfast.stats import sigma2_b_disc
+
+from .._shared import shared
 
 
 def _construct_or_skip(emulator_set, **kwargs):
     try:
-        return Cosmology(emulator_set=emulator_set, **kwargs)
+        return shared(Cosmology, emulator_set=emulator_set, **kwargs)
     except Exception as exc:
         pytest.skip(f"{emulator_set} emulator files not available locally: {exc}")
 
-
-def _rel_grad_check(f, x0, rel_eps=1e-5, rtol=1e-3):
-    eps = abs(x0) * rel_eps
-    g = jax.grad(f)(x0)
-    assert jnp.isfinite(g)
-    fd = (f(x0 + eps) - f(x0 - eps)) / (2 * eps)
-    if fd == 0:
-        assert g == 0
-    else:
-        assert jnp.isclose(g, fd, rtol=rtol)
 
 
 class TestConstruction:
@@ -51,8 +43,8 @@ class TestBackgroundQuantities:
     ])
     def test_shape_matrix(self, fixed_cosmology, method):
         f = getattr(fixed_cosmology, method)
-        assert jnp.shape(f(jnp.array(0.5))) == ()
-        assert jnp.shape(f(jnp.array([0.0, 0.5, 1.0, 2.0]))) == (4,)
+        assert jax.eval_shape(f, jnp.array(0.5)).shape == ()
+        assert jax.eval_shape(f, jnp.array([0.0, 0.5, 1.0, 2.0])).shape == (4,)
 
     # H(z) increases monotonically with redshift.
     def test_hubble_parameter_increases_with_redshift(self, fixed_cosmology):
@@ -136,11 +128,6 @@ class TestGrowthAndPerturbations:
         pk_nl = fixed_cosmology.pk(k, jnp.array(0.0), linear=False)
         assert jnp.all(pk_lin > 0) and jnp.all(pk_nl > 0)
         assert jnp.all(pk_nl[-5:] >= pk_lin[-5:])
-
-    # sigma2_b_disc is positive with the expected shape.
-    def test_sigma2_b_disc_positive(self, fixed_cosmology):
-        s2b = sigma2_b_disc(fixed_cosmology, jnp.array([0.0, 0.5, 1.0]), f_sky=0.5)
-        assert jnp.all(s2b > 0) and s2b.shape == (3,)
 
     # velocity_dispersion is positive with the expected shape.
     def test_velocity_dispersion_positive(self, fixed_cosmology):
@@ -353,52 +340,6 @@ class TestHalofit:
         with pytest.raises(ValueError, match="pknl_mode"):
             fixed_cosmology.update(pknl_mode="emulator")
 
-
-class TestGradients:
-    # jax.grad wrt H0 is finite and matches a finite-difference estimate, for every listed background/growth quantity.
-    @pytest.mark.parametrize("method,kwargs", [
-        ("hubble_parameter", {}),
-        ("angular_diameter_distance", {}),
-        ("sigma8", {}),
-        ("growth_factor", {}),
-        ("omega_m", {}),
-    ])
-    def test_grad_wrt_H0(self, fixed_cosmology, method, kwargs):
-        z = jnp.array(0.5)
-
-        def f(H0):
-            return getattr(fixed_cosmology.update(H0=H0), method)(z, **kwargs)
-
-        _rel_grad_check(f, 67.5)
-
-    # jax.grad of pk wrt H0 is finite and matches a finite-difference estimate.
-    def test_pk_grad_wrt_H0(self, fixed_cosmology):
-        def f(H0):
-            return fixed_cosmology.update(H0=H0).pk(jnp.array([0.1]), jnp.array(0.5), linear=True)
-
-        _rel_grad_check(f, 67.5)
-
-    # jax.grad of sigma8 wrt A_s is finite and matches a finite-difference estimate (A_s ~ 1e-9, so the
-    # finite-difference step must be scaled relative to its magnitude, not a fixed absolute step).
-    def test_sigma8_grad_wrt_A_s(self, fixed_cosmology):
-        def f(A_s):
-            return fixed_cosmology.update(A_s=A_s).sigma8(jnp.array(0.5))
-
-        _rel_grad_check(f, 2.1e-9)
-
-    # delta_c's gradient wrt H0 is exactly zero for the EdS prescription (a cosmology-independent constant)
-    # but nonzero for NS97 (which depends on omega_m(z)) -- both match their finite-difference estimate.
-    def test_delta_c_grad_wrt_H0_prescription_dependence(self, fixed_cosmology):
-        def f_eds(H0):
-            return fixed_cosmology.update(H0=H0).delta_c(jnp.array(0.5), prescription="EdS")
-
-        def f_ns97(H0):
-            return fixed_cosmology.update(H0=H0).delta_c(jnp.array(0.5), prescription="NS97")
-
-        _rel_grad_check(f_eds, 67.5)
-        _rel_grad_check(f_ns97, 67.5, rel_eps=1e-6)
-        assert jax.grad(f_eds)(67.5) == 0.0
-        assert jax.grad(f_ns97)(67.5) != 0.0
 
 
 class TestOtherEmulatorSets:

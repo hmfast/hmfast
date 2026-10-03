@@ -109,6 +109,8 @@ class Cosmology:
     extrapolate_k : bool
         If True (default), :meth:`pk` power-law extrapolates in log-log beyond
         the emulators' trained :math:`k` range; if False, it returns NaN there.
+        Also sets whether :func:`~hmfast.stats.corr_3d` and :func:`~hmfast.stats.corr_angular`
+        power-law extrapolate their input beyond the ends of its grid.
     ncdm_mode : {"cb", "m"}
         Mean density, :math:`\\bar\\rho_{cb}` (default) or :math:`\\bar\\rho_m`, used for
         :math:`M(R)` in :math:`\\sigma(M)` and the mass function. :math:`\\sigma(M)` always uses
@@ -288,7 +290,9 @@ class Cosmology:
         except KeyError:
             raise KeyError(f"Unknown key: {key}")
     
-        self._emu[key] = loader_cls(os.path.join(self._base_path(), subdir, f"{key}_{_COSMO_MODELS[self.emulator_set]['suffix']}"))
+        # Keep the loaded weights concrete even when first reached under a trace, so no tracer is cached on self.
+        with jax.ensure_compile_time_eval():
+            self._emu[key] = loader_cls(os.path.join(self._base_path(), subdir, f"{key}_{_COSMO_MODELS[self.emulator_set]['suffix']}"))
         return self._emu[key]
 
 

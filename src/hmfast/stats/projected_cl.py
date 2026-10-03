@@ -19,6 +19,23 @@ jax.config.update("jax_enable_x64", True)
 # Shared primitives
 # ------------------------------------------------------------------
 
+# Lower end of the inferred redshift range; lensing and magnification kernels extend to z=0.
+_Z_MIN = 1e-5
+
+
+def _resolve_z_range(cosmology, z_range, *tracers):
+    """``z_range`` if given, else ``(_Z_MIN, z_max)`` with z_max the lowest tracer cutoff, capped at the emulator range."""
+    if z_range is not None:
+        return z_range
+    z_maxes = [z for z in (t._z_max(cosmology) for t in tracers) if z is not None]
+    if not cosmology.extrapolate_z or not z_maxes:
+        z_maxes.append(cosmology._z_grid_pk()[-1])
+    z_max = z_maxes[0]
+    for z in z_maxes[1:]:
+        z_max = jnp.minimum(z_max, z)
+    return (_Z_MIN, z_max)
+
+
 def _extended_limber_kernel_grid(cosmology, l, z, chi, P_grid, pk_fn):
     """Shifted-grid quantities (z_lp, lp1h, lp3h, sqell) for the extended-Limber RSD
     projection (Chisari et al. 2019 Sec. 2.4.1), shared by cl_limber's and
@@ -420,102 +437,87 @@ def _cl_linear_limber(cosmology, tracer1, tracer2, l, z_range, n_z, linear=True)
 # Public entry points
 # ------------------------------------------------------------------
 
-@partial(jax.jit, static_argnums=(6,), static_argnames=("l_limber", "n_fft", "n_interp", "bias", "window"))
-def cl(pk, halo_model, tracer1, tracer2, l, z_range, n_z, l_limber=0.0,
-          z_fid=0.0, n_fft=None, n_interp=200, bias=0.1, window=0.2):
+@partial(jax.jit, static_argnames=("n_z", "l_limber", "n_fft", "n_interp", "fftlog_bias", "window"))
+def cl(pk, halo_model, l, tracer1, tracer2=None, z_range=None, n_z=100, l_limber=0.0,
+       z_fid=0.0, n_fft=None, n_interp=200, fftlog_bias=0.1, window=0.2):
     """
-    Halo-model angular power spectrum :math:`C_\\ell`, combining the
-    1-halo and 2-halo contributions according to ``pk.include_1h``/
-    ``pk.include_2h``.
+    Halo-model angular power spectrum :math:`C_\\ell` between two tracers.
 
-    By default (``l_limber=0.0``) this uses the Limber approximation
-    everywhere, which maps each multipole to a wavenumber,
-    :math:`k = (\\ell + 1/2)/\\chi`, and sums whichever of the 1-halo/
-    2-halo 3D power spectra are selected (the mass integral is performed
-    over ``halo_model.m_range``/``n_m``). Below `l_limber`, the 2-halo term
-    instead uses an exact projection using a SwiftCl-style (`Reymond et
-    al. 2025 <https://arxiv.org/abs/2505.22718>`_) FFTLog decomposition,
-    built on the exact decomposition of the 2-halo power spectrum
+    By default this uses the Limber approximation,
 
     .. math::
 
-        P_{2h}(k; z_1, z_2) = P_{\\rm lin}(k, z_{\\rm fid})\\,
-        D(k, z_1)\\, D(k, z_2),
+        C_\\ell = \\int d\\chi\\, \\frac{W_1(\\chi)\\, W_2(\\chi)}{\\chi^2}\\,
+        P\\!\\left(k = \\frac{\\ell + 1/2}{\\chi}, z(\\chi)\\right),
 
-    where :math:`D(k, z)` is the growth factor. This avoids the double
-    line-of-sight integral over oscillatory spherical Bessel functions
-    an exact projection would otherwise require. The 1-halo term has no
-    non-Limber treatment (it only matters at high :math:`\\ell`, where
-    Limber is already accurate), so below `l_limber` only the 2-halo
-    term (if ``pk.include_2h``) contributes; a 1-halo-only ``Pk``
-    (``include_2h=False``) therefore returns zero below `l_limber`.
+    where :math:`W_i` are the tracer kernels and :math:`P = P_{1h} + P_{2h}`
+    is the halo-model power spectrum, with the terms selected by ``pk``.
 
-    A tracer with an RSD term (e.g. ``GalaxyTracer(has_rsd=True)``) is
-    supported in the Limber branch: its ``der_bessel=2`` kernel term is
-    projected via an extended-Limber recipe (see :func:`_cl_limber`), adding
-    roughly 1.7x the cost of this function for a pair where at least one
-    tracer has ``has_rsd=True``, and no added cost otherwise.
+    Below ``l_limber``, the 2-halo term is instead projected exactly with the
+    SwiftCl algorithm (`Reymond et al. 2025 <https://arxiv.org/abs/2505.22718>`_),
+    which factorises the unequal-time 2-halo power spectrum as
+
+    .. math::
+
+        P_{2h}(k; z_1, z_2) = P_{\\rm lin}(k, z_{\\rm fid})\\, D_1(k, z_1)\\, D_2(k, z_2),
+
+    with :math:`D_i(k, z)` absorbing the growth and the tracer's large-scale
+    bias. Each tracer's line-of-sight integral against :math:`j_\\ell(k\\chi)`
+    then becomes a single FFTLog transform, avoiding the double integral over
+    oscillating Bessel functions. The 1-halo term is Limber only, so it
+    contributes nothing below ``l_limber``.
 
     Parameters
     ----------
     pk : Pk
-        Power spectrum object; ``pk.include_1h``/``include_2h`` select which
-        terms this function sums.
+        Power spectrum object; ``pk.include_1h``/``include_2h`` select the terms.
     halo_model : HaloModel
+        Halo model object.
+    l : array-like
+        Multipoles, shape :math:`(N_\\ell,)`.
     tracer1 : Tracer
         First tracer object.
-    tracer2 : Tracer or None
-        Second tracer object (if None, uses tracer1).
-    l : array-like
-        Multipole grid. Must be concrete (not a value being traced by
-        JAX), since the low/high `l_limber` split is a data-dependent
-        shape decision.
-    z_range : tuple
-        ``(z_min, z_max)`` spanning the redshift integration grid (Limber
-        branch) and the internal FFTLog chi grid (non-Limber branch).
-    n_z : int
-        Number of redshift nodes (static: changing it triggers
-        recompilation; sweeping ``z_range`` alone does not).
+    tracer2 : Tracer or None, default None
+        Second tracer object. If None, defaults to ``tracer1``.
+    z_range : tuple or None, default None
+        ``(z_min, z_max)`` of the redshift integration. If None, ``z_min`` is
+        :math:`10^{-5}` and ``z_max`` is the lowest redshift at which a tracer kernel
+        vanishes (e.g. the top of ``dndz``, or ``z_max`` for tSZ), capped at the
+        emulator's trained range unless :attr:`Cosmology.extrapolate_z` is True.
+    n_z : int, default 100
+        Number of redshift nodes (static).
     l_limber : float, default 0.0
-        Multipole threshold: below `l_limber`, the exact non-Limber
-        calculation is used for the 2-halo term; at or above it, the
-        Limber approximation is used. The default, 0.0, uses Limber
-        everywhere.
+        Multipoles below this use SwiftCl for the 2-halo term; at or above it,
+        Limber. The default uses Limber everywhere.
     z_fid : float, default 0.0
-        Used only by the non-Limber calculation. Fiducial redshift at
-        which the power spectrum is evaluated in the decomposition
-        above.
+        SwiftCl parameter, only used below ``l_limber``. Fiducial redshift
+        :math:`z_{\\rm fid}` of the factorisation above.
     n_fft : int or None, default None
-        Used only by the non-Limber calculation. Number of FFTLog
+        SwiftCl parameter, only used below ``l_limber``. Number of FFTLog
         nodes; defaults to ``n_z``.
     n_interp : int, default 200
-        Used only by the non-Limber calculation. Number of wavenumber
-        points at which its most expensive step is evaluated, before
-        interpolating onto the cosmology's own tabulated
-        power-spectrum grid.
-    bias : float, default 0.1
-        Used only by the non-Limber calculation. FFTLog de-trending
-        exponent (must be less than 1); the default is robust across
-        tracer types and rarely needs changing.
+        SwiftCl parameter, only used below ``l_limber``. Number of wavenumbers
+        at which :math:`D_i(k, z)` is evaluated before interpolation.
+    fftlog_bias : float, default 0.1
+        SwiftCl parameter, only used below ``l_limber``. FFTLog de-trending
+        exponent, must be less than 1.
     window : float, default 0.2
-        Used only by the non-Limber calculation. Fraction of
-        high-frequency FFTLog modes smoothly anti-aliased to suppress
-        edge/periodicity ringing; the default is robust across tracer
-        types.
+        SwiftCl parameter, only used below ``l_limber``. Fraction of
+        high-frequency FFTLog modes tapered to suppress ringing.
 
     Returns
     -------
-    cl : array
-        Dimensionless halo-model angular power spectrum with shape
-        :math:`(N_\\ell,)`, where singleton dimensions get squeezed before
-        return.
+    cl : jnp.ndarray
+        Angular power spectrum with shape :math:`(N_\\ell,)`, where singleton
+        dimensions get squeezed before return.
     """
     tracer2 = tracer1 if tracer2 is None else tracer2
+    z_range = _resolve_z_range(halo_model.cosmology, z_range, tracer1, tracer2)
     return _dispatch_by_ell(
         l, l_limber,
         lambda l_low: (
             _cl_2h_nonlimber(halo_model, tracer1, tracer2, l_low, z_range, n_z, z_fid=z_fid,
-                              n_fft=n_fft, n_interp=n_interp, bias=bias, window=window)
+                              n_fft=n_fft, n_interp=n_interp, bias=fftlog_bias, window=window)
             if pk.include_2h else jnp.zeros_like(jnp.atleast_1d(l_low))
         ),
         lambda l_high: _cl_limber(pk, halo_model, tracer1, tracer2, l_high, z_range, n_z,
@@ -523,84 +525,86 @@ def cl(pk, halo_model, tracer1, tracer2, l, z_range, n_z, l_limber=0.0,
     )
 
 
-@partial(jax.jit, static_argnums=(5,), static_argnames=("linear", "l_limber", "n_fft", "n_interp", "bias", "window"))
-def cl_linbias(cosmology, tracer1, tracer2, l, z_range, n_z, linear=True,
-           l_limber=0.0, z_fid=0.0, n_fft=None, n_interp=200, bias=0.1, window=0.2):
+@partial(jax.jit, static_argnames=("n_z", "linear", "l_limber", "n_fft", "n_interp", "fftlog_bias", "window"))
+def cl_linbias(cosmology, l, tracer1, tracer2=None, z_range=None, n_z=100, linear=True,
+               l_limber=0.0, z_fid=0.0, n_fft=None, n_interp=200, fftlog_bias=0.1, window=0.2):
     """
-    Angular power spectrum for linearly-biased or unbiased tracers, with
-    no halo-model mass integral. Companion to
-    :func:`cl`: uses each tracer's own scalar/array bias
-    (from a ``bias`` attribute, e.g. ``GalaxyTracer``; tracers without
-    one, e.g. CMB/galaxy lensing, are treated as unbiased) in place of
-    the halo-model mass integral, and the raw matter power spectrum in
-    place of ``Pk.pk_1h``/``Pk.pk_2h``. Takes a ``Cosmology`` directly,
-    unlike :func:`cl`, since no halo-model mass integral
-    is performed. Below ``l_limber``, uses an exact SwiftCl-style FFTLog
-    projection (mirroring ``cl``'s non-Limber 2-halo branch); at or above it,
-    uses the Limber approximation (the default, ``l_limber=0.0``, uses
-    Limber everywhere).
+    Angular power spectrum :math:`C_\\ell` between two linearly biased tracers.
 
-    A tracer's bias multiplies only its ``der_bessel=0`` (density) kernel term;
-    magnification-bias, IA and lensing terms (``der_bessel=-1``) are never biased.
-    An RSD (``der_bessel=2``) term is supported in both branches: below
-    ``l_limber`` via the exact FFTLog projection, at or above it via an
-    extended-Limber recipe (see :func:`_cl_linear_limber`).
+    By default this uses the Limber approximation,
+
+    .. math::
+
+        C_\\ell = \\int d\\chi\\, \\frac{W_1(\\chi)\\, W_2(\\chi)}{\\chi^2}\\,
+        P_m\\!\\left(k = \\frac{\\ell + 1/2}{\\chi}, z(\\chi)\\right),
+
+    where :math:`P_m` is the linear or nonlinear matter power spectrum and
+    :math:`W_i` are the tracer kernels, with the density term scaled by the
+    tracer's ``bias`` :math:`b_i(z)` (unbiased if the tracer has none).
+
+    Below ``l_limber``, the spectrum is instead projected exactly with the
+    SwiftCl algorithm (`Reymond et al. 2025 <https://arxiv.org/abs/2505.22718>`_),
+    which factorises the unequal-time matter power spectrum as
+
+    .. math::
+
+        P_m(k; z_1, z_2) = P_m(k, z_{\\rm fid})\\, D(k, z_1)\\, D(k, z_2),
+        \\qquad D(k, z) = \\sqrt{P_m(k, z) / P_m(k, z_{\\rm fid})}.
+
+    Each tracer's line-of-sight integral against :math:`j_\\ell(k\\chi)` then
+    becomes a single FFTLog transform, avoiding the double integral over
+    oscillating Bessel functions.
 
     Parameters
     ----------
     cosmology : Cosmology
+        Cosmology object.
+    l : array-like
+        Multipoles, shape :math:`(N_\\ell,)`.
     tracer1 : Tracer
         First tracer object.
-    tracer2 : Tracer or None
-        Second tracer object (if None, uses tracer1).
-    l : array-like
-        Multipole grid. Must be concrete (not a value being traced by JAX),
-        since the low/high `l_limber` split is a data-dependent shape
-        decision (matches `cl`).
-    z_range : tuple
-        ``(z_min, z_max)`` spanning the redshift integration grid (Limber
-        branch) and the internal FFTLog chi grid (non-Limber branch).
-    n_z : int
-        Number of redshift nodes (static: changing it triggers
-        recompilation; sweeping ``z_range`` alone does not).
+    tracer2 : Tracer or None, default None
+        Second tracer object. If None, defaults to ``tracer1``.
+    z_range : tuple or None, default None
+        ``(z_min, z_max)`` of the redshift integration. If None, ``z_min`` is
+        :math:`10^{-5}` and ``z_max`` is the lowest redshift at which a tracer kernel
+        vanishes (e.g. the top of ``dndz``, or ``z_max`` for tSZ), capped at the
+        emulator's trained range unless :attr:`Cosmology.extrapolate_z` is True.
+    n_z : int, default 100
+        Number of redshift nodes (static).
     linear : bool, default True
-        If True, use the linear matter power spectrum; if False, use the
-        nonlinear power spectrum.
+        If True, use the linear matter power spectrum; if False, the nonlinear one.
     l_limber : float, default 0.0
-        Multipole threshold: below `l_limber`, the exact non-Limber
-        calculation is used; at or above it, the Limber approximation is
-        used. The default, 0.0, uses Limber everywhere.
+        Multipoles below this use SwiftCl; at or above it, Limber. The default
+        uses Limber everywhere.
     z_fid : float, default 0.0
-        Used only by the non-Limber calculation. Fiducial redshift at which
-        the power spectrum is evaluated in the separable D(k,z) ansatz.
+        SwiftCl parameter, only used below ``l_limber``. Fiducial redshift
+        :math:`z_{\\rm fid}` of the factorisation above.
     n_fft : int or None, default None
-        Used only by the non-Limber calculation. Number of FFTLog nodes;
-        defaults to ``len(z)``.
+        SwiftCl parameter, only used below ``l_limber``. Number of FFTLog
+        nodes; defaults to ``n_z``.
     n_interp : int, default 200
-        Used only by the non-Limber calculation. Number of wavenumber
-        points at which its most expensive step is evaluated, before
-        interpolating onto the cosmology's own tabulated power-spectrum grid.
-    bias : float, default 0.1
-        Used only by the non-Limber calculation. FFTLog de-trending
-        exponent (must be less than 1); unrelated to a tracer's own bias.
+        SwiftCl parameter, only used below ``l_limber``. Number of wavenumbers
+        at which :math:`D(k, z)` is evaluated before interpolation.
+    fftlog_bias : float, default 0.1
+        SwiftCl parameter, only used below ``l_limber``. FFTLog de-trending
+        exponent, must be less than 1.
     window : float, default 0.2
-        Used only by the non-Limber calculation. Fraction of high-frequency
-        FFTLog modes smoothly anti-aliased to suppress edge/periodicity
-        ringing.
+        SwiftCl parameter, only used below ``l_limber``. Fraction of
+        high-frequency FFTLog modes tapered to suppress ringing.
 
     Returns
     -------
-    cl_linbias : array
-        Dimensionless linearly-biased angular power spectrum with shape
-        :math:`(N_\\ell,)`, where singleton dimensions get squeezed before
-        return.
+    cl_linbias : jnp.ndarray
+        Angular power spectrum with shape :math:`(N_\\ell,)`, where singleton
+        dimensions get squeezed before return.
     """
     tracer2 = tracer1 if tracer2 is None else tracer2
-
+    z_range = _resolve_z_range(cosmology, z_range, tracer1, tracer2)
     return _dispatch_by_ell(
         l, l_limber,
         lambda l_low: _cl_linear_nonlimber(cosmology, tracer1, tracer2, l_low, z_range, n_z, linear=linear,
                                             z_fid=z_fid, n_fft=n_fft, n_interp=n_interp,
-                                            bias=bias, window=window),
+                                            bias=fftlog_bias, window=window),
         lambda l_high: _cl_linear_limber(cosmology, tracer1, tracer2, l_high, z_range, n_z, linear=linear),
     )

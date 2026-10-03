@@ -179,6 +179,10 @@ class Tracer(ABC):
         """
         pass
 
+    def _z_max(self, cosmology):
+        """Redshift above which every kernel term vanishes, or None if unbounded."""
+        return None
+
     def _kernel_terms(self, cosmology, z):
         """kernel(), checked to return only (W, n, a) triples."""
         terms = self.kernel(cosmology, z)

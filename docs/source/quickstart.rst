@@ -51,13 +51,13 @@ The snippet below shows three core tasks: reading the Hubble parameter, evaluati
    kappa_cmb = CMBLensingTracer()
 
    # Compute tSZ x CMB lensing cross-correlation (1-halo + 2-halo)
-   cl_yk = cl(pk_calc, halo_model, y, kappa_cmb, l_grid, z_range, n_z)
+   cl_yk = cl(pk_calc, halo_model, l_grid, y, kappa_cmb, z_range, n_z)
 
    # Example gradients with respect to H0
    grad_hubble = jax.grad(lambda H0: jnp.sum(cosmo.update(H0=H0).hubble_parameter(z_grid)))(67.4)
    grad_dndlnm = jax.grad(lambda H0: jnp.sum(hmf_t08.dndlnm(cosmo.update(H0=H0), m_grid, 0.5, mass_def=m_200c)))(67.4)
    grad_cl_yk = jax.grad(lambda H0: jnp.sum(cl(
        pk_calc, HaloModel(cosmology=cosmo.update(H0=H0), mass_def=m_200c, halo_mass_function=hmf_t08),
-       y, kappa_cmb, l_grid, z_range, n_z)))(67.4)
+       l_grid, y, kappa_cmb, z_range, n_z)))(67.4)
 
 ``hubble`` has units of :math:`\mathrm{km} \, \mathrm{s}^{-1} \, \mathrm{Mpc}^{-1}`, ``dndlnm`` is evaluated for physical halo masses in :math:`M_\odot`, and ``cl_yk`` is the tSZ-CMB lensing cross-spectrum built from the specified halo-model ingredients.

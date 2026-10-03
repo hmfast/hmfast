@@ -190,6 +190,10 @@ class GalaxyTracer(Tracer):
         H_grid = cosmology.hubble_parameter(z) / (Const._c_ / 1e3)
         return H_grid * phi_prime_g_at_z
 
+    def _z_max(self, cosmology):
+        """Redshift above which every kernel term vanishes: the top of ``dndz``."""
+        return jnp.max(self.dndz[0])
+
     def _kernel_primary(self, cosmology, z):
         """
         Galaxy density term :math:`W_g(\\chi) = \\frac{H(z)}{c} \\frac{dN}{dz}`

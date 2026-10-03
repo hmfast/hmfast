@@ -147,6 +147,10 @@ class GalaxyLensingTracer(Tracer):
     # --- End JAX PyTree Registration ---
 
 
+    def _z_max(self, cosmology):
+        """Redshift above which every kernel term vanishes: the top of ``dndz``."""
+        return jnp.max(self.dndz[0])
+
     def _kernel_primary(self, cosmology, z):
         """
         Weak lensing shear term (:math:`n=-1`, :math:`a=2`: projected with :math:`f^{(2)}_\\ell\\, j_\\ell/(k\\chi)^2`) of the galaxy lensing

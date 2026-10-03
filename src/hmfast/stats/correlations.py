@@ -36,10 +36,12 @@ def _log_grid(x, name):
 def _transform(kind, x_bytes, nu, extrap):
     """Jitted mcfit transform along axis 0, built once per grid outside any trace."""
     x = np.frombuffer(x_bytes, dtype=np.float64)
-    if kind == "P2xi":
-        T = mcfit.P2xi(x, lowring=True, backend="jax")
-    else:
-        T = mcfit.C2w(x, nu=nu, lowring=True, backend="jax")
+    # mcfit plans on concrete values, so keep its setup concrete even when first reached under a trace.
+    with jax.ensure_compile_time_eval():
+        if kind == "P2xi":
+            T = mcfit.P2xi(x, lowring=True, backend="jax")
+        else:
+            T = mcfit.C2w(x, nu=nu, lowring=True, backend="jax")
     return jax.jit(functools.partial(T, axis=0, extrap=extrap))
 
 
@@ -57,7 +59,7 @@ def _fftlog_interp(kind, x, f, y, nu, extrap):
     return jnp.squeeze(g.reshape(ln_y.shape + trailing))
 
 
-def corr_3d(k, pk, r, extrap=True):
+def corr_3d(cosmology, k, pk, r):
     """
     3D correlation function of a tabulated power spectrum,
 
@@ -65,36 +67,35 @@ def corr_3d(k, pk, r, extrap=True):
 
         \\xi(r) = \\frac{1}{2\\pi^2} \\int dk\\, k^2\\, P(k)\\, j_0(kr),
 
-    by an FFTLog transform (:class:`mcfit.P2xi`) interpolated onto ``r``.
-    Works for any :math:`P(k)`, e.g. :meth:`Cosmology.pk` or
-    :meth:`~hmfast.stats.pk.Pk.pk_tot`. Not jitted itself, but traceable
-    inside a user's ``jax.jit``/``jax.grad`` as long as ``k`` stays concrete.
+    by an FFTLog transform interpolated onto ``r``. Works for matter power
+    spectra (:meth:`~hmfast.cosmology.Cosmology.pk`) and halo-model power
+    spectra (:class:`~hmfast.stats.Pk`).
 
     Parameters
     ----------
+    cosmology : Cosmology
+        Cosmology object.
     k : array-like
-        Wavenumber grid in :math:`\\mathrm{Mpc}^{-1}`; concrete and
-        log-uniform, e.g. ``np.geomspace(1e-4, 50, 1000)``.
+        Wavenumbers in :math:`\\mathrm{Mpc}^{-1}`, shape :math:`(N_k,)`;
+        concrete, positive and log-uniformly spaced.
     pk : jnp.ndarray
-        Power spectrum in :math:`\\mathrm{Mpc}^3`, shape :math:`(N_k, ...)`;
-        trailing axes (e.g. redshift) are transformed independently.
+        Power spectrum in :math:`\\mathrm{Mpc}^3` on ``k``, shape :math:`(N_k,)` at
+        one redshift or :math:`(N_k, N_z)` at :math:`N_z` redshifts.
     r : float or jnp.ndarray
-        Comoving separation in :math:`\\mathrm{Mpc}`. Only reliable well
-        inside :math:`[1/k_{\\max}, 1/k_{\\min}]`; FFTLog rings near the edges.
-    extrap : bool, default True
-        Power-law extrapolate ``pk`` beyond the ends of ``k`` before transforming.
+        Comoving separations in :math:`\\mathrm{Mpc}`, scalar or shape :math:`(N_r,)`.
+        Only reliable well inside :math:`[1/k_{\\max}, 1/k_{\\min}]`; FFTLog rings near the edges.
 
     Returns
     -------
     xi : jnp.ndarray
-        Correlation function with shape :math:`(N_r, ...)`, where singleton
+        Correlation function with shape :math:`(N_r, N_z)`, where singleton
         dimensions get squeezed before return.
     """
     k = _log_grid(k, "k")
-    return _fftlog_interp("P2xi", k, pk, r, 0, extrap)
+    return _fftlog_interp("P2xi", k, pk, r, 0, cosmology.extrapolate_k)
 
 
-def corr_angular(l, cl, theta, type="NN", extrap=True):
+def corr_angular(cosmology, l, cl, theta, type="NN"):
     """
     Flat-sky angular correlation function of a tabulated angular power spectrum,
 
@@ -102,12 +103,11 @@ def corr_angular(l, cl, theta, type="NN", extrap=True):
 
         \\xi(\\theta) = \\int \\frac{d\\ell\\, \\ell}{2\\pi}\\, C_\\ell\\, J_\\nu(\\ell\\theta),
 
-    by an FFTLog transform (:class:`mcfit.C2w`) interpolated onto ``theta``,
-    with :math:`\\nu = 0, 2, 0, 4` for ``type`` = NN (e.g. :math:`w(\\theta)`),
+    by an FFTLog transform interpolated onto ``theta``, with
+    :math:`\\nu = 0, 2, 0, 4` for ``type`` = NN (e.g. :math:`w(\\theta)`),
     NG (:math:`\\gamma_t`), GG+ (:math:`\\xi_+`), GG- (:math:`\\xi_-`).
-    Works for any :math:`C_\\ell`, e.g. :func:`~hmfast.stats.cl` or
-    :func:`~hmfast.stats.cl_linbias`. Not jitted itself, but traceable
-    inside a user's ``jax.jit``/``jax.grad`` as long as ``l`` stays concrete.
+    Works for halo-model (:func:`~hmfast.stats.cl`) and linear-bias
+    (:func:`~hmfast.stats.cl_linbias`) angular power spectra.
 
     .. warning::
 
@@ -117,31 +117,33 @@ def corr_angular(l, cl, theta, type="NN", extrap=True):
 
     For clustering at large ``theta``, compute :math:`C_\\ell` with
     ``l_limber > 0``, since Limber is inaccurate at low :math:`\\ell`. Shear
-    :math:`C_\\ell` vanish at :math:`\\ell \\le 1`, so with ``extrap=True`` start
-    ``l`` at :math:`\\ell \\ge 2`; power-law extrapolation of a zero gives NaN.
+    :math:`C_\\ell` vanish at :math:`\\ell \\le 1`, so if
+    :attr:`Cosmology.extrapolate_k` is True start ``l`` at :math:`\\ell \\ge 2`;
+    power-law extrapolation of a zero gives NaN.
 
     Parameters
     ----------
+    cosmology : Cosmology
+        Cosmology object.
     l : array-like
-        Multipole grid; concrete and log-uniform, e.g. ``np.geomspace(1, 1e5, 512)``.
+        Multipoles, shape :math:`(N_\\ell,)`; concrete, positive and log-uniformly spaced.
     cl : jnp.ndarray
-        Angular power spectrum, shape :math:`(N_\\ell, ...)`; trailing axes
-        (e.g. tomographic pairs) are transformed independently.
+        Angular power spectrum on ``l``, shape :math:`(N_\\ell,)` for one spectrum
+        or :math:`(N_\\ell, N_c)` for :math:`N_c` spectra stacked as columns
+        (e.g. tomographic bin pairs).
     theta : float or jnp.ndarray
-        Angular separation in degrees. Only reliable well inside
-        :math:`[1/\\ell_{\\max}, 1/\\ell_{\\min}]` (radians); FFTLog rings near the edges.
+        Angular separations in degrees, scalar or shape :math:`(N_\\theta,)`. Only reliable
+        well inside :math:`[1/\\ell_{\\max}, 1/\\ell_{\\min}]` (radians); FFTLog rings near the edges.
     type : str, default "NN"
         Spin combination; ``type`` ∈ {"NN", "NG", "GG+", "GG-"} (static).
-    extrap : bool, default True
-        Power-law extrapolate ``cl`` beyond the ends of ``l`` before transforming.
 
     Returns
     -------
     xi : jnp.ndarray
-        Correlation function with shape :math:`(N_\\theta, ...)`, where
-        singleton dimensions get squeezed before return.
+        Correlation function with shape :math:`(N_\\theta, N_c)`, where singleton
+        dimensions get squeezed before return.
     """
     if type not in _ANGULAR_NU:
         raise ValueError(f"type must be one of {sorted(_ANGULAR_NU)}; got {type!r}.")
     l = _log_grid(l, "l")
-    return _fftlog_interp("C2w", l, cl, jnp.deg2rad(theta), _ANGULAR_NU[type], extrap)
+    return _fftlog_interp("C2w", l, cl, jnp.deg2rad(theta), _ANGULAR_NU[type], cosmology.extrapolate_k)
