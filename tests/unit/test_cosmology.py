@@ -109,7 +109,7 @@ class TestGrowthAndPerturbations:
         r = jnp.geomspace(1.0, 100.0, 20)
         z = jnp.array(0.5)
         cparams = fixed_cosmology._cosmo_params()
-        rho_mean_0 = cparams["Omega0_cb"] * cparams["Rho_crit_0"]
+        rho_mean_0 = cparams["Omega0_halo"] * cparams["Rho_crit_0"]
         m_from_r = 4.0 / 3.0 * jnp.pi * rho_mean_0 * r**3
         sigma_m_at_r = fixed_cosmology.sigma_m(m_from_r, z)
         sigma_r = fixed_cosmology.sigma_r(r, z)

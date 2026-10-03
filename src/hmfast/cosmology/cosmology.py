@@ -948,7 +948,16 @@ class Cosmology:
         z_grid_pk = self._z_grid_pk()
         D_grid = self.growth_factor(z_grid_pk)
         a_grid = 1.0 / (1.0 + z_grid_pk)
-        f_grid = jnp.gradient(jnp.log(D_grid), jnp.log(a_grid))
+        ln_D, ln_a = jnp.log(D_grid), jnp.log(a_grid)
+        f_grid = jnp.gradient(ln_D, ln_a)
+
+        # jnp.gradient is first order at the end nodes (no edge_order=2): use second-order one-sided stencils there.
+        def one_sided(y0, y1, y2, x0, x1, x2):
+            h1, h2 = x1 - x0, x2 - x1
+            return -(2 * h1 + h2) * y0 / (h1 * (h1 + h2)) + (h1 + h2) * y1 / (h1 * h2) - h1 * y2 / (h2 * (h1 + h2))
+
+        f_grid = f_grid.at[0].set(one_sided(*ln_D[:3], *ln_a[:3]))
+        f_grid = f_grid.at[-1].set(one_sided(*ln_D[-1:-4:-1], *ln_a[-1:-4:-1]))
 
         f = jnp.interp(z, z_grid_pk, f_grid, left=jnp.nan, right=jnp.nan)
 

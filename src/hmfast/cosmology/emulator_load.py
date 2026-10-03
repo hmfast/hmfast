@@ -6,6 +6,8 @@ specifically designed for loading cosmopower-style .npz emulator files.
 """
 
 import os
+import pickle
+import zipfile
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -14,6 +16,25 @@ from functools import partial
 
 # Enable 64-bit precision for better accuracy
 jax.config.update("jax_enable_x64", True)
+
+
+class _ListWrapper(list):
+    """Stand-in for TensorFlow's ListWrapper, which is pickled into cosmopower .npz files."""
+
+
+class _NoTFUnpickler(pickle.Unpickler):
+    def find_class(self, module, name):
+        if module.startswith("tensorflow") and name == "ListWrapper":
+            return _ListWrapper
+        return super().find_class(module, name)
+
+
+def _load_npz_dict(fp) -> dict:
+    """Read the pickled emulator dict from an open cosmopower .npz without importing TensorFlow."""
+    with zipfile.ZipFile(fp) as zf, zf.open("arr_0.npy") as arr:
+        np.lib.format.read_magic(arr)
+        np.lib.format.read_array_header_1_0(arr)
+        return _NoTFUnpickler(arr).load().flatten()[0]
 
 
 class EmulatorLoader:
@@ -60,7 +81,7 @@ class EmulatorLoader:
             raise IOError(f"Failed to load network from {filename}: does not exist.")
         
         with open(filename_npz, "rb") as fp:
-            fpz = np.load(fp, allow_pickle=True)["arr_0"].flatten()[0]
+            fpz = _load_npz_dict(fp)
             
             self.architecture = fpz["architecture"]
             self.n_layers = fpz["n_layers"]
@@ -218,7 +239,7 @@ class EmulatorLoaderPCA:
             raise IOError(f"Failed to load network from {filename}: does not exist.")
         
         with open(filename_npz, "rb") as fp:
-            fpz = np.load(fp, allow_pickle=True)["arr_0"].flatten()[0]
+            fpz = _load_npz_dict(fp)
             
             self.architecture = fpz["architecture"]
             self.n_layers = fpz["n_layers"]

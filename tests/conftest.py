@@ -39,6 +39,12 @@ def fixed_cosmology():
 
 
 @pytest.fixture(scope="session")
+def fixed_cosmology_m(fixed_cosmology):
+    """fixed_cosmology with ncdm_mode="m", the neutrino convention CCL uses; every CCL benchmark runs in it."""
+    return fixed_cosmology.update(ncdm_mode="m")
+
+
+@pytest.fixture(scope="session")
 def out_of_bounds_cosmology():
     """
     A cosmology with n_s outside lcdm:v1's trained bounds (0.8812-1.0492),

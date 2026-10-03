@@ -1,47 +1,52 @@
 """
-Concentrated stress-test benchmarks for hmfast.halos.profiles against CCL
-(NFW, GNFW, HOD, CIB Shang12) and class_sz (B16, B12), plus an inlined-numpy
-cross-check of the Maniyar+2021 CIB Mdot/SFR formulas. These are deliberately
-NOT the full parameter sweep done in tests/test_profiles.ipynb -- 1-3 canonical
-points per profile, not 10-60 random draws.
+Benchmarks for hmfast.halos.profiles against external ground truth: CCL for NFW, GNFW, HOD and Shang12 CIB, class_sz
+for B16 and B12, inlined transcriptions of class_sz's C source for the Maniyar+2021 CIB Mdot/SFR, and, for the generic
+Hankel-transform path (GNFW, B12, B16), the analytic truncated-NFW transform and quad integrals of the truncated GNFW.
 
-CCL sections require pyccl; the whole module is skipped if it isn't installed.
-Those tests are marked `ccl` (see pyproject.toml) so `pytest -m "not ccl"`
-skips them without needing pyccl at all. The B16/B12 sections additionally
-require the (separate) `classy_sz` package and are marked `class_sz`; neither
-package need be installed for the rest of this file to run.
+CCL comparisons run hmfast with ncdm_mode="m" against a CCL CosmologyCalculator with the same neutrino masses and fed
+hmfast's own P_lin, so residuals measure the profile formulas. Each profile is checked at three (M, z) points spanning
+group to cluster masses. Conventions bridged here: hmfast's HOD real()/fourier() are ng_bar-normalized, so CCL's raw
+HOD output is divided by ng_bar; hmfast's NFW returns M u / rho_m, so it is multiplied by rho_m = Rho_crit_0 * Omega0_m;
+CCL's GNFW real() does not apply x_out, so it is masked beyond x_out r_delta.
 
-Tolerances were derived empirically (not guessed): each canonical-point
-comparison below was run once at the fixed cosmology, and rtol was set to a
-round number with margin above the observed max % residual (noted per test).
-Reused from tests/test_profiles.ipynb's own established conventions:
-  - hmfast's `real()`/`fourier()` are ng_bar-normalized for HOD; CCL's raw HOD
-    output must be divided by ng_bar to match.
-  - CCL's GNFW `real()` doesn't enforce its own x_out truncation -- masked to
-    NaN for r > x_out*r_delta on the CCL side here, as in the notebook.
-  - hmfast's NFW real()/fourier() return density in units of the mean cb
-    density (rho_crit_0 * Omega0_cb); multiply by that factor to recover the
-    physical Msun/Mpc^3 convention used for comparison in this file.
+CCL tests are marked `ccl` and class_sz tests `class_sz`; each is skipped if its package is missing.
+
+Thresholds are ~2x the error measured when written (noted per test), so a ~2x degradation fails; lower them when
+accuracy improves. Errors are maximum relative errors unless stated otherwise.
 """
 
+import functools
+
+import jax
 import jax.numpy as jnp
+import mcfit
 import numpy as np
 import pytest
+from scipy.integrate import quad
 
-pyccl = pytest.importorskip("pyccl")
-pytestmark = pytest.mark.ccl
-
-from hmfast.halos import HaloModel
 from hmfast.halos.concentration import ConstantConcentration, D08Concentration
 from hmfast.halos.massdef import MassDefinition
 from hmfast.halos.profiles import (
+    B12PressureProfile,
+    B16DensityProfile,
     GNFWPressureProfile,
     M21CIBProfile,
     NFWMatterProfile,
     S12CIBProfile,
     Z07GalaxyHODProfile,
 )
+from hmfast.halos.profiles.base_profile import HaloProfile, HankelTransform
 from hmfast.halos.profiles.profiles_2pt import _fourier_2pt
+
+from .._shared import ccl_cosmology, peak_err, rel_err, shared
+from .._shared import halo_model as shared_halo_model
+
+try:
+    import pyccl
+except ImportError:
+    pyccl = None
+
+REQUIRES_CCL = [pytest.mark.ccl, pytest.mark.skipif(pyccl is None, reason="requires pyccl")]
 
 M_GRID = jnp.geomspace(1e10, 1e15, 40)
 R_GRID = np.geomspace(0.01, 2.0, 20)
@@ -53,454 +58,223 @@ def to_ccl_massdef(mass_def):
     return pyccl.halos.MassDef(mass_def.delta, reference)
 
 
-@pytest.fixture(scope="session")
-def cosmo_ccl(fixed_cosmology):
-    # A pyccl CosmologyCalculator fed hmfast's own P_lin(k, z), isolating profile-formula
-    # differences from any P(k) differences between the two codes' Boltzmann solvers.
-    h = fixed_cosmology.H0 / 100.0
-    z_wide = np.linspace(0.0, 3.0, 50)
-    a_wide = np.sort(1.0 / (1.0 + z_wide))
-    k_ref_jnp, _ = fixed_cosmology._pk_grid()
-    k_ref = np.asarray(k_ref_jnp)
-    pk_lin = np.asarray(
-        fixed_cosmology.pk(k_ref_jnp, jnp.asarray(1.0 / a_wide - 1.0), linear=True)
-    ).T
-    return pyccl.CosmologyCalculator(
-        Omega_c=fixed_cosmology.omega_cdm / h**2,
-        Omega_b=fixed_cosmology.omega_b / h**2,
-        h=h,
-        A_s=fixed_cosmology.A_s,
-        n_s=fixed_cosmology.n_s,
-        pk_linear={"a": a_wide, "k": k_ref, "delta_matter:delta_matter": pk_lin},
-    )
+def halo_model(cosmology, mass_def, concentration=None, **kwargs):
+    """HaloModel with shared components (so jitted kernels are reused across tests), D08 concentration by default."""
+    kwargs.setdefault("m_range", (M_GRID[0], M_GRID[-1]))
+    kwargs.setdefault("n_m", M_GRID.shape[0])
+    return shared_halo_model(cosmology=cosmology, mass_def=mass_def,
+                             concentration=concentration or shared(D08Concentration), **kwargs)
+
+
+@pytest.fixture(scope="module")
+def cosmo(fixed_cosmology_m):
+    return fixed_cosmology_m
+
+
+@pytest.fixture(scope="module")
+def cosmo_ccl(fixed_cosmology_m):
+    return ccl_cosmology(fixed_cosmology_m, pk_linear=True)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Profiles against CCL.
+# ---------------------------------------------------------------------------------------------------------------------
+
+D08_MASS_DEFS = [(200, "critical"), (200, "mean"), ("vir", "critical")]
 
 
 class TestNFWMatterProfileCCL:
-    # real()/fourier() match CCL's HaloProfileNFW at 200c (rtol 1%, observed max ~0.13%/0.11%).
-    def test_real_fourier_match_ccl_at_canonical_point(
-        self, fixed_cosmology, cosmo_ccl
-    ):
-        md = MassDefinition(200, "critical")
-        hm = HaloModel(
-            cosmology=fixed_cosmology,
-            mass_def=md,
-            concentration=D08Concentration(),
-            m_range=(M_GRID[0], M_GRID[-1]),
-            n_m=M_GRID.shape[0],
-        )
+    pytestmark = REQUIRES_CCL
+
+    # real() and fourier() against CCL's truncated, analytic-Fourier HaloProfileNFW for each D08 mass definition
+    # (measured 9.5e-5 / 7.9e-5).
+    @pytest.mark.parametrize("m,z", [(1e12, 0.0), (1e14, 0.5), (1e15, 1.0)])
+    @pytest.mark.parametrize("delta,reference", D08_MASS_DEFS)
+    def test_real_and_fourier(self, cosmo, cosmo_ccl, delta, reference, m, z):
+        md = shared(MassDefinition, delta, reference)
+        hm = halo_model(cosmo, md)
         md_ccl = to_ccl_massdef(md)
-        conc_ccl = pyccl.halos.concentration.ConcentrationDuffy08(mass_def=md_ccl)
-        nfw_ccl = pyccl.halos.profiles.nfw.HaloProfileNFW(
-            mass_def=md_ccl,
-            concentration=conc_ccl,
-            truncated=True,
-            fourier_analytic=True,
-        )
-        m_val, z_val, a_val = 1e14, 0.5, 1.0 / 1.5
-        cparams = fixed_cosmology._cosmo_params()
-        rho_mean_0 = cparams["Rho_crit_0"] * cparams["Omega0_cb"]
-
+        nfw_ccl = pyccl.halos.HaloProfileNFW(mass_def=md_ccl, concentration=pyccl.halos.ConcentrationDuffy08(
+            mass_def=md_ccl), truncated=True, fourier_analytic=True)
+        a = 1.0 / (1.0 + z)
+        p = cosmo._cosmo_params()
+        rho_m = p["Rho_crit_0"] * p["Omega0_m"]
         nfw = NFWMatterProfile()
-        real_hm = (
-            np.asarray(nfw.real(hm, jnp.asarray(R_GRID), m_val, z_val)) * rho_mean_0
-        )
-        real_ccl = np.asarray(nfw_ccl.real(cosmo_ccl, R_GRID, m_val, a_val))
-        mask = real_ccl != 0
-        assert np.allclose(real_hm[mask], real_ccl[mask], rtol=0.01)
 
-        four_hm = (
-            np.asarray(nfw.fourier(hm, jnp.asarray(K_GRID), m_val, z_val)) * rho_mean_0
-        )
-        four_ccl = np.asarray(nfw_ccl.fourier(cosmo_ccl, K_GRID, m_val, a_val))
-        assert np.allclose(four_hm, four_ccl, rtol=0.01)
+        real_ccl = nfw_ccl.real(cosmo_ccl, R_GRID, m, a)
+        assert rel_err(np.asarray(nfw.real(hm, jnp.asarray(R_GRID), m, z)) * rho_m, real_ccl) < 2e-4
+        four_ccl = nfw_ccl.fourier(cosmo_ccl, K_GRID, m, a)
+        assert rel_err(np.asarray(nfw.fourier(hm, jnp.asarray(K_GRID), m, z)) * rho_m, four_ccl) < 1.6e-4
 
-    # real() matches CCL across all 4 mass defs at the same canonical point (D08 skips 500c).
-    @pytest.mark.parametrize(
-        "delta,reference", [(200, "critical"), (200, "mean"), ("vir", "critical")]
-    )
-    def test_real_matches_ccl_across_mass_defs(
-        self, fixed_cosmology, cosmo_ccl, delta, reference
-    ):
-        md = MassDefinition(delta, reference)
-        hm = HaloModel(
-            cosmology=fixed_cosmology,
-            mass_def=md,
-            concentration=D08Concentration(),
-            m_range=(M_GRID[0], M_GRID[-1]),
-            n_m=M_GRID.shape[0],
-        )
-        md_ccl = to_ccl_massdef(md)
-        conc_ccl = pyccl.halos.concentration.ConcentrationDuffy08(mass_def=md_ccl)
-        nfw_ccl = pyccl.halos.profiles.nfw.HaloProfileNFW(
-            mass_def=md_ccl,
-            concentration=conc_ccl,
-            truncated=True,
-            fourier_analytic=True,
-        )
-        m_val, z_val, a_val = 1e14, 0.5, 1.0 / 1.5
-        cparams = fixed_cosmology._cosmo_params()
-        rho_mean_0 = cparams["Rho_crit_0"] * cparams["Omega0_cb"]
 
-        nfw = NFWMatterProfile()
-        real_hm = (
-            np.asarray(nfw.real(hm, jnp.asarray(R_GRID), m_val, z_val)) * rho_mean_0
-        )
-        real_ccl = np.asarray(nfw_ccl.real(cosmo_ccl, R_GRID, m_val, a_val))
-        mask = real_ccl != 0
-        assert np.allclose(real_hm[mask], real_ccl[mask], rtol=0.01)
+GNFW_A10 = dict(P0=8.130, c500=1.156, alpha=1.062, beta=5.4807, gamma=0.3292, alpha_P=0.12, P0_hexp=-1.0)
+
+
+def _gnfw_pair(md, B=1.4, x_out=4.0, nq=256):
+    gnfw = GNFWPressureProfile(B=B, x_out=x_out, **GNFW_A10)
+    gnfw_ccl = pyccl.halos.HaloProfilePressureGNFW(mass_def=to_ccl_massdef(md), mass_bias=1.0 / B, qrange=(1e-5, 1e5),
+                                                   nq=nq, x_out=x_out, **GNFW_A10)
+    return gnfw, gnfw_ccl
 
 
 class TestGNFWPressureProfileCCL:
-    # real() matches CCL's HaloProfilePressureGNFW at 500c (rtol 2%, observed max ~0.26%).
-    # CCL's own real() doesn't enforce x_out -- masked to NaN for r > x_out*r500c, as in the notebook.
-    def test_real_matches_ccl_at_canonical_point(self, fixed_cosmology, cosmo_ccl):
-        md = MassDefinition(500, "critical")
-        hm = HaloModel(
-            cosmology=fixed_cosmology,
-            mass_def=md,
-            concentration=ConstantConcentration(c=5),
-            m_range=(M_GRID[0], M_GRID[-1]),
-            n_m=M_GRID.shape[0],
-        )
-        md_ccl = to_ccl_massdef(md)
-        B, x_out = 1.4, 4.0
-        gnfw = GNFWPressureProfile(
-            P0=8.130,
-            c500=1.156,
-            alpha=1.062,
-            beta=5.4807,
-            gamma=0.3292,
-            B=B,
-            alpha_P=0.12,
-            P0_hexp=-1.0,
-            x_out=x_out,
-        )
-        gnfw_ccl = pyccl.halos.profiles.pressure_gnfw.HaloProfilePressureGNFW(
-            mass_def=md_ccl,
-            mass_bias=1.0 / B,
-            P0=8.130,
-            c500=1.156,
-            alpha=1.062,
-            alpha_P=0.12,
-            beta=5.4807,
-            gamma=0.3292,
-            P0_hexp=-1.0,
-            qrange=(1e-5, 1e5),
-            nq=256,
-            x_out=x_out,
-        )
-        m_val, z_val, a_val = 1e14, 0.5, 1.0 / 1.5
+    pytestmark = REQUIRES_CCL
 
-        r500c = md_ccl.get_radius(cosmo_ccl, m_val / B, a_val) / a_val
-        real_hm = np.asarray(gnfw.real(hm, jnp.asarray(R_GRID), m_val, z_val))
-        real_ccl_raw = np.asarray(gnfw_ccl.real(cosmo_ccl, R_GRID, m_val, a_val))
-        real_ccl = np.where(R_GRID <= x_out * r500c, real_ccl_raw, np.nan)
-        mask = np.isfinite(real_ccl) & (real_ccl != 0)
-        assert np.allclose(real_hm[mask], real_ccl[mask], rtol=0.02)
+    # real() at 500c, the definition GNFW is calibrated for, and at 200c after conversion (measured 2.3e-4).
+    @pytest.mark.parametrize("m,z", [(1e13, 0.0), (3e14, 0.3), (1e15, 1.0)])
+    @pytest.mark.parametrize("delta", [500, 200])
+    def test_real(self, cosmo, cosmo_ccl, delta, m, z):
+        md = shared(MassDefinition, delta, "critical")
+        hm = halo_model(cosmo, md, shared(ConstantConcentration, c=5))
+        gnfw, gnfw_ccl = _gnfw_pair(md)
+        a = 1.0 / (1.0 + z)
+        r_delta = to_ccl_massdef(md).get_radius(cosmo_ccl, m / 1.4, a) / a
+        inside = R_GRID <= 4.0 * r_delta
+        real_ccl = gnfw_ccl.real(cosmo_ccl, R_GRID, m, a)
+        assert rel_err(np.asarray(gnfw.real(hm, jnp.asarray(R_GRID), m, z))[inside], real_ccl[inside]) < 5e-4
 
-        # fourier(), checked at a k range pre-verified clear of GNFW's known rare zero-crossing
-        # spikes (rtol 3%, observed max ~1.5%) -- not a statistically-bounded statement.
-        four_hm = np.asarray(gnfw.fourier(hm, jnp.asarray(K_GRID), m_val, z_val))
-        four_ccl = np.asarray(gnfw_ccl.fourier(cosmo_ccl, K_GRID, m_val, a_val))
-        assert np.allclose(four_hm, four_ccl, rtol=0.03)
+    # fourier() at 500c against CCL's sine-transform table (nq = 256). Error is max |difference| over the k -> 0 value,
+    # since the transform crosses zero (measured 4.0e-4).
+    @pytest.mark.parametrize("m,z", [(1e13, 0.0), (3e14, 0.3), (1e15, 1.0)])
+    def test_fourier(self, cosmo, cosmo_ccl, m, z):
+        md = shared(MassDefinition, 500, "critical")
+        hm = halo_model(cosmo, md, shared(ConstantConcentration, c=5))
+        gnfw, gnfw_ccl = _gnfw_pair(md)
+        k = np.concatenate([[1e-4], K_GRID])
+        want = gnfw_ccl.fourier(cosmo_ccl, k, m, 1.0 / (1.0 + z))
+        assert peak_err(np.asarray(gnfw.fourier(hm, jnp.asarray(k), m, z)), want) < 8e-4
 
-    # real() matches CCL after converting to a non-native (200c) mass def -- 1 extra point,
-    # not a full 4-way sweep, since GNFW is deliberately mass-def sensitive (see test_profiles.py).
-    def test_real_matches_ccl_at_non_native_mass_def(self, fixed_cosmology, cosmo_ccl):
-        md = MassDefinition(200, "critical")
-        hm = HaloModel(
-            cosmology=fixed_cosmology,
-            mass_def=md,
-            concentration=ConstantConcentration(c=5),
-            m_range=(M_GRID[0], M_GRID[-1]),
-            n_m=M_GRID.shape[0],
-        )
-        md_ccl = to_ccl_massdef(md)
-        gnfw = GNFWPressureProfile()
-        gnfw_ccl = pyccl.halos.profiles.pressure_gnfw.HaloProfilePressureGNFW(
-            mass_def=md_ccl,
-            mass_bias=1.0 / 1.4,
-            P0=8.130,
-            c500=1.156,
-            alpha=1.062,
-            alpha_P=0.12,
-            beta=5.4807,
-            gamma=0.3292,
-            P0_hexp=-1.0,
-            qrange=(1e-5, 1e5),
-            nq=256,
-            x_out=4.0,
-        )
-        m_val, z_val, a_val = 1e14, 0.5, 1.0 / 1.5
-        r200c = md_ccl.get_radius(cosmo_ccl, m_val / 1.4, a_val) / a_val
-        real_hm = np.asarray(gnfw.real(hm, jnp.asarray(R_GRID), m_val, z_val))
-        real_ccl_raw = np.asarray(gnfw_ccl.real(cosmo_ccl, R_GRID, m_val, a_val))
-        real_ccl = np.where(R_GRID <= 4.0 * r200c, real_ccl_raw, np.nan)
-        mask = np.isfinite(real_ccl) & (real_ccl != 0)
-        assert np.allclose(real_hm[mask], real_ccl[mask], rtol=0.02)
+
+HOD_PARAMS = dict(sigma_log10M=0.68, alpha_s=1.30, M1_prime=10**12.87, M_min=10**11.97, M0=0.0)
+
+
+def _hod_pair(md):
+    md_ccl = to_ccl_massdef(md)
+    hod = Z07GalaxyHODProfile(**HOD_PARAMS)
+    hod_ccl = pyccl.halos.HaloProfileHOD(mass_def=md_ccl, concentration=pyccl.halos.ConcentrationDuffy08(
+        mass_def=md_ccl), log10Mmin_0=11.97, siglnM_0=0.68 * np.log(10), log10M1_0=12.87, alpha_0=1.30, log10M0_0=0.0)
+    return hod, hod_ccl
 
 
 class TestHODProfileCCL:
-    # real()/fourier() match CCL's HaloProfileHOD at 200c, dividing CCL's raw output by
-    # ng_bar per the notebook's established convention (rtol 1%, observed max ~0.12%/0.02%).
-    def test_real_fourier_match_ccl_at_canonical_point(
-        self, fixed_cosmology, cosmo_ccl
-    ):
-        md = MassDefinition(200, "critical")
-        hm = HaloModel(
-            cosmology=fixed_cosmology,
-            mass_def=md,
-            concentration=D08Concentration(),
-            m_range=(M_GRID[0], M_GRID[-1]),
-            n_m=M_GRID.shape[0],
-        )
+    pytestmark = REQUIRES_CCL
+
+    # real() and fourier() against CCL's HaloProfileHOD divided by ng_bar (measured 8.9e-5 / 4.5e-5).
+    @pytest.mark.parametrize("m,z", [(1e12, 0.0), (5e12, 0.5), (1e14, 1.0)])
+    def test_real_and_fourier(self, cosmo, cosmo_ccl, m, z):
+        md = shared(MassDefinition, 200, "critical")
+        hm = halo_model(cosmo, md)
+        hod, hod_ccl = _hod_pair(md)
+        a = 1.0 / (1.0 + z)
+        ngbar = float(hod.ng_bar(hm, z))
+        real_ccl = hod_ccl.real(cosmo_ccl, R_GRID, m, a) / ngbar
+        assert rel_err(hod.real(hm, jnp.asarray(R_GRID), m, z), real_ccl) < 2e-4
+        four_ccl = hod_ccl.fourier(cosmo_ccl, K_GRID, m, a) / ngbar
+        assert rel_err(hod.fourier(hm, jnp.asarray(K_GRID), m, z), four_ccl) < 1e-4
+
+    # The 1-halo Fourier 2-point term against CCL's Profile2ptHOD (measured 1.0e-4 at 1e14). hmfast's sat-sat term is
+    # n_sat^2 u^2 = N_c^2 N_s^2 u^2; Poisson satellites that require a central give <N_s(N_s-1)> = N_c N_s^2
+    # (1.7% / 1.5% at 1e12 / 5e12, where N_c < 1).
+    @pytest.mark.parametrize("m,z", [
+        pytest.param(1e12, 0.0, marks=pytest.mark.xfail(strict=True, reason="sat-sat term carries N_c^2, not N_c")),
+        pytest.param(5e12, 0.5, marks=pytest.mark.xfail(strict=True, reason="sat-sat term carries N_c^2, not N_c")),
+        (1e14, 1.0),
+    ])
+    def test_fourier_2pt(self, cosmo, cosmo_ccl, m, z):
+        md = shared(MassDefinition, 200, "critical")
+        hm = halo_model(cosmo, md)
+        hod, hod_ccl = _hod_pair(md)
+        ngbar = float(hod.ng_bar(hm, z))
+        want = pyccl.halos.Profile2ptHOD().fourier_2pt(cosmo_ccl, K_GRID, m, 1.0 / (1.0 + z), hod_ccl, prof2=hod_ccl)
+        got = np.asarray(_fourier_2pt(hm, hod, hod, jnp.asarray(K_GRID), m, z)) * ngbar**2
+        assert rel_err(got, want) < 2e-4
+
+    # ng_bar(z) and galaxy_bias(z) against CCL's HMCalculator mass integrals. Both run on fine grids from 1e8, where
+    # N_gal vanishes, so neither the quadrature nor CCL's low-mass mass-function correction matters
+    # (measured 1.3e-4 / 2.2e-5).
+    @pytest.mark.parametrize("z", [0.0, 1.0, 2.0, 3.0])
+    def test_ng_bar_and_galaxy_bias(self, cosmo, cosmo_ccl, z):
+        md = shared(MassDefinition, 200, "critical")
+        hm = halo_model(cosmo, md, m_range=(1e8, 1e16), n_m=256, hm_consistency=False)
+        hod, hod_ccl = _hod_pair(md)
         md_ccl = to_ccl_massdef(md)
-        conc_ccl = pyccl.halos.concentration.ConcentrationDuffy08(mass_def=md_ccl)
-        hod = Z07GalaxyHODProfile(
-            sigma_log10M=0.68, alpha_s=1.30, M1_prime=10**12.87, M_min=10**11.97, M0=0.0
-        )
-        hod_ccl = pyccl.halos.profiles.hod.HaloProfileHOD(
-            mass_def=md_ccl,
-            concentration=conc_ccl,
-            log10Mmin_0=11.97,
-            siglnM_0=0.68 * np.log(10),
-            log10M1_0=12.87,
-            alpha_0=1.30,
-            log10M0_0=0.0,
-        )
-        m_val, z_val, a_val = 5e12, 0.5, 1.0 / 1.5
-        ngbar = float(hod.ng_bar(hm, z_val))
-
-        real_hm = np.asarray(hod.real(hm, jnp.asarray(R_GRID), m_val, z_val))
-        real_ccl = np.asarray(hod_ccl.real(cosmo_ccl, R_GRID, m_val, a_val)) / ngbar
-        mask = real_ccl != 0
-        assert np.allclose(real_hm[mask], real_ccl[mask], rtol=0.01)
-
-        four_hm = np.asarray(hod.fourier(hm, jnp.asarray(K_GRID), m_val, z_val))
-        four_ccl = np.asarray(hod_ccl.fourier(cosmo_ccl, K_GRID, m_val, a_val)) / ngbar
-        assert np.allclose(four_hm, four_ccl, rtol=0.01)
-
-    # The 1-halo Fourier 2-point term matches CCL's Profile2ptHOD at the canonical point
-    # (rtol 3%, observed max ~1.5%), a single snapshot per the notebook's "bonus" check.
-    def test_fourier_2pt_matches_ccl_profile2pthod(self, fixed_cosmology, cosmo_ccl):
-        md = MassDefinition(200, "critical")
-        hm = HaloModel(
-            cosmology=fixed_cosmology,
-            mass_def=md,
-            concentration=D08Concentration(),
-            m_range=(M_GRID[0], M_GRID[-1]),
-            n_m=M_GRID.shape[0],
-        )
-        md_ccl = to_ccl_massdef(md)
-        conc_ccl = pyccl.halos.concentration.ConcentrationDuffy08(mass_def=md_ccl)
-        hod = Z07GalaxyHODProfile(
-            sigma_log10M=0.68, alpha_s=1.30, M1_prime=10**12.87, M_min=10**11.97, M0=0.0
-        )
-        hod_ccl = pyccl.halos.profiles.hod.HaloProfileHOD(
-            mass_def=md_ccl,
-            concentration=conc_ccl,
-            log10Mmin_0=11.97,
-            siglnM_0=0.68 * np.log(10),
-            log10M1_0=12.87,
-            alpha_0=1.30,
-            log10M0_0=0.0,
-        )
-        m_val, z_val, a_val = 5e12, 0.5, 1.0 / 1.5
-        ngbar = float(hod.ng_bar(hm, z_val))
-
-        prof2pt = pyccl.halos.profiles_2pt.Profile2ptHOD()
-        two_pt_ccl = prof2pt.fourier_2pt(
-            cosmo_ccl, K_GRID, m_val, a_val, prof=hod_ccl, prof2=hod_ccl
-        )
-        two_pt_hm = np.asarray(
-            _fourier_2pt(hm, hod, hod, jnp.asarray(K_GRID), m_val, z_val)
-        ) * (ngbar**2)
-        assert np.allclose(two_pt_hm, two_pt_ccl, rtol=0.03)
+        hmc = pyccl.halos.HMCalculator(mass_function=pyccl.halos.MassFuncTinker08(mass_def=md_ccl),
+                                       halo_bias=pyccl.halos.HaloBiasTinker10(mass_def=md_ccl), mass_def=md_ccl,
+                                       log10M_min=8.0, log10M_max=16.0, nM=1024)
+        a = 1.0 / (1.0 + z)
+        ng_ccl = hod_ccl.get_normalization(cosmo_ccl, a, hmc=hmc)
+        bg_ccl = hmc.I_1_1(cosmo_ccl, 1e-5, a, hod_ccl) / ng_ccl
+        assert rel_err(hod.ng_bar(hm, z), ng_ccl) < 2.6e-4
+        assert rel_err(hod.galaxy_bias(hm, z), bg_ccl) < 5e-5
 
 
 class TestS12CIBProfileCCL:
-    # real()/fourier() match CCL's HaloProfileCIBShang12 at 200c (rtol 1%, observed max ~0.19%/0.06%).
-    def test_real_fourier_match_ccl_at_canonical_point(
-        self, fixed_cosmology, cosmo_ccl
-    ):
-        md = MassDefinition(200, "critical")
-        hm = HaloModel(
-            cosmology=fixed_cosmology,
-            mass_def=md,
-            concentration=D08Concentration(),
-            m_range=(M_GRID[0], M_GRID[-1]),
-            n_m=M_GRID.shape[0],
-        )
+    pytestmark = REQUIRES_CCL
+
+    # real() and fourier() against CCL's HaloProfileCIBShang12 (measured 1.6e-4 / 6.3e-5). CCL integrates the satellite
+    # luminosity with Simpson on 10 nodes per whole decade above M_min, which is under-resolved below ~1e13.
+    @pytest.mark.parametrize("m,z", [(1e13, 0.0), (5e13, 0.5), (1e15, 1.0)])
+    def test_real_and_fourier(self, cosmo, cosmo_ccl, m, z):
+        md = shared(MassDefinition, 200, "critical")
+        hm = halo_model(cosmo, md)
         md_ccl = to_ccl_massdef(md)
-        conc_ccl = pyccl.halos.concentration.ConcentrationDuffy08(mass_def=md_ccl)
-        cib = S12CIBProfile(
-            nu=100,
-            L0=6.4e-8,
-            alpha=0.36,
-            beta=1.75,
-            gamma=1.7,
-            T0=24.4,
-            M_eff=10**12.6,
-            sigma2_LM=0.707**2,
-            delta=3.6,
-            z_p=1e100,
-            M_min=10**11.5,
-        )
-        cib_ccl = pyccl.halos.profiles.cib_shang12.HaloProfileCIBShang12(
-            nu_GHz=100,
-            mass_def=md_ccl,
-            concentration=conc_ccl,
-            alpha=0.36,
-            T0=24.4,
-            beta=1.75,
-            gamma=1.7,
-            s_z=3.6,
-            log10Meff=12.6,
-            siglog10M=0.707,
-            Mmin=10**11.5,
-            L0=6.4e-8,
-        )
-        m_val, z_val, a_val = 5e13, 0.5, 1.0 / 1.5
+        cib = S12CIBProfile(nu=100, L0=6.4e-8, alpha=0.36, beta=1.75, gamma=1.7, T0=24.4, M_eff=10**12.6,
+                            sigma2_LM=0.707**2, delta=3.6, z_p=1e100, M_min=10**11.5)
+        cib_ccl = pyccl.halos.HaloProfileCIBShang12(
+            nu_GHz=100, mass_def=md_ccl, concentration=pyccl.halos.ConcentrationDuffy08(mass_def=md_ccl), alpha=0.36,
+            T0=24.4, beta=1.75, gamma=1.7, s_z=3.6, log10Meff=12.6, siglog10M=0.707, Mmin=10**11.5, L0=6.4e-8)
+        a = 1.0 / (1.0 + z)
+        assert rel_err(cib.real(hm, jnp.asarray(R_GRID), m, z), cib_ccl.real(cosmo_ccl, R_GRID, m, a)) < 3.2e-4
+        assert rel_err(cib.fourier(hm, jnp.asarray(K_GRID), m, z), cib_ccl.fourier(cosmo_ccl, K_GRID, m, a)) < 1.3e-4
 
-        real_hm = np.asarray(cib.real(hm, jnp.asarray(R_GRID), m_val, z_val))
-        real_ccl = np.asarray(cib_ccl.real(cosmo_ccl, R_GRID, m_val, a_val))
-        mask = real_ccl != 0
-        assert np.allclose(real_hm[mask], real_ccl[mask], rtol=0.01)
 
-        four_hm = np.asarray(cib.fourier(hm, jnp.asarray(K_GRID), m_val, z_val))
-        four_ccl = np.asarray(cib_ccl.fourier(cosmo_ccl, K_GRID, m_val, a_val))
-        assert np.allclose(four_hm, four_ccl, rtol=0.01)
+# ---------------------------------------------------------------------------------------------------------------------
+# Profiles against class_sz.
+# ---------------------------------------------------------------------------------------------------------------------
 
 
 class TestB16DensityProfileClassSZ:
-    # real() matches class_sz's get_gas_profile_at_x_M_z_b16_200c at the notebook's canonical
-    # point, applying the confirmed 1/h^2 unit correction (rtol 1%, observed max ~0.26%).
+    # real() against class_sz's get_gas_profile_at_x_M_z_b16_200c, whose output carries an extra 1/h^2
+    # (rtol 1%, measured ~0.26%).
     @pytest.mark.class_sz
-    def test_real_matches_classy_sz_at_canonical_point(self, fixed_cosmology):
-        from hmfast.halos.profiles import B16DensityProfile
-
+    def test_real(self, cosmo):
         classy_sz = pytest.importorskip("classy_sz")
-        ClassSZ = classy_sz.Class
-        md = MassDefinition(200, "critical")
-        hm = HaloModel(
-            cosmology=fixed_cosmology,
-            mass_def=md,
-            concentration=D08Concentration(),
-            m_range=(M_GRID[0], M_GRID[-1]),
-            n_m=M_GRID.shape[0],
-        )
-        b16 = B16DensityProfile(
-            A_rho0=4000.0,
-            A_alpha=0.88,
-            A_beta=3.83,
-            alpha_m_rho0=0.29,
-            alpha_m_alpha=-0.03,
-            alpha_m_beta=0.04,
-            alpha_z_rho0=-0.66,
-            alpha_z_alpha=0.19,
-            alpha_z_beta=-0.025,
-        )
-        m_val, z_val = 1e14, 0.3
-        h = fixed_cosmology.H0 / 100.0
-
-        cosmo_csz = ClassSZ()
-        cosmo_csz.set({"output": "gas_pressure_profile_2h,gas_density_profile_2h"})
-        cosmo_csz.compute_class_szfast()
-        csz_kwargs = dict(
-            A_rho0=4000.0,
-            A_alpha=0.88,
-            A_beta=3.83,
-            alpha_m_rho0=0.29,
-            alpha_m_alpha=-0.03,
-            alpha_m_beta=0.04,
-            alpha_z_rho0=-0.66,
-            alpha_z_alpha=0.19,
-            alpha_z_beta=-0.025,
-            alphap_m_rho0=0.29,
-            alphap_m_alpha=-0.03,
-            alphap_m_beta=0.04,
-        )
-        real_csz = (
-            np.array(
-                [
-                    cosmo_csz.get_gas_profile_at_x_M_z_b16_200c(
-                        x=float(r), M=m_val, z=z_val, **csz_kwargs
-                    )
-                    for r in R_GRID
-                ]
-            )
-            * h**2
-        )
-        real_hm = np.asarray(b16.real(hm, jnp.asarray(R_GRID), m_val, z_val))
-        mask = real_csz != 0
-        assert np.allclose(real_hm[mask], real_csz[mask], rtol=0.01)
+        hm = halo_model(cosmo, shared(MassDefinition, 200, "critical"))
+        shape = dict(A_rho0=4000.0, A_alpha=0.88, A_beta=3.83, alpha_m_rho0=0.29, alpha_m_alpha=-0.03,
+                     alpha_m_beta=0.04, alpha_z_rho0=-0.66, alpha_z_alpha=0.19, alpha_z_beta=-0.025)
+        b16 = B16DensityProfile(**shape)
+        m, z = 1e14, 0.3
+        csz = classy_sz.Class()
+        csz.set({"output": "gas_pressure_profile_2h,gas_density_profile_2h"})
+        csz.compute_class_szfast()
+        csz_kwargs = dict(shape, alphap_m_rho0=0.29, alphap_m_alpha=-0.03, alphap_m_beta=0.04)
+        want = np.array([csz.get_gas_profile_at_x_M_z_b16_200c(x=float(r), M=m, z=z, **csz_kwargs) for r in R_GRID])
+        assert rel_err(b16.real(hm, jnp.asarray(R_GRID), m, z), want * (cosmo.H0 / 100.0) ** 2) < 0.01
 
 
 class TestB12PressureProfileClassSZ:
-    # real() matches class_sz's B12 shape function (dimensionalized via hmfast's own P_200c
-    # formula, per the notebook's b12_dimensionalize) at the canonical point (rtol 2%, observed max ~0.9%).
+    # real() against class_sz's B12 shape function, dimensionalized with hmfast's P_200c (rtol 2%, measured ~0.9%).
     @pytest.mark.class_sz
-    def test_real_matches_classy_sz_at_canonical_point(self, fixed_cosmology):
-        from hmfast.halos.profiles import B12PressureProfile
-
+    def test_real(self, cosmo):
         classy_sz = pytest.importorskip("classy_sz")
-        ClassSZ = classy_sz.Class
-        md = MassDefinition(200, "critical")
-        hm = HaloModel(
-            cosmology=fixed_cosmology,
-            mass_def=md,
-            concentration=D08Concentration(),
-            m_range=(M_GRID[0], M_GRID[-1]),
-            n_m=M_GRID.shape[0],
-        )
-        b12 = B12PressureProfile(
-            A_P0=18.1,
-            A_xc=0.497,
-            A_beta=4.35,
-            alpha_m_P0=0.154,
-            alpha_m_xc=-0.00865,
-            alpha_m_beta=0.0393,
-            alpha_z_P0=-0.758,
-            alpha_z_xc=0.731,
-            alpha_z_beta=0.415,
-        )
-        m_val, z_val = 1e14, 0.3
-        h = fixed_cosmology.H0 / 100.0
-        cparams = fixed_cosmology._cosmo_params()
-        f_b = cparams["Omega_b"] / cparams["Omega0_m"]
-        r200c = float(md.r_delta(fixed_cosmology, m_val, z_val))
-        H = float(fixed_cosmology.hubble_parameter(z_val))
-        p_200c = (m_val / (r200c * h)) * f_b * 2.61051e-18 * H**2
-
-        cosmo_csz = ClassSZ()
-        cosmo_csz.set({"output": "gas_pressure_profile_2h"})
-        cosmo_csz.compute_class_szfast()
-        csz_kwargs = dict(
-            A_P0=18.1,
-            A_xc=0.497,
-            A_beta=4.35,
-            alpha_m_P0=0.154,
-            alpha_m_xc=-0.00865,
-            alpha_m_beta=0.0393,
-            alpha_z_P0=-0.758,
-            alpha_z_xc=0.731,
-            alpha_z_beta=0.415,
-            alphap_m_P0=0.154,
-            alphap_m_xc=-0.00865,
-            alphap_m_beta=0.0393,
-        )
-        shape_csz = np.array(
-            [
-                cosmo_csz.get_pressure_P_over_P_delta_at_x_M_z_b12_200c(
-                    x=float(r), M=m_val, z=z_val, **csz_kwargs
-                )
-                for r in R_GRID
-            ]
-        )
-        real_csz = shape_csz * p_200c
-        real_hm = np.asarray(b12.real(hm, jnp.asarray(R_GRID), m_val, z_val))
-        mask = real_csz != 0
-        assert np.allclose(real_hm[mask], real_csz[mask], rtol=0.02)
+        md = shared(MassDefinition, 200, "critical")
+        hm = halo_model(cosmo, md)
+        shape = dict(A_P0=18.1, A_xc=0.497, A_beta=4.35, alpha_m_P0=0.154, alpha_m_xc=-0.00865, alpha_m_beta=0.0393,
+                     alpha_z_P0=-0.758, alpha_z_xc=0.731, alpha_z_beta=0.415)
+        b12 = B12PressureProfile(**shape)
+        m, z = 1e14, 0.3
+        h = cosmo.H0 / 100.0
+        p = cosmo._cosmo_params()
+        f_b = p["Omega_b"] / p["Omega0_m"]
+        r200c = float(md.r_delta(cosmo, m, z))
+        p_200c = (m / (r200c * h)) * f_b * 2.61051e-18 * float(cosmo.hubble_parameter(z)) ** 2
+        csz = classy_sz.Class()
+        csz.set({"output": "gas_pressure_profile_2h"})
+        csz.compute_class_szfast()
+        csz_kwargs = dict(shape, alphap_m_P0=0.154, alphap_m_xc=-0.00865, alphap_m_beta=0.0393)
+        want = np.array([csz.get_pressure_P_over_P_delta_at_x_M_z_b12_200c(x=float(r), M=m, z=z, **csz_kwargs)
+                         for r in R_GRID])
+        assert rel_err(b12.real(hm, jnp.asarray(R_GRID), m, z), want * p_200c) < 0.02
 
 
 def _ref_mdot(m, z, Om0, Ode0):
@@ -527,46 +301,191 @@ def _ref_sfr(m, z, Om0, Ode0, f_b, eta_max, M_eff, sigma2_LM, tau, z_c):
 
 
 class TestManiyarMdotSFR:
-    # No package dependency needed -- _ref_mdot/_ref_sfr above are inlined numpy transcriptions
-    # of class_sz's C source. Expected residual source: the reference uses the analytic flat-LCDM
-    # E(z)=sqrt(Om0(1+z)^3+Ode0), hmfast uses the actual emulator H(z)/H0 (rtol 1%, observed max ~0.04%).
-    def test_mdot_and_sfr_match_reference_at_canonical_grid(self, fixed_cosmology):
-        md = MassDefinition(200, "critical")
-        hm = HaloModel(
-            cosmology=fixed_cosmology,
-            mass_def=md,
-            concentration=D08Concentration(),
-            m_range=(M_GRID[0], M_GRID[-1]),
-            n_m=M_GRID.shape[0],
-        )
+    # Against the inlined class_sz transcriptions above, which use the analytic flat-LCDM E(z) where hmfast uses the
+    # emulated H(z)/H0, the source of the residual (measured 3.6e-4 / 3.6e-4).
+    def test_mdot_and_sfr(self, cosmo):
+        hm = halo_model(cosmo, shared(MassDefinition, 200, "critical"))
         m21 = M21CIBProfile(nu=100)
-        m_grid_np = np.geomspace(1e11, 1e15, 6)
-        z_grid_np = np.array([0.0, 0.5, 1.0, 2.0])
-        cparams = fixed_cosmology._cosmo_params()
-        Om0 = float(cparams["Omega0_m"])
-        Ode0 = 1.0 - Om0
-        f_b = float(cparams["Omega_b"] / cparams["Omega0_m"])
+        m = np.geomspace(1e11, 1e15, 6)
+        z = np.array([0.0, 0.5, 1.0, 2.0])
+        p = cosmo._cosmo_params()
+        Om0 = float(p["Omega0_m"])
+        f_b = float(p["Omega_b"] / p["Omega0_m"])
+        assert rel_err(m21._m_dot(hm, jnp.asarray(m), jnp.asarray(z)), _ref_mdot(m, z, Om0, 1.0 - Om0)) < 7e-4
+        want = _ref_sfr(m, z, Om0, 1.0 - Om0, f_b, m21.eta_max, m21.M_eff, m21.sigma2_LM, m21.tau, m21.z_c)
+        assert rel_err(m21._sfr(hm, jnp.asarray(m), jnp.asarray(z)), want) < 7e-4
 
-        mdot_hm = np.asarray(
-            m21._m_dot(hm, jnp.asarray(m_grid_np), jnp.asarray(z_grid_np))
-        )
-        mdot_ref = _ref_mdot(m_grid_np, z_grid_np, Om0, Ode0)
-        assert np.allclose(mdot_hm, mdot_ref, rtol=0.01)
 
-        sfr_hm = np.asarray(
-            m21._sfr(hm, jnp.asarray(m_grid_np), jnp.asarray(z_grid_np))
-        )
-        sfr_ref = _ref_sfr(
-            m_grid_np,
-            z_grid_np,
-            Om0,
-            Ode0,
-            f_b,
-            m21.eta_max,
-            m21.M_eff,
-            m21.sigma2_LM,
-            m21.tau,
-            m21.z_c,
-        )
-        mask = sfr_ref != 0
-        assert np.allclose(sfr_hm[mask], sfr_ref[mask], rtol=0.01)
+# ---------------------------------------------------------------------------------------------------------------------
+# Numerical accuracy of the generic Hankel path, HaloProfile._fourier_via_hankel_transform (GNFW, B12, B16), against
+# the analytic truncated-NFW transform or a quad integral of the truncated GNFW. Errors are the maximum absolute error
+# over the targets divided by u(q -> 0).
+# ---------------------------------------------------------------------------------------------------------------------
+
+# Off-grid targets in the dimensionless wavenumber q = k r_scale (1+z).
+Q = np.geomspace(1e-2, 20.0, 97)
+Q_LOW = np.geomspace(1e-4, 1e-2, 9)
+GNFW_SHAPE = dict(c500=1.81, alpha=1.062, beta=4.13, gamma=0.3292)
+X_MIN, X_MAX = 1e-5, 4.0
+
+
+@pytest.fixture(scope="module")
+def hm200c(cosmo):
+    """A HaloModel at 200c/D08, the native mass definition of the NFW accuracy checks."""
+    return halo_model(cosmo, shared(MassDefinition, 200, "critical"))
+
+
+@pytest.fixture(scope="module")
+def hm500c(cosmo):
+    """A HaloModel at 500c/D08, the native mass definition of the GNFW accuracy checks."""
+    return shared_halo_model(cosmology=cosmo, mass_def=shared(MassDefinition, 500, "critical"))
+
+
+def _gnfw_shape(x):
+    c, a, b, g = GNFW_SHAPE["c500"], GNFW_SHAPE["alpha"], GNFW_SHAPE["beta"], GNFW_SHAPE["gamma"]
+    return (c * x) ** -g * (1.0 + (c * x) ** a) ** ((g - b) / a)
+
+
+def _gnfw_truth_at(q, x_out):
+    """int_0^x_out x^2 f(x) j0(q x) dx, to ~1e-12."""
+    if q < 1e-8:
+        return quad(lambda x: x * x * _gnfw_shape(x), 1e-14, x_out, limit=500, epsabs=0, epsrel=1e-13)[0]
+    return quad(lambda x: x * _gnfw_shape(x) / q, 1e-14, x_out, weight="sin", wvar=q,
+                limit=2000, epsabs=0, epsrel=1e-13)[0]
+
+
+@functools.lru_cache(maxsize=None)
+def _gnfw_truth(x_out, which="Q"):
+    qs = Q if which == "Q" else Q_LOW
+    return _gnfw_truth_at(0.0, x_out), np.array([_gnfw_truth_at(q, x_out) for q in qs])
+
+
+def _gnfw(n_x, x_out, B=1.0):
+    return GNFWPressureProfile(x_range=(X_MIN, X_MAX), n_x=n_x, B=B, x_out=x_out, **GNFW_SHAPE)
+
+
+def _gnfw_u(hm, n_x, x_out, q, m=1e14, z=0.0):
+    """hmfast's GNFW transform at q, divided by its constant prefactor so it compares to the truth."""
+    p = _gnfw(n_x, x_out)
+    m1, z1 = jnp.atleast_1d(m), jnp.atleast_1d(z)
+    rs = float(jnp.squeeze(p._fourier_radius_scale(hm, m1, z1)))
+    amp = float(jnp.squeeze(p.real(hm, jnp.array([0.5 * rs * (1 + z)]), m, z))) / _gnfw_shape(0.5)
+    u = np.asarray(p.fourier(hm, jnp.asarray(q / (rs * (1 + z))), m, z))
+    return u / (4 * np.pi * (rs * (1 + z)) ** 3 * amp)
+
+
+def gnfw_error(hm, n_x, x_out, which="Q"):
+    u0, truth = _gnfw_truth(x_out, which)
+    u = _gnfw_u(hm, n_x, x_out, Q if which == "Q" else Q_LOW)
+    return np.max(np.abs(u - truth)) / u0
+
+
+def mcfit_ideal_error(n_x, pad_decades=2.0):
+    """Best achievable with mcfit on the same padded grid: x_out on the last node at half weight, read at mcfit's own nodes."""
+    x = np.logspace(np.log10(X_MIN), np.log10(X_MAX), n_x)
+    h = np.log(x[1] / x[0])
+    n_pad = int(np.ceil(pad_decades * np.log(10) / h))
+    F = _gnfw_shape(x) * x**0.5
+    F[-1] *= 0.5
+    q, G = mcfit.Hankel(x[0] * np.exp(h * np.arange(n_x + n_pad)), nu=0.5, lowring=True, backend="jax")(
+        jnp.asarray(np.concatenate([F, np.zeros(n_pad)])), extrap=False)
+    q, G = np.asarray(q), np.asarray(G)
+    sel = (q > Q[0]) & (q < Q[-1])
+    u = (G * np.sqrt(np.pi / (2 * q)))[sel]
+    truth = np.array([_gnfw_truth_at(v, X_MAX) for v in q[sel]])
+    return np.max(np.abs(u - truth)) / _gnfw_truth(X_MAX)[0]
+
+
+def nfw_error(hm, n_x, x_max, m, z):
+    """Truncated NFW pushed through the generic Hankel path, against its analytic transform."""
+    nfw = NFWMatterProfile()
+    x = jnp.logspace(np.log10(X_MIN), np.log10(x_max), n_x)
+    nfw._hankel, nfw.x_grid, nfw.x_out = HankelTransform(x, nu=0.5), x, 1.0  # x = r / r_delta, truncated at r_delta
+    m1, z1 = jnp.atleast_1d(m), jnp.atleast_1d(z)
+    r_delta = jnp.reshape(hm.mass_def.r_delta(hm.cosmology, m1, z1), (1, 1))
+    k = jnp.asarray(Q) / (r_delta[0, 0] * (1 + z))
+    u_hankel = np.asarray(HaloProfile._fourier_via_hankel_transform(nfw, hm, k, m1, z1, r_delta))
+    u_exact = np.asarray(nfw.fourier(hm, k, m, z))
+    return np.max(np.abs(u_hankel - u_exact)) / np.max(np.abs(u_exact))
+
+
+NFW_HALOS = [(1e12, 0.0), (1e14, 0.5), (1e15, 1.0)]
+
+
+class TestHankelAgainstAnalyticNFW:
+    # x_out = 1 on the last grid node (measured max over halos: 1.5e-3 at n_x=100).
+    @pytest.mark.parametrize("m,z", NFW_HALOS)
+    def test_truncation_on_grid_edge(self, hm200c, m, z):
+        assert nfw_error(hm200c, 100, 1.0, m, z) < 3e-3
+
+    # x_out = 1 between nodes of a grid running to 1.5 (measured max over halos: 3.2e-3 at n_x=100).
+    @pytest.mark.parametrize("m,z", NFW_HALOS)
+    def test_truncation_between_nodes(self, hm200c, m, z):
+        assert nfw_error(hm200c, 100, 1.5, m, z) < 6e-3
+
+    # Second-order convergence: doubling n_x cuts the error by >= 3 (measured 4.7).
+    def test_convergence_rate(self, hm200c):
+        e = [nfw_error(hm200c, n, 1.0, 1e14, 0.5) for n in (100, 200, 400)]
+        assert e[0] / e[1] > 3 and e[1] / e[2] > 3
+
+
+class TestHankelAgainstQuadGNFW:
+    # x_out on the grid edge, the GNFW default (measured 5.2e-4 / 1.3e-4 at n_x=100 / 200).
+    @pytest.mark.parametrize("n_x,tol", [(100, 1e-3), (200, 2.6e-4)])
+    def test_truncation_on_grid_edge(self, hm500c, n_x, tol):
+        assert gnfw_error(hm500c, n_x, X_MAX) < tol
+
+    # x_out between nodes (measured 1.7e-3 / 1.3e-4 at n_x=100 / 200).
+    @pytest.mark.parametrize("n_x,tol", [(100, 3.4e-3), (200, 2.7e-4)])
+    def test_truncation_between_nodes(self, hm500c, n_x, tol):
+        assert gnfw_error(hm500c, n_x, 3.0) < tol
+
+    # x_out just inside the last node, where it is not snapped onto it (measured 2.4e-3 at n_x=100).
+    def test_truncation_just_inside_node(self, hm500c):
+        assert gnfw_error(hm500c, 100, X_MAX * (1 - 1e-3)) < 5e-3
+
+    # Second-order convergence: doubling n_x cuts the error by >= 3 (measured 4.1).
+    def test_convergence_rate(self, hm500c):
+        e = [gnfw_error(hm500c, n, X_MAX) for n in (100, 200, 400)]
+        assert e[0] / e[1] > 3 and e[1] / e[2] > 3
+
+    # Below mcfit's native q range, where the zero padding and the q -> 0 anchor take over (measured 3.8e-4).
+    def test_low_q(self, hm500c):
+        assert gnfw_error(hm500c, 100, X_MAX, which="low") < 8e-4
+
+
+class TestHankelMatchesMcfit:
+    # hmfast adds no significant error on top of mcfit's own (measured ratio 1.09-1.11).
+    @pytest.mark.parametrize("n_x", [100, 200, 400])
+    def test_no_loss_relative_to_mcfit(self, hm500c, n_x):
+        assert gnfw_error(hm500c, n_x, X_MAX) / mcfit_ideal_error(n_x) < 1.25
+
+
+class TestHankelEdgeCases:
+    # x_out = inf truncates at the grid edge, so it must equal x_out = x_max (round-off in real() must not drop the node).
+    def test_untruncated_equals_truncated_at_grid_edge(self, hm500c):
+        u_inf = _gnfw_u(hm500c, 100, jnp.inf, Q)
+        u_edge = _gnfw_u(hm500c, 100, X_MAX, Q)
+        assert np.allclose(u_inf, u_edge, rtol=1e-9, atol=0)
+
+    # x_out a few ulps below the last node snaps onto it; real() must still see that node as inside (1.8e-2 if it doesn't).
+    def test_node_kept_when_x_out_rounds_below_it(self, hm500c):
+        u_below = _gnfw_u(hm500c, 100, X_MAX * (1 - 1e-14), Q)
+        u_edge = _gnfw_u(hm500c, 100, X_MAX, Q)
+        assert np.allclose(u_below, u_edge, rtol=1e-9, atol=0)
+
+    # Far beyond the native grid the transform clamps to its last value rather than extrapolating.
+    def test_clamps_above_native_grid(self, hm500c):
+        u = _gnfw_u(hm500c, 100, X_MAX, np.array([1e7, 1e9]))
+        assert np.all(np.isfinite(u)) and u[0] == u[1]
+
+
+class TestHankelSmoothness:
+    # d ln u / d ln B varies smoothly along a dense sweep in B, so the interpolation onto q = k r_500 has no kinks
+    # (measured max second difference 1.3e-4; linear interpolation gives 2.2e-2).
+    def test_autodiff_derivative_has_no_kinks_in_B(self, hm500c):
+        k = jnp.array([0.3, 1.0, 3.0])
+        p = _gnfw(100, X_MAX)
+        dlnu_dlnB = jax.vmap(jax.jacfwd(lambda lnB: jnp.log(p.update(B=jnp.exp(lnB)).fourier(hm500c, k, 1e14, 0.0))))
+        d = np.asarray(dlnu_dlnB(jnp.linspace(0.0, np.log(1.5), 201)))
+        assert np.max(np.abs(d[2:] - 2 * d[1:-1] + d[:-2])) < 2.5e-4

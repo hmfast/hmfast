@@ -133,3 +133,71 @@ def stats_halo_model(p=PARAMS, mass_def=MD_200M):
         cosmology=cosmo(p), mass_def=mass_def, concentration=CONC,
         halo_mass_function=HMF, halo_bias=BIAS, m_range=(M_GRID[0], M_GRID[-1]), n_m=N_M,
     )
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Benchmark helpers: CCL cosmologies matched to an hmfast Cosmology, and the error metrics benchmarks assert on.
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+def ccl_cosmology(cosmology, *, pk_linear=False, pk_nonlin=False, **kwargs):
+    """
+    pyccl cosmology with `cosmology`'s neutrino masses, w0 and N_eff. With `pk_linear=True` it is a CosmologyCalculator
+    fed hmfast's own P_lin on the emulator's (k, z) nodes, so halo-model comparisons test formulas rather than
+    Boltzmann codes, and with `pk_nonlin=True` also hmfast's nonlinear P(k); otherwise CCL runs CLASS itself. Extra
+    keyword arguments go to the pyccl constructor.
+    """
+    import pyccl
+
+    p = cosmology._cosmo_params()
+    m_ncdm = float(p["m_ncdm"])
+    m_nu = [m_ncdm] * 3 if cosmology.emulator_set == "mnu-3states:v1" else [0.0, 0.0, m_ncdm]
+    params = dict(
+        Omega_c=float(p["Omega_cdm"]), Omega_b=float(p["Omega_b"]), h=float(p["h"]),
+        A_s=float(cosmology.A_s), n_s=float(cosmology.n_s), m_nu=m_nu, mass_split="list",
+        w0=float(p["w0_fld"]), Neff=float(cosmology.derived_parameters()["Neff"]), **kwargs,
+    )
+    if not pk_linear:
+        return pyccl.Cosmology(**{"transfer_function": "boltzmann_class", **params})
+    k, z = cosmology._pk_grid()[0], cosmology._z_grid_pk()
+    a = np.asarray(1.0 / (1.0 + z))[::-1]
+
+    def table(linear):
+        pk = np.asarray(cosmology.pk(k, z, linear=linear)).T[::-1]  # (N_a, N_k) with a increasing, as CCL expects
+        return {"a": a, "k": np.asarray(k), "delta_matter:delta_matter": pk}
+
+    if pk_nonlin:
+        params["pk_nonlin"] = table(False)
+    return pyccl.CosmologyCalculator(pk_linear=table(True), **params)
+
+
+def ccl_profile2pt_hod():
+    """CCL Profile2pt for an HOD with satellite pairs N_c^2 N_s^2 (hmfast); CCL's Profile2ptHOD has N_c N_s^2."""
+    import pyccl
+
+    class Profile2ptHODhmfast(pyccl.halos.Profile2pt):
+        def fourier_2pt(self, cosmo, k, M, a, prof, *, prof2=None, diag=True):
+            M_use, k_use = np.atleast_1d(M), np.atleast_1d(k)
+            n_cen, n_sat = prof._Nc(M_use, a)[:, None], prof._Ns(M_use, a)[:, None]
+            sat = n_cen * n_sat * prof._usat_fourier(cosmo, k_use, M_use, a)
+            out = 2 * sat + sat**2
+            if np.ndim(k) == 0:
+                out = np.squeeze(out, axis=-1)
+            if np.ndim(M) == 0:
+                out = np.squeeze(out, axis=0)
+            return out
+
+    return Profile2ptHODhmfast()
+
+
+def rel_err(got, want):
+    """Maximum relative error |got / want - 1| over the entries where `want` is non-zero; NaN if `got` is not finite."""
+    got, want = np.broadcast_arrays(np.asarray(got, dtype=float), np.asarray(want, dtype=float))
+    mask = want != 0
+    return float(np.max(np.abs(got[mask] / want[mask] - 1.0)))
+
+
+def peak_err(got, want):
+    """Maximum absolute error over max |want|, for quantities that cross zero or have negligible tails."""
+    got, want = np.broadcast_arrays(np.asarray(got, dtype=float), np.asarray(want, dtype=float))
+    return float(np.max(np.abs(got - want)) / np.max(np.abs(want)))
