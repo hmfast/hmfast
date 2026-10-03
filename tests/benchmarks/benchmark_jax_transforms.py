@@ -6,12 +6,19 @@ failures surface. Here every case is compiled and its jitted numbers are checked
 the eager call, and the end-to-end gradient cases too heavy for the unit suite (halo-model
 C_ell through HOD/GNFW profiles, and the halofit Limber spectrum) are checked against finite
 differences and between forward and reverse mode.
+
+The all-terms trispectrum and bispectrum cases (and cov_cng, which runs the full trispectrum) re-run code that the
+per-term cases already compile and check, at several times their cost; here they are replaced by the cheapest
+multi-term combination, 1-halo + 4-halo (1-halo + 3-halo for Bk), which still exercises the include_* flags and the sum.
 """
 
 import jax
 import numpy as np
 import pytest
 
+from hmfast.stats import Bk, Tk, cov_cng
+
+from .._shared import GAL_TRACER, K_GRID_BT, L_GRID, N_Z, NFW, Z_RANGE, Z_SINGLE, stats_halo_model
 from ..unit.test_jax_transforms import (
     CASES,
     GRADIENT_CASES,
@@ -23,12 +30,25 @@ from ..unit.test_jax_transforms import (
 
 BENCHMARK_GRADIENT_CASES = [name for name in GRADIENT_CASES if name not in UNIT_GRADIENT_CASES]
 
+TK_1H_4H = Tk(include_2h=False, include_3h=False)
+BK_1H_3H = Bk(k_damp=0.0, include_2h=False)
+REPLACED_CASES = {"Tk.tk_tot", "Tk.tk_tot[2h only]", "Bk.bk_tot", "cov_cng"}
+JIT_CASES = [c for c in CASES if c.id not in REPLACED_CASES] + [
+    pytest.param(lambda p: TK_1H_4H.tk_tot(stats_halo_model(p), K_GRID_BT, K_GRID_BT, Z_SINGLE, NFW),
+                 id="Tk.tk_tot[1h+4h]"),
+    pytest.param(lambda p: BK_1H_3H.bk_tot(stats_halo_model(p), K_GRID_BT, K_GRID_BT, -0.5, Z_SINGLE, NFW),
+                 id="Bk.bk_tot[1h+3h]"),
+    pytest.param(lambda p: cov_cng(TK_1H_4H, stats_halo_model(p), L_GRID[:3], L_GRID[:3], GAL_TRACER,
+                                   z_range=Z_RANGE, n_z=N_Z), id="cov_cng[1h+4h]"),
+]
+assert REPLACED_CASES <= {c.id for c in CASES}, "a replaced case was renamed in the unit file"
+
 
 def _leaves(out):
     return [np.asarray(x) for x in jax.tree_util.tree_leaves(out)]
 
 
-@pytest.mark.parametrize("fn", CASES)
+@pytest.mark.parametrize("fn", JIT_CASES)
 def test_jitted_matches_eager(fn):
     """Runs inside jax.jit, and returns the same finite numbers as the eager call."""
     jitted = _leaves(jax.block_until_ready(jax.jit(fn)(PARAMS)))

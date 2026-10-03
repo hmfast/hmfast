@@ -8,9 +8,10 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 import mcfit
+import numpy as np
 
 from hmfast.halos.profiles.hod import GalaxyHODProfile
-from hmfast.utils import gauss_legendre_nodes_weights
+from hmfast.utils import gauss_legendre_nodes_weights, log_interp1d_extrap
 
 from . import projected_cl as _cl
 from .pk import Pk as _Pk
@@ -276,18 +277,24 @@ def cov_cng(tk, halo_model, l1, l2, tracer1, tracer2=None, tracer3=None, tracer4
 
 # One mcfit plan per emulator set: the disc-window transform depends only on the emulator's k grid.
 _DISC_VAR_TRANSFORMS = {}
+# Decades of power-law P_lin below the emulator's k_min: the output radii then reach ~1e6 Mpc, past chi(z) * pi.
+_DISC_VAR_LOW_K_DECADES = 2
 
 
 def _disc_var_transform(cosmology):
+    """The disc-variance transform and its input k grid, the emulator's extended below k_min at the same log spacing."""
     key = cosmology.emulator_set
     if key not in _DISC_VAR_TRANSFORMS:
         k_grid, _ = cosmology._pk_grid()
+        dlnk = np.log(k_grid[1] / k_grid[0])
+        n_low = int(np.ceil(_DISC_VAR_LOW_K_DECADES * np.log(10.0) / dlnk))
+        k_ext = np.concatenate([k_grid[0] * np.exp(dlnk * np.arange(-n_low, 0)), k_grid])
         # Build eagerly even when first reached inside jit: mcfit needs a concrete grid to plan on.
         with jax.ensure_compile_time_eval():
             # Same as Cosmology's TophatVar, but dim=2 (disc window) instead of dim=3 (sphere).
-            disc_var = mcfit.mcfit(k_grid, mcfit.kernels.Mellin_TophatSq(2), q=1.5, lowring=True, backend='jax')
+            disc_var = mcfit.mcfit(k_ext, mcfit.kernels.Mellin_TophatSq(2), q=1.5, lowring=True, backend='jax')
             disc_var.prefac *= disc_var.x**2 / (2.0 * jnp.pi)
-        _DISC_VAR_TRANSFORMS[key] = partial(disc_var, extrap=True)
+        _DISC_VAR_TRANSFORMS[key] = (partial(disc_var, extrap=True), k_ext)
     return _DISC_VAR_TRANSFORMS[key]
 
 
@@ -323,8 +330,11 @@ def sigma2_b_disc(cosmology, z, *, f_sky=1.0):
     z_arr = jnp.atleast_1d(z)
     k_grid, _ = cosmology._pk_grid()
     pk_grid = jnp.reshape(cosmology.pk(k_grid, z_arr, linear=True), (len(k_grid), len(z_arr)))
+    transform, k_ext = _disc_var_transform(cosmology)
+    # Power-law continuation of P_lin below k_min, independent of cosmology.extrapolate_k.
+    pk_ext = jax.vmap(lambda pk_i: log_interp1d_extrap(k_ext, k_grid, pk_i), in_axes=1, out_axes=1)(pk_grid)
 
-    R_grid, var_grid = jax.vmap(_disc_var_transform(cosmology), in_axes=1, out_axes=(0, 0))(pk_grid)
+    R_grid, var_grid = jax.vmap(transform, in_axes=1, out_axes=(0, 0))(pk_ext)
     R_grid = R_grid[0]  # same R grid for every z -- only depends on k_grid
 
     chi = cosmology.angular_diameter_distance(z_arr) * (1.0 + z_arr)

@@ -1,207 +1,258 @@
 """
-CCL benchmark comparisons for hmfast.cosmology.Cosmology (background, growth,
-matter power spectrum, RMS fluctuations, collapse threshold), used as an
-external ground truth. Ported from the validated comparisons in
-tests/test_cosmology.ipynb.
+Benchmarks for hmfast.cosmology.Cosmology against external ground truth: CCL running CLASS for the background, growth
+and power spectra (CAMB for the HMcode nonlinear spectrum), and CLASS directly (classy) for the CMB spectra and derived
+parameters. Every comparison runs hmfast with ncdm_mode="m", the neutrino convention CCL uses, against a CCL cosmology
+with the same neutrino masses (see `ccl_cosmology`).
 
-Requires pyccl; the whole module is skipped if it isn't installed. All tests
-are marked `ccl` (see pyproject.toml) so `pytest -m "not ccl"` skips this file
-without needing pyccl at all. The nonlinear-P(k) test additionally requires
-`camb` (marked `camb`) -- CCL's native halofit disagrees with the HMcode-trained
-PKNL emulator by orders of magnitude, so CAMB+HMcode (reached via CCL's
-`boltzmann_camb`/`camb` backend) is the only fair ground truth for it; every
-other test in this file runs fine without camb installed.
+CCL tests are marked `ccl`, the CAMB test `camb` and the CLASS tests `classy`; each is skipped if its package is
+missing.
 
-Tolerances were derived empirically (not guessed): for each comparison, we ran
-this exact check at the fixed cosmology below and recorded the observed max %
-residual, then set rtol to a round number with margin above it (see each
-test's comment for the number).
-
+Thresholds are ~2x the error measured when written (noted per test), so a ~2x degradation fails; lower them when
+accuracy improves. Errors are maximum relative errors unless stated otherwise.
 """
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
 from hmfast.cosmology import Cosmology
 
-pyccl = pytest.importorskip("pyccl")
-pytestmark = pytest.mark.ccl
+from .._shared import ccl_cosmology, peak_err, rel_err
+
+try:
+    import pyccl
+except ImportError:
+    pyccl = None
+try:
+    import classy
+except ImportError:
+    classy = None
+
+REQUIRES_CCL = [pytest.mark.ccl, pytest.mark.skipif(pyccl is None, reason="requires pyccl")]
 
 
 def z_to_a(z):
     return 1.0 / (1.0 + np.asarray(z))
 
 
-Z_LIST = [0.0, 0.5, 1.0, 2.0]
-# growth_rate only: excludes the jnp.gradient table's edges (z=0, z_max_pk=5) -- see module docstring.
-Z_LIST_GROWTH_RATE = [0.1, 0.5, 1.0, 2.0]
-M_GRID = np.geomspace(1e10, 1e15, 20)
-R_GRID = np.geomspace(1e-1, 1e2, 20)
+# In-grid redshifts: background emulators run to z = 20, the P(k) emulators to z = 5.
+Z_BG = [0.1, 0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 19.0]
+Z_PK = [0.0, 0.5, 1.0, 2.0, 3.0, 4.9]
+# growth_rate is a finite difference of the growth table; its end nodes, less accurate, are tested separately.
+Z_GROWTH_RATE = [0.1, 0.5, 1.0, 2.0, 3.0, 4.5]
+Z_LOW = [0.001, 0.003, 0.01, 0.03, 0.1]
+M_GRID = np.geomspace(1e9, 1e16, 30)
+R_GRID = np.geomspace(1e-1, 1e2, 30)
+K_FULL = np.geomspace(1e-4, 48.0, 60)
 
 
-@pytest.fixture(scope="session")
-def cosmo_hmfast_ext(fixed_cosmology):
-    return fixed_cosmology.update(extrapolate_z=True)
+@pytest.fixture(scope="module")
+def cosmo(fixed_cosmology_m):
+    return fixed_cosmology_m
 
 
-@pytest.fixture(scope="session")
-def cosmo_ccl_bg(fixed_cosmology):
-    # Independent pyccl.Cosmology (CLASS background), matched in neutrino mass; deliberately not passing w0 since lcdm:v1 always assumes w=-1.
-    h = fixed_cosmology.H0 / 100.0
-    return pyccl.Cosmology(
-        Omega_c=fixed_cosmology.omega_cdm / h**2,
-        Omega_b=fixed_cosmology.omega_b / h**2,
-        h=h, A_s=fixed_cosmology.A_s, n_s=fixed_cosmology.n_s,
-        m_nu=[0.0, 0.0, float(fixed_cosmology._cosmo_params()["m_ncdm"])], mass_split="list",
-        transfer_function="boltzmann_class",
-    )
+@pytest.fixture(scope="module")
+def cosmo_ext(fixed_cosmology_m):
+    return fixed_cosmology_m.update(extrapolate_z=True)
 
 
-@pytest.fixture(scope="session")
-def cosmo_ccl_pkl(fixed_cosmology):
-    # Same as cosmo_ccl_bg but forcing linear-only P(k), for the P_lin(k,z) check.
-    h = fixed_cosmology.H0 / 100.0
-    return pyccl.Cosmology(
-        Omega_c=fixed_cosmology.omega_cdm / h**2,
-        Omega_b=fixed_cosmology.omega_b / h**2,
-        h=h, A_s=fixed_cosmology.A_s, n_s=fixed_cosmology.n_s,
-        m_nu=[0.0, 0.0, float(fixed_cosmology._cosmo_params()["m_ncdm"])], mass_split="list",
-        transfer_function="boltzmann_class", matter_power_spectrum="linear",
-    )
+@pytest.fixture(scope="module")
+def ccl_class(fixed_cosmology_m):
+    """CCL running CLASS for the same cosmology: an independent background, growth and linear P(k)."""
+    return ccl_cosmology(fixed_cosmology_m)
 
 
-@pytest.fixture(scope="session")
-def cosmo_ccl_pknl(fixed_cosmology):
-    # CAMB+HMcode nonlinear P(k) -- the only fair ground truth for the HMcode-trained PKNL emulator; requires the separate `camb` package.
-    pytest.importorskip("camb")
-    h = fixed_cosmology.H0 / 100.0
-    return pyccl.Cosmology(
-        Omega_c=fixed_cosmology.omega_cdm / h**2,
-        Omega_b=fixed_cosmology.omega_b / h**2,
-        h=h, A_s=fixed_cosmology.A_s, n_s=fixed_cosmology.n_s,
-        m_nu=[0.0, 0.0, float(fixed_cosmology._cosmo_params()["m_ncdm"])], mass_split="list",
-        transfer_function="boltzmann_camb", matter_power_spectrum="camb",
-    )
+@pytest.fixture(scope="module")
+def ccl_calc(fixed_cosmology_m):
+    """CCL fed hmfast's own P_lin, isolating the sigma(M)/sigma(R) integral from P(k) differences."""
+    return ccl_cosmology(fixed_cosmology_m, pk_linear=True)
 
 
-@pytest.fixture(scope="session")
-def cosmo_ccl(fixed_cosmology):
-    # pyccl CosmologyCalculator fed hmfast's own P_lin(k, z), isolating the sigma(M)/sigma(R) formula from P(k) differences.
-    h = fixed_cosmology.H0 / 100.0
-    Omega_c = fixed_cosmology.omega_cdm / h**2
-    Omega_b = fixed_cosmology.omega_b / h**2
+class TestBackgroundCCL:
+    pytestmark = REQUIRES_CCL
 
-    z_wide = np.linspace(0.0, 3.0, 50)
-    a_wide = np.sort(1.0 / (1.0 + z_wide))
-    k_ref_jnp, _ = fixed_cosmology._pk_grid()
-    k_ref = np.asarray(k_ref_jnp)
-    pk_lin = np.asarray(
-        fixed_cosmology.pk(k_ref_jnp, jnp.asarray(1.0 / a_wide - 1.0), linear=True)
-    ).T  # (Nz, Nk), CCL's expected ordering
+    # H(z) and D_A(z) across the background emulators' range (measured 1.4e-4 / 4.1e-5).
+    def test_hubble_and_distance_in_grid(self, cosmo, ccl_class):
+        z, a = jnp.asarray(Z_BG), z_to_a(Z_BG)
+        assert rel_err(cosmo.hubble_parameter(z), cosmo.H0 * pyccl.h_over_h0(ccl_class, a)) < 3e-4
+        assert rel_err(cosmo.angular_diameter_distance(z), pyccl.angular_diameter_distance(ccl_class, a)) < 1e-4
 
-    return pyccl.CosmologyCalculator(
-        Omega_c=Omega_c, Omega_b=Omega_b, h=h,
-        A_s=fixed_cosmology.A_s, n_s=fixed_cosmology.n_s,
-        pk_linear={"a": a_wide, "k": k_ref, "delta_matter:delta_matter": pk_lin},
-    )
+    # D_A(z) at low z, where linear interpolation across the first background-grid bin (dz = 0.004) dominates
+    # (measured 3.6e-3 at z = 0.001, 4.6e-4 at z = 0.01).
+    def test_distance_at_low_redshift(self, cosmo, ccl_class):
+        z, a = jnp.asarray(Z_LOW), z_to_a(Z_LOW)
+        assert rel_err(cosmo.angular_diameter_distance(z), pyccl.angular_diameter_distance(ccl_class, a)) < 7e-3
 
+    # sigma8(z) across the background emulators' range (measured 6.4e-5).
+    def test_sigma8_in_grid(self, cosmo, ccl_class):
+        R8 = 8.0 / (cosmo.H0 / 100.0)
+        s8_ccl = [pyccl.sigmaR(ccl_class, R8, float(a)) for a in z_to_a(Z_BG)]
+        assert rel_err(cosmo.sigma8(jnp.asarray(Z_BG)), s8_ccl) < 1.5e-4
 
-class TestGrowthAndDistancesCCL:
-    # H(z), D_A(z), sigma8(z) match CCL in-grid (rtol 0.05%/0.05%/0.1%, observed max ~0.011%/0.0018%/0.013%); D_A(z=0)=0 skipped to avoid 0/0.
-    def test_hz_da_sigma8_in_grid(self, fixed_cosmology, cosmo_ccl_bg):
-        h = fixed_cosmology.H0 / 100.0
-        z_arr = jnp.asarray(Z_LIST)
-        a_arr = z_to_a(Z_LIST)
+    # With extrapolate_z=True, H(z) and D_A(z) continue past z_max_bg = 20 (measured 1.2e-3 / 1.2e-4).
+    def test_hubble_and_distance_beyond_grid_with_extrapolation(self, cosmo_ext, ccl_class):
+        z_max_bg = float(cosmo_ext._z_grid_bg()[-1])
+        z = jnp.array([z_max_bg + 5.0, z_max_bg + 50.0, 100.0, 1000.0])
+        a = z_to_a(z)
+        assert rel_err(cosmo_ext.hubble_parameter(z), cosmo_ext.H0 * pyccl.h_over_h0(ccl_class, a)) < 2.5e-3
+        assert rel_err(cosmo_ext.angular_diameter_distance(z), pyccl.angular_diameter_distance(ccl_class, a)) < 2.5e-4
 
-        Hz_hmf = np.asarray(fixed_cosmology.hubble_parameter(z_arr))
-        Hz_ccl = 100.0 * h * np.asarray(pyccl.background.h_over_h0(cosmo_ccl_bg, a_arr))
-        assert np.allclose(Hz_hmf, Hz_ccl, rtol=0.0005)
-
-        DA_hmf = np.asarray(fixed_cosmology.angular_diameter_distance(z_arr))[1:]
-        DA_ccl = np.asarray(pyccl.background.angular_diameter_distance(cosmo_ccl_bg, a_arr))[1:]
-        assert np.allclose(DA_hmf, DA_ccl, rtol=0.0005)
-
-        R8 = 8.0 / h
-        s8_hmf = np.asarray(fixed_cosmology.sigma8(z_arr))
-        s8_ccl = np.array([pyccl.power.sigmaR(cosmo_ccl_bg, R8, float(ai)) for ai in a_arr])
-        assert np.allclose(s8_hmf, s8_ccl, rtol=0.001)
-
-    # H(z), D_A(z) with extrapolate_z=True still match CCL a few z past z_max_bg=20 (rtol 0.2%, observed max ~0.069%/0.0032%).
-    def test_hz_da_beyond_bg_grid_with_extrapolation(self, cosmo_hmfast_ext, cosmo_ccl_bg):
-        h = cosmo_hmfast_ext.H0 / 100.0
-        z_max_bg = float(cosmo_hmfast_ext._z_grid_bg()[-1])
-        z_arr = jnp.array([z_max_bg + 5.0, z_max_bg + 50.0, 100.0])
-        a_arr = z_to_a(np.asarray(z_arr))
-
-        Hz_hmf = np.asarray(cosmo_hmfast_ext.hubble_parameter(z_arr))
-        Hz_ccl = 100.0 * h * np.asarray(pyccl.background.h_over_h0(cosmo_ccl_bg, a_arr))
-        assert np.allclose(Hz_hmf, Hz_ccl, rtol=0.002)
-
-        DA_hmf = np.asarray(cosmo_hmfast_ext.angular_diameter_distance(z_arr))
-        DA_ccl = np.asarray(pyccl.background.angular_diameter_distance(cosmo_ccl_bg, a_arr))
-        assert np.allclose(DA_hmf, DA_ccl, rtol=0.002)
-
-    # sigma8 has no extrapolation branch at all: NaN beyond z_max_bg regardless of extrapolate_z (unlike H(z)/D_A(z)).
-    def test_sigma8_always_nan_beyond_grid(self, fixed_cosmology, cosmo_hmfast_ext):
-        z_beyond = jnp.array(float(fixed_cosmology._z_grid_bg()[-1]) + 5.0)
-        assert jnp.isnan(fixed_cosmology.sigma8(z_beyond))
-        assert jnp.isnan(cosmo_hmfast_ext.sigma8(z_beyond))
+    # sigma8 has no extrapolation branch: NaN beyond z_max_bg regardless of extrapolate_z.
+    def test_sigma8_always_nan_beyond_grid(self, cosmo, cosmo_ext):
+        z_beyond = jnp.array(float(cosmo._z_grid_bg()[-1]) + 5.0)
+        assert jnp.isnan(cosmo.sigma8(z_beyond))
+        assert jnp.isnan(cosmo_ext.sigma8(z_beyond))
 
 
-class TestMatterPowerSpectrumCCL:
-    # P_lin(k, z=1) matches CCL's independent CLASS linear P(k) (rtol 0.15%, observed max ~0.042%).
-    def test_pk_linear_matches_ccl(self, fixed_cosmology, cosmo_ccl_pkl):
-        k_test = jnp.geomspace(1e-3, 1.0, 20)
-        pkl_hmf = np.asarray(fixed_cosmology.pk(k_test, jnp.array([1.0]), linear=True)).flatten()
-        pkl_ccl = pyccl.linear_matter_power(cosmo_ccl_pkl, np.asarray(k_test), z_to_a(1.0))
-        assert np.allclose(pkl_hmf, pkl_ccl, rtol=0.0015)
+class TestDensitiesCCL:
+    pytestmark = REQUIRES_CCL
 
-    # P_nl(k, z=1) matches CCL+CAMB's HMcode nonlinear P(k) (rtol 0.5%, observed max ~0.265%). Requires camb.
-    @pytest.mark.camb
-    def test_pk_nonlinear_matches_ccl(self, fixed_cosmology, cosmo_ccl_pknl):
-        k_test = jnp.geomspace(1e-3, 1.0, 20)
-        pknl_hmf = np.asarray(fixed_cosmology.pk(k_test, jnp.array([1.0]), linear=False)).flatten()
-        pknl_ccl = pyccl.nonlin_matter_power(cosmo_ccl_pknl, np.asarray(k_test), z_to_a(1.0))
-        assert np.allclose(pknl_hmf, pknl_ccl, rtol=0.005)
+    # critical_density(z) in-grid and beyond z_max_bg (measured 1.0e-3).
+    def test_critical_density(self, cosmo_ext, ccl_class):
+        z = np.array(Z_BG + [70.0])
+        got = cosmo_ext.critical_density(jnp.asarray(z))
+        assert rel_err(got, pyccl.rho_x(ccl_class, z_to_a(z), "critical", is_comoving=False)) < 2e-3
 
-    # Without extrapolate_k, pk is NaN beyond the trained k-grid; with it, finite and close to CCL a modest factor beyond it (rtol 1%, observed max ~0.79%).
-    def test_pk_k_extrapolation_matches_ccl(self, fixed_cosmology, cosmo_ccl_pkl):
-        k_grid_native, _ = fixed_cosmology._pk_grid()
-        k_min, k_max = float(k_grid_native.min()), float(k_grid_native.max())
-        k_beyond = jnp.array([k_min * 0.5, k_max * 2.0])
+    # omega_m(z), total matter including massive neutrinos, in-grid and beyond z_max_bg (measured 2.1e-3).
+    def test_omega_m(self, cosmo_ext, ccl_class):
+        z = np.array(Z_BG + [70.0])
+        assert rel_err(cosmo_ext.omega_m(jnp.asarray(z)), pyccl.omega_x(ccl_class, z_to_a(z), "matter")) < 4e-3
 
-        pk_noext = fixed_cosmology.update(extrapolate_k=False).pk(k_beyond, jnp.array([1.0]), linear=True)
-        assert jnp.all(jnp.isnan(pk_noext))
+    # comoving_volume_element(z) against CCL's D_A and H, in-grid and beyond z_max_bg (measured 5.9e-4).
+    def test_comoving_volume_element(self, cosmo_ext, ccl_class):
+        z = np.array(Z_BG + [70.0])
+        a = z_to_a(z)
+        c_km_s = 299792.458
+        D_A = pyccl.angular_diameter_distance(ccl_class, a)
+        H = cosmo_ext.H0 * pyccl.h_over_h0(ccl_class, a)
+        assert rel_err(cosmo_ext.comoving_volume_element(jnp.asarray(z)), (1 + z) ** 2 * D_A**2 * c_km_s / H) < 1.2e-3
 
-        pk_ext = np.asarray(
-            fixed_cosmology.update(extrapolate_k=True).pk(k_beyond, jnp.array([1.0]), linear=True)
-        ).flatten()
-        pk_ccl = pyccl.linear_matter_power(cosmo_ccl_pkl, np.asarray(k_beyond), z_to_a(1.0))
-        assert np.allclose(pk_ext, pk_ccl, rtol=0.01)
 
-    # Without extrapolate_z, pk is NaN beyond z_max_pk; with it, the growth-ratio-rescaled value matches CCL's growth-factor ratio (rtol 0.5%, observed max ~0.23%).
-    def test_pk_z_extrapolation_growth_ratio_matches_ccl(self, fixed_cosmology, cosmo_hmfast_ext, cosmo_ccl_bg):
-        z_max_pk = float(fixed_cosmology._z_grid_pk()[-1])
+class TestGrowthCCL:
+    pytestmark = REQUIRES_CCL
+
+    # growth_factor(z) across the P(k) emulators' range (measured 1.3e-3).
+    def test_growth_factor(self, cosmo, ccl_class):
+        assert rel_err(cosmo.growth_factor(jnp.asarray(Z_PK)), pyccl.growth_factor(ccl_class, z_to_a(Z_PK))) < 2.5e-3
+
+    # growth_rate(z) away from the growth table's edges (measured 1.1e-3).
+    def test_growth_rate(self, cosmo, ccl_class):
+        got = cosmo.growth_rate(jnp.asarray(Z_GROWTH_RATE))
+        assert rel_err(got, pyccl.growth_rate(ccl_class, z_to_a(Z_GROWTH_RATE))) < 2.5e-3
+
+    # growth_rate at the table's first node, z = 0, from a second-order one-sided difference (measured 3.7e-3).
+    def test_growth_rate_at_z0(self, cosmo, ccl_class):
+        assert rel_err(cosmo.growth_rate(jnp.array([0.0])), pyccl.growth_rate(ccl_class, z_to_a(0.0))) < 7.5e-3
+
+    # With extrapolate_z=True, growth_factor continues past z_max_pk = 5 (measured 1.3e-3); NaN without the flag.
+    def test_growth_factor_beyond_grid_with_extrapolation(self, cosmo, cosmo_ext, ccl_class):
+        z_max_pk = float(cosmo._z_grid_pk()[-1])
+        z = jnp.array([z_max_pk + 2.0, z_max_pk + 10.0])
+        assert jnp.all(jnp.isnan(cosmo.growth_factor(z)))
+        assert rel_err(cosmo_ext.growth_factor(z), pyccl.growth_factor(ccl_class, z_to_a(z))) < 2.5e-3
+
+    # growth_rate has no extrapolation branch: NaN beyond z_max_pk unless extrapolating.
+    def test_growth_rate_nan_beyond_grid_unless_extrapolating(self, cosmo, cosmo_ext):
+        z_beyond = jnp.array(float(cosmo._z_grid_pk()[-1]) + 2.0)
+        assert jnp.isnan(cosmo.growth_rate(z_beyond))
+        assert jnp.isfinite(cosmo_ext.growth_rate(z_beyond))
+
+    # velocity_dispersion(z) against (f a H / c)^2 / 3 * int P_lin dk / 2 pi^2 built from CCL's own ingredients
+    # (measured 1.9e-3; 7.1e-3 at z = 0, which inherits growth_rate's larger error there).
+    def test_velocity_dispersion(self, cosmo, ccl_class):
+        z = np.array([0.0, 0.1, 0.5, 1.0, 2.0])
+        a = z_to_a(z)
+        k = np.geomspace(1e-5, 50.0, 4000)
+        pk = np.array([pyccl.linear_matter_power(ccl_class, k, float(ai)) for ai in a])
+        f_aH = pyccl.growth_rate(ccl_class, a) * a * cosmo.H0 * pyccl.h_over_h0(ccl_class, a) / 299792.458
+        want = f_aH**2 / 3 * np.trapezoid(pk * k, np.log(k), axis=1) / (2 * np.pi**2)
+        got = np.asarray(cosmo.velocity_dispersion(jnp.asarray(z)))
+        assert rel_err(got[1:], want[1:]) < 4e-3
+        assert rel_err(got[0], want[0]) < 1.5e-2
+
+
+class TestDeltaCCL:
+    pytestmark = REQUIRES_CCL
+
+    # delta_c for all 3 prescriptions (hmfast "NS97" is CCL "NakamuraSuto97"; measured 1.5e-6).
+    @pytest.mark.parametrize("hmfast_kind,ccl_kind", [
+        ("EdS", "EdS"),
+        ("EdS_approx", "EdS_approx"),
+        ("NS97", "NakamuraSuto97"),
+    ])
+    def test_delta_c(self, cosmo, ccl_class, hmfast_kind, ccl_kind):
+        z = np.array(Z_BG)
+        got = np.broadcast_to(np.asarray(cosmo.delta_c(jnp.asarray(z), prescription=hmfast_kind)), z.shape)
+        assert rel_err(got, pyccl.halos.get_delta_c(ccl_class, z_to_a(z), kind=ccl_kind)) < 3e-6
+
+
+class TestSigmaCCL:
+    pytestmark = REQUIRES_CCL
+
+    # sigma(M) and sigma(R) on hmfast's own P_lin (measured 6.3e-5 / 3.6e-5).
+    @pytest.mark.parametrize("z", [0.0, 1.0, 3.0])
+    def test_sigma_m(self, cosmo, ccl_calc, z):
+        assert rel_err(cosmo.sigma_m(jnp.asarray(M_GRID), z), pyccl.sigmaM(ccl_calc, M_GRID, z_to_a(z))) < 1.3e-4
+
+    @pytest.mark.parametrize("z", [0.0, 1.0, 3.0])
+    def test_sigma_r(self, cosmo, ccl_calc, z):
+        assert rel_err(cosmo.sigma_r(jnp.asarray(R_GRID), z), pyccl.sigmaR(ccl_calc, R_GRID, z_to_a(z))) < 8e-5
+
+
+class TestLinearPowerCCL:
+    pytestmark = REQUIRES_CCL
+
+    # P_lin(k, z) over the emulator's full k range (measured 1.1e-3).
+    @pytest.mark.parametrize("z", Z_PK)
+    def test_pk_linear(self, cosmo, ccl_class, z):
+        got = cosmo.pk(jnp.asarray(K_FULL), jnp.array([z]), linear=True)
+        assert rel_err(np.ravel(got), pyccl.linear_matter_power(ccl_class, K_FULL, z_to_a(z))) < 2.2e-3
+
+    # Without extrapolate_k, pk is NaN beyond the trained k range; with it, a modest factor beyond (measured 3.4e-3).
+    def test_pk_k_extrapolation(self, cosmo, ccl_class):
+        k_native = cosmo._pk_grid()[0]
+        k = jnp.array([k_native.min() * 0.5, k_native.max() * 2.0])
+        assert jnp.all(jnp.isnan(cosmo.update(extrapolate_k=False).pk(k, jnp.array([1.0]), linear=True)))
+        got = np.ravel(cosmo.update(extrapolate_k=True).pk(k, jnp.array([1.0]), linear=True))
+        assert rel_err(got, pyccl.linear_matter_power(ccl_class, np.asarray(k), z_to_a(1.0))) < 7e-3
+
+    # Without extrapolate_z, pk is NaN beyond z_max_pk; with it, P(k) scales by CCL's growth-factor ratio
+    # (measured 3.3e-5).
+    def test_pk_z_extrapolation_growth_ratio(self, cosmo, cosmo_ext, ccl_class):
+        z_max_pk = float(cosmo._z_grid_pk()[-1])
         k0 = jnp.array([0.05])
-        z_beyond = jnp.array([z_max_pk + 2.0, z_max_pk + 10.0])
-
-        pk_noext = fixed_cosmology.pk(k0, z_beyond, linear=True)
-        assert jnp.all(jnp.isnan(pk_noext))
-
-        pk_ext = np.asarray(cosmo_hmfast_ext.pk(k0, z_beyond, linear=True)).flatten()
-        pk_zmax = float(np.asarray(fixed_cosmology.pk(k0, jnp.array([z_max_pk]), linear=True)).flatten()[0])
-        growth_ratio_hmf = pk_ext / pk_zmax
-
-        a_beyond = z_to_a(np.asarray(z_beyond))
-        D_ccl_beyond = np.asarray(pyccl.background.growth_factor(cosmo_ccl_bg, a_beyond))
-        D_ccl_zmax = float(pyccl.background.growth_factor(cosmo_ccl_bg, z_to_a(z_max_pk)))
-        growth_ratio_ccl = (D_ccl_beyond / D_ccl_zmax) ** 2
-
-        assert np.allclose(growth_ratio_hmf, growth_ratio_ccl, rtol=0.005)
+        z = jnp.array([z_max_pk + 2.0, z_max_pk + 10.0])
+        assert jnp.all(jnp.isnan(cosmo.pk(k0, z, linear=True)))
+        ratio = np.ravel(cosmo_ext.pk(k0, z, linear=True)) / np.ravel(cosmo.pk(k0, jnp.array([z_max_pk])))[0]
+        D = pyccl.growth_factor(ccl_class, z_to_a(z)) / pyccl.growth_factor(ccl_class, z_to_a(z_max_pk))
+        assert rel_err(ratio, D**2) < 7e-5
 
 
-# EDE sets are excluded: CCL cannot represent an EDE background, and halofit is not calibrated for it.
-HALOFIT_CASES = [
+class TestNonlinearPowerCCL:
+    pytestmark = REQUIRES_CCL + [pytest.mark.camb]
+
+    # HMcode P_nl(k, z) against CCL running CAMB with HMcode, the only fair truth for the HMcode-trained emulator
+    # (measured 5.1e-3 at z = 0, 3.0e-3 above).
+    @pytest.mark.parametrize("z", [0.0, 0.5, 1.0, 2.0])
+    def test_pk_hmcode(self, cosmo, z):
+        pytest.importorskip("camb")
+        ccl_camb = _ccl_camb(cosmo)
+        k = np.geomspace(1e-3, 10.0, 40)
+        got = np.ravel(cosmo.pk(jnp.asarray(k), jnp.array([z]), linear=False))
+        assert rel_err(got, pyccl.nonlin_matter_power(ccl_camb, k, z_to_a(z))) < 1e-2
+
+
+_CCL_CAMB = {}
+
+
+def _ccl_camb(cosmo):
+    if id(cosmo) not in _CCL_CAMB:
+        _CCL_CAMB[id(cosmo)] = ccl_cosmology(cosmo, transfer_function="boltzmann_camb", matter_power_spectrum="camb")
+    return _CCL_CAMB[id(cosmo)]
+
+
+# EDE sets are excluded throughout: CCL cannot represent an EDE background.
+OTHER_SETS = [
     ("lcdm:v1", {}),
     ("wcdm:v1", {"w0": -0.8}),
     ("mnu:v1", {"m_ncdm": 0.3}),
@@ -210,137 +261,124 @@ HALOFIT_CASES = [
 ]
 
 
-class TestHalofitCCL:
-    # pknl_mode="halofit" matches CCL's halofit run on hmfast's own P_lin, per emulator set (rtol 0.2%, observed max ~0.078/0.080/0.080/0.079/0.085%).
-    @pytest.mark.parametrize("emulator_set,extension", HALOFIT_CASES, ids=[c[0] for c in HALOFIT_CASES])
-    def test_pk_halofit_matches_ccl(self, fixed_cosmology, emulator_set, extension):
-        cosmo = Cosmology(
-            emulator_set=emulator_set, H0=fixed_cosmology.H0, omega_cdm=fixed_cosmology.omega_cdm,
-            omega_b=fixed_cosmology.omega_b, A_s=fixed_cosmology.A_s, n_s=fixed_cosmology.n_s,
-            pknl_mode="halofit", **extension,
-        )
-        p = cosmo._cosmo_params()
-        m_nu = [p["m_ncdm"]] * 3 if emulator_set == "mnu-3states:v1" else [0.0, 0.0, p["m_ncdm"]]
-
-        a_wide = np.sort(1.0 / (1.0 + np.linspace(0.0, 3.0, 50)))
-        k_ref = np.asarray(cosmo._pk_grid()[0])
-        pk_lin = np.asarray(cosmo.pk(jnp.asarray(k_ref), jnp.asarray(1.0 / a_wide - 1.0), linear=True)).T
-        cosmo_ccl = pyccl.CosmologyCalculator(
-            Omega_c=float(p["Omega_cdm"]), Omega_b=float(p["Omega_b"]), h=float(p["h"]),
-            A_s=cosmo.A_s, n_s=cosmo.n_s, m_nu=[float(m) for m in m_nu], mass_split="list",
-            w0=float(p["w0_fld"]), Neff=float(cosmo.derived_parameters()["Neff"]),
-            pk_linear={"a": a_wide, "k": k_ref, "delta_matter:delta_matter": pk_lin},
-            nonlinear_model="halofit",
-        )
-
-        k_test = np.geomspace(1e-3, 10.0, 40)
-        pk_hmf = np.asarray(cosmo.pk(jnp.asarray(k_test), jnp.asarray(Z_LIST), linear=False))
-        for i, z in enumerate(Z_LIST):
-            assert np.allclose(pk_hmf[:, i], pyccl.nonlin_matter_power(cosmo_ccl, k_test, z_to_a(z)), rtol=0.002)
+@pytest.fixture(scope="module", params=OTHER_SETS, ids=[s for s, _ in OTHER_SETS])
+def emulator_set_cosmology(request, fixed_cosmology):
+    """Each non-EDE emulator set at the fixed cosmology plus one extension value, in ncdm_mode="m"."""
+    emulator_set, extension = request.param
+    f = fixed_cosmology
+    try:
+        return Cosmology(emulator_set=emulator_set, H0=f.H0, omega_cdm=f.omega_cdm, omega_b=f.omega_b, A_s=f.A_s,
+                         n_s=f.n_s, ncdm_mode="m", **extension)
+    except Exception as exc:
+        pytest.skip(f"{emulator_set} emulator files not available locally: {exc}")
 
 
-class TestDensitiesAndMatterFractionCCL:
-    # critical_density(z) matches CCL's rho_x(..., 'critical') in-grid and a bit beyond z_max_bg=20 (rtol 0.2%, observed max ~0.091% at z=70).
-    def test_critical_density_matches_ccl(self, cosmo_hmfast_ext, cosmo_ccl_bg):
-        z_max_bg = float(cosmo_hmfast_ext._z_grid_bg()[-1])
-        z_arr = jnp.asarray(Z_LIST + [z_max_bg + 50.0])
-        a_arr = z_to_a(np.asarray(z_arr))
+class TestEmulatorSetsCCL:
+    pytestmark = REQUIRES_CCL
 
-        rho_crit_hmf = np.asarray(cosmo_hmfast_ext.critical_density(z_arr))
-        rho_crit_ccl = pyccl.background.rho_x(cosmo_ccl_bg, a_arr, "critical", is_comoving=False)
-        assert np.allclose(rho_crit_hmf, rho_crit_ccl, rtol=0.002)
+    @pytest.fixture(scope="class")
+    def pair(self, emulator_set_cosmology):
+        return emulator_set_cosmology, ccl_cosmology(emulator_set_cosmology)
 
-    # omega_m(z) matches CCL's neutrino-corrected matter fraction in-grid and a bit beyond z_max_bg (rtol 0.3%, observed max ~0.184% at z=70).
-    def test_omega_m_matches_ccl(self, cosmo_hmfast_ext, cosmo_ccl_bg):
-        z_max_bg = float(cosmo_hmfast_ext._z_grid_bg()[-1])
-        z_arr = jnp.asarray(Z_LIST + [z_max_bg + 50.0])
-        a_arr = z_to_a(np.asarray(z_arr))
+    # H(z), D_A(z) per emulator set (measured max over sets 1.4e-4 / 4.1e-5).
+    def test_background(self, pair):
+        cosmo, ccl = pair
+        z = jnp.asarray(Z_BG[:-1])
+        a = z_to_a(z)
+        assert rel_err(cosmo.hubble_parameter(z), cosmo.H0 * pyccl.h_over_h0(ccl, a)) < 3e-4
+        assert rel_err(cosmo.angular_diameter_distance(z), pyccl.angular_diameter_distance(ccl, a)) < 1e-4
 
-        om_hmf = np.asarray(cosmo_hmfast_ext.omega_m(z_arr))
-        om_ccl = pyccl.background.omega_x(cosmo_ccl_bg, a_arr, "matter")
-        assert np.allclose(om_hmf, om_ccl, rtol=0.003)
+    # growth_factor(z), growth_rate(z) per emulator set (measured max over sets 3.6e-3 / 3.3e-3, both mnu-3states). With
+    # massive neutrinos growth is scale dependent: hmfast reads it off P_lin at k = 0.01 / Mpc, CCL solves an ODE.
+    def test_growth(self, pair):
+        cosmo, ccl = pair
+        assert rel_err(cosmo.growth_factor(jnp.asarray(Z_PK)), pyccl.growth_factor(ccl, z_to_a(Z_PK))) < 7e-3
+        got = cosmo.growth_rate(jnp.asarray(Z_GROWTH_RATE))
+        assert rel_err(got, pyccl.growth_rate(ccl, z_to_a(Z_GROWTH_RATE))) < 7e-3
 
-    # comoving_volume_element(z), built from the same D_A(z)/H(z) CCL calls, matches in-grid and beyond z_max_bg (rtol 0.1%, max ~0.052%); z=0 skipped (0/0).
-    def test_comoving_volume_element_matches_ccl(self, cosmo_hmfast_ext, cosmo_ccl_bg):
-        h = cosmo_hmfast_ext.H0 / 100.0
-        z_max_bg = float(cosmo_hmfast_ext._z_grid_bg()[-1])
-        z_arr = jnp.asarray(Z_LIST[1:] + [z_max_bg + 50.0])
-        a_arr = z_to_a(np.asarray(z_arr))
+    # sigma8(z) per emulator set (measured max over sets 1.3e-4).
+    def test_sigma8(self, pair):
+        cosmo, ccl = pair
+        R8 = 8.0 / (cosmo.H0 / 100.0)
+        z = Z_BG[:-2]
+        assert rel_err(cosmo.sigma8(jnp.asarray(z)), [pyccl.sigmaR(ccl, R8, float(a)) for a in z_to_a(z)]) < 2.5e-4
 
-        c_km_s = 299792.458
-        dV_hmf = np.asarray(cosmo_hmfast_ext.comoving_volume_element(z_arr))
-        DA_ccl = np.asarray(pyccl.background.angular_diameter_distance(cosmo_ccl_bg, a_arr))
-        Hz_ccl = 100.0 * h * np.asarray(pyccl.background.h_over_h0(cosmo_ccl_bg, a_arr))
-        dV_ccl = (1.0 + np.asarray(z_arr)) ** 2 * DA_ccl**2 * c_km_s / Hz_ccl
+    # P_lin(k, z) per emulator set over k <= 10 / Mpc (measured max over sets 1.6e-3).
+    def test_pk_linear(self, pair):
+        cosmo, ccl = pair
+        k = np.geomspace(1e-4, 10.0, 40)
+        got = np.asarray(cosmo.pk(jnp.asarray(k), jnp.asarray(Z_PK), linear=True))
+        want = np.stack([pyccl.linear_matter_power(ccl, k, float(a)) for a in z_to_a(Z_PK)], axis=1)
+        assert rel_err(got, want) < 3.3e-3
 
-        assert np.allclose(dV_hmf, dV_ccl, rtol=0.001)
-
-
-class TestSigmaMRCCL:
-    # sigma(M), sigma(R) match CCL's sigmaM/sigmaR at z=0,1 (rtol 0.05%, observed max ~0.0051%).
-    @pytest.mark.parametrize("z", [0.0, 1.0])
-    def test_sigma_m_matches_ccl(self, cosmo_ccl, fixed_cosmology, z):
-        sm_hmf = np.asarray(fixed_cosmology.sigma_m(jnp.asarray(M_GRID), z))
-        sm_ccl = pyccl.power.sigmaM(cosmo_ccl, M_GRID, z_to_a(z))
-        assert np.allclose(sm_hmf, sm_ccl, rtol=0.0005)
-
-    @pytest.mark.parametrize("z", [0.0, 1.0])
-    def test_sigma_r_matches_ccl(self, cosmo_ccl, fixed_cosmology, z):
-        sr_hmf = np.asarray(fixed_cosmology.sigma_r(jnp.asarray(R_GRID), z))
-        sr_ccl = pyccl.power.sigmaR(cosmo_ccl, R_GRID, z_to_a(z))
-        assert np.allclose(sr_hmf, sr_ccl, rtol=0.0005)
+    # pknl_mode="halofit" against CCL's halofit run on hmfast's own P_lin (measured max over sets 8.5e-4).
+    def test_pk_halofit(self, emulator_set_cosmology):
+        cosmo = emulator_set_cosmology.update(pknl_mode="halofit")
+        ccl = ccl_cosmology(cosmo, pk_linear=True, nonlinear_model="halofit")
+        k = np.geomspace(1e-3, 10.0, 40)
+        z = [0.0, 0.5, 1.0, 2.0]
+        got = np.asarray(cosmo.pk(jnp.asarray(k), jnp.asarray(z), linear=False))
+        want = np.stack([pyccl.nonlin_matter_power(ccl, k, float(a)) for a in z_to_a(z)], axis=1)
+        assert rel_err(got, want) < 1.7e-3
 
 
-class TestGrowthCCL:
-    # growth_factor(z) matches CCL's growth_factor in-grid (rtol 0.15%, observed max ~0.068%).
-    def test_growth_factor_matches_ccl(self, fixed_cosmology, cosmo_ccl_bg):
-        z_arr = jnp.asarray(Z_LIST)
-        a_arr = z_to_a(Z_LIST)
-        D_hmf = np.asarray(fixed_cosmology.growth_factor(z_arr))
-        D_ccl = np.asarray(pyccl.background.growth_factor(cosmo_ccl_bg, a_arr))
-        assert np.allclose(D_hmf, D_ccl, rtol=0.0015)
+# ---------------------------------------------------------------------------------------------------------------------
+# CMB spectra and derived parameters against CLASS run with the lcdm:v1 training settings (N_ur = 2.0328 plus one
+# massive state, HMcode lensing); the emulators were trained on CLASS v2.9.4, so this includes version differences.
+# ---------------------------------------------------------------------------------------------------------------------
 
-    # growth_rate(z) matches CCL's growth_rate in-grid, away from the jnp.gradient table's edges (rtol 0.2%, observed max ~0.113%).
-    def test_growth_rate_matches_ccl(self, fixed_cosmology, cosmo_ccl_bg):
-        z_arr = jnp.asarray(Z_LIST_GROWTH_RATE)
-        a_arr = z_to_a(Z_LIST_GROWTH_RATE)
-        f_hmf = np.asarray(fixed_cosmology.growth_rate(z_arr))
-        f_ccl = np.asarray(pyccl.background.growth_rate(cosmo_ccl_bg, a_arr))
-        assert np.allclose(f_hmf, f_ccl, rtol=0.002)
-
-    # growth_factor with extrapolate_z=True is finite and close to CCL past z_max_pk=5 (rtol 0.5%, max ~0.111%); NaN without the flag.
-    def test_growth_factor_extrapolates_near_grid_boundary(self, fixed_cosmology, cosmo_hmfast_ext, cosmo_ccl_bg):
-        z_max_pk = float(fixed_cosmology._z_grid_pk()[-1])
-        z_beyond = jnp.array([z_max_pk + 2.0, z_max_pk + 10.0])
-
-        assert jnp.all(jnp.isnan(fixed_cosmology.growth_factor(z_beyond)))
-
-        D_hmf = np.asarray(cosmo_hmfast_ext.growth_factor(z_beyond))
-        D_ccl = np.asarray(pyccl.background.growth_factor(cosmo_ccl_bg, z_to_a(np.asarray(z_beyond))))
-        assert np.allclose(D_hmf, D_ccl, rtol=0.005)
-
-    # growth_rate has no extrapolation branch at all: NaN beyond z_max_pk regardless of extrapolate_z.
-    def test_growth_rate_nan_beyond_grid_unless_extrapolating(self, fixed_cosmology, cosmo_hmfast_ext):
-        z_max_pk = float(fixed_cosmology._z_grid_pk()[-1])
-        z_beyond = jnp.array(z_max_pk + 2.0)
-        assert jnp.isnan(fixed_cosmology.growth_rate(z_beyond))
-        assert jnp.isfinite(cosmo_hmfast_ext.growth_rate(z_beyond))
+L_CMB = np.arange(2, 5001)
 
 
-class TestDeltaCCL:
-    # delta_c matches CCL's get_delta_c for all 3 prescriptions (hmfast "NS97" <-> CCL "NakamuraSuto97"; rtol 0.1%, observed max ~0.0025%).
-    @pytest.mark.parametrize("hmfast_kind,ccl_kind", [
-        ("EdS", "EdS"),
-        ("EdS_approx", "EdS_approx"),
-        ("NS97", "NakamuraSuto97"),
+@pytest.fixture(scope="module")
+def class_reference(cosmo):
+    params = {
+        "output": "tCl,pCl,lCl,mPk", "lensing": "yes", "non_linear": "hmcode", "hmcode_version": "2016",
+        "l_max_scalars": int(L_CMB[-1]), "P_k_max_1/Mpc": 50.0,
+        "H0": cosmo.H0, "omega_cdm": cosmo.omega_cdm, "omega_b": cosmo.omega_b, "A_s": cosmo.A_s, "n_s": cosmo.n_s,
+        "tau_reio": cosmo.tau, "N_ur": 2.0328, "N_ncdm": 1, "m_ncdm": float(cosmo._cosmo_params()["m_ncdm"]),
+        "tol_perturbations_integration": 1e-7, "perturbations_sampling_stepsize": 0.05, "accurate_lensing": 1,
+        "delta_l_max": 1000, "l_logstep": 1.025, "l_linstep": 15,
+    }
+    c = classy.Class()
+    c.set(params)
+    c.compute()
+    yield c
+    c.struct_cleanup()
+    c.empty()
+
+
+@pytest.mark.classy
+@pytest.mark.skipif(classy is None, reason="requires classy")
+class TestCMBClass:
+    # D_l in hmfast's convention, l(l+1) C_l / 2 pi ([l(l+1)]^2 C_l / 2 pi for PP). Errors are max |difference| over
+    # max |D_l|, since EE and TE cross zero (measured TT 3.8e-4, EE 7.0e-4, TE 9.6e-4, PP 2.6e-3).
+    @pytest.mark.parametrize("kind,tol", [("TT", 8e-4), ("EE", 1.4e-3), ("TE", 2e-3), ("PP", 5.3e-3)])
+    def test_cl_cmb(self, cosmo, class_reference, kind, tol):
+        cls = class_reference.lensed_cl(int(L_CMB[-1]))
+        ell = L_CMB
+        fac = (ell * (ell + 1)) ** 2 / (2 * np.pi) if kind == "PP" else ell * (ell + 1) / (2 * np.pi)
+        got = np.asarray(cosmo.cl_cmb(kind, jnp.asarray(ell)))
+        assert peak_err(got, cls[kind.lower()][ell] * fac) < tol
+
+    # derived_parameters() against CLASS's own (hmfast chi_rec/chi_star/rs_drag are CLASS ra_rec/ra_star/rs_d); measured
+    # 3.6e-4 for YHe, 2.6e-4 for z_reio, 4.7e-5 for sigma8, <= 1.3e-5 for the rest.
+    @pytest.mark.parametrize("hmfast_key,class_key,tol", [
+        ("100*theta_s", "100*theta_s", 1.6e-5),
+        ("sigma8", "sigma8", 1e-4),
+        ("YHe", "YHe", 7e-4),
+        ("z_reio", "z_reio", 5e-4),
+        ("Neff", "Neff", 2e-7),
+        ("tau_rec", "tau_rec", 1e-5),
+        ("z_rec", "z_rec", 7e-6),
+        ("rs_rec", "rs_rec", 1.1e-5),
+        ("chi_rec", "ra_rec", 2e-5),
+        ("tau_star", "tau_star", 1e-5),
+        ("z_star", "z_star", 7e-6),
+        ("rs_star", "rs_star", 1.5e-5),
+        ("chi_star", "ra_star", 1e-5),
+        ("rs_drag", "rs_d", 2.5e-5),
     ])
-    def test_delta_c_matches_ccl(self, fixed_cosmology, cosmo_ccl_bg, hmfast_kind, ccl_kind):
-        z_arr = jnp.asarray(Z_LIST)
-        a_arr = z_to_a(Z_LIST)
-        dc_hmf = np.broadcast_to(
-            np.asarray(fixed_cosmology.delta_c(z_arr, prescription=hmfast_kind)), z_arr.shape
-        ).astype(float)
-        dc_ccl = np.broadcast_to(
-            np.asarray(pyccl.halos.get_delta_c(cosmo_ccl_bg, a_arr, kind=ccl_kind)), z_arr.shape
-        ).astype(float)
-        assert np.allclose(dc_hmf, dc_ccl, rtol=0.001)
+    def test_derived_parameters(self, cosmo, class_reference, hmfast_key, class_key, tol):
+        want = class_reference.get_current_derived_parameters([class_key])[class_key]
+        assert rel_err(cosmo.derived_parameters()[hmfast_key], want) < tol

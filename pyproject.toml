@@ -30,6 +30,7 @@ dependencies = [
     "jaxlib>=0.10.0",
     "numpy>=1.20.0",
     "mcfit==0.0.22",
+    "requests",
 ]
 
 [project.optional-dependencies]
@@ -56,6 +57,7 @@ Documentation = "https://hmfast.readthedocs.io"
 markers = [
     "ccl: cross-checks against pyccl as ground truth (requires pyccl, auto-skipped otherwise)",
     "camb: cross-checks requiring CAMB via CCL's boltzmann_camb transfer function (requires camb, auto-skipped otherwise)",
+    "classy: cross-checks against CLASS run directly (requires classy, auto-skipped otherwise)",
     "class_sz: cross-checks against class_sz as ground truth (requires the classy_sz package, auto-skipped otherwise)",
     "accuracy: grid-convergence benchmarks (slow; skipped unless selected with -m accuracy)",
 ]

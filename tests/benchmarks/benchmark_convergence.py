@@ -13,14 +13,11 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from hmfast.halos import HaloModel
-from hmfast.halos.bias import T10HaloBias
-from hmfast.halos.concentration import D08Concentration
-from hmfast.halos.massdef import MassDefinition
-from hmfast.halos.massfunc import T08HaloMassFunction
 from hmfast.halos.profiles import GNFWPressureProfile, NFWMatterProfile, Z07GalaxyHODProfile
 from hmfast.stats import Pk, cl
 from hmfast.tracers import GalaxyTracer, tSZTracer
+
+from .._shared import halo_model as shared_halo_model
 
 pytestmark = pytest.mark.accuracy
 
@@ -48,8 +45,7 @@ QUANTITIES = {
 
 
 def _halo_model(cosmology, n_m):
-    return HaloModel(cosmology=cosmology, mass_def=MassDefinition(200, "critical"), halo_mass_function=T08HaloMassFunction(),
-                     halo_bias=T10HaloBias(), concentration=D08Concentration(), m_range=(1e10, 5e15), n_m=n_m)
+    return shared_halo_model(cosmology, m_range=(1e10, 5e15), n_m=n_m)
 
 
 def _evaluate(cosmology, name, m, z, x):
