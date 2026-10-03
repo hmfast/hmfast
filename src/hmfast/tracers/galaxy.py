@@ -70,7 +70,7 @@ class GalaxyTracer(Tracer):
 
     _required_profile_type = GalaxyHODProfile
 
-    def __init__(self, profile=None, dndz=None, has_density=True, bias=None, mag_bias=None, has_rsd=False):
+    def __init__(self, profile=None, *, dndz=None, has_density=True, bias=None, mag_bias=None, has_rsd=False):
         self._check_has_density(has_density)
         super().__init__(profile=profile or Z07GalaxyHODProfile())
 
@@ -141,7 +141,7 @@ class GalaxyTracer(Tracer):
         obj.has_density = has_density
         return obj
 
-    def update(self, profile=None, dndz=None, has_density=None, bias=None, mag_bias=None, has_rsd=None):
+    def update(self, *, profile=None, dndz=None, has_density=None, bias=None, mag_bias=None, has_rsd=None):
         """
         Return a new GalaxyTracer instance with updated attributes using PyTree logic.
 

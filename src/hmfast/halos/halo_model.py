@@ -61,6 +61,7 @@ class HaloModel:
 
     def __init__(self,
                  cosmology=None,
+                 *,
                  mass_def=None,
                  halo_mass_function=None,
                  halo_bias=None,
@@ -115,7 +116,7 @@ class HaloModel:
          obj.concentration, obj.mass_def, obj.hm_consistency, obj.n_m) = aux_data
         return obj
 
-    def update(self, cosmology=None, halo_mass_function=None, halo_bias=None, subhalo_mass_function=None, concentration=None, mass_def=None,
+    def update(self, *, cosmology=None, halo_mass_function=None, halo_bias=None, subhalo_mass_function=None, concentration=None, mass_def=None,
                hm_consistency=None, m_range=None, n_m=None):
         """
         Return a new HaloModel instance with updated components.
@@ -206,7 +207,7 @@ class HaloModel:
 
 
     @partial(jax.jit, static_argnames=("bias_order",))
-    def mass_integral(self, k, z, profiles, bias_order=0):
+    def mass_integral(self, k, z, profiles, *, bias_order=0):
         """
         Generalised halo-model mass integral :math:`I_\\mu^\\beta`.
 

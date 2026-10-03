@@ -438,7 +438,7 @@ def _cl_linear_limber(cosmology, tracer1, tracer2, l, z_range, n_z, linear=True)
 # ------------------------------------------------------------------
 
 @partial(jax.jit, static_argnames=("n_z", "l_limber", "n_fft", "n_interp", "fftlog_bias", "window"))
-def cl(pk, halo_model, l, tracer1, tracer2=None, z_range=None, n_z=100, l_limber=0.0,
+def cl(pk, halo_model, l, tracer1, tracer2=None, *, z_range=None, n_z=100, l_limber=0.0,
        z_fid=0.0, n_fft=None, n_interp=200, fftlog_bias=0.1, window=0.2):
     """
     Halo-model angular power spectrum :math:`C_\\ell` between two tracers.
@@ -526,7 +526,7 @@ def cl(pk, halo_model, l, tracer1, tracer2=None, z_range=None, n_z=100, l_limber
 
 
 @partial(jax.jit, static_argnames=("n_z", "linear", "l_limber", "n_fft", "n_interp", "fftlog_bias", "window"))
-def cl_linbias(cosmology, l, tracer1, tracer2=None, z_range=None, n_z=100, linear=True,
+def cl_linbias(cosmology, l, tracer1, tracer2=None, *, z_range=None, n_z=100, linear=True,
                l_limber=0.0, z_fid=0.0, n_fft=None, n_interp=200, fftlog_bias=0.1, window=0.2):
     """
     Angular power spectrum :math:`C_\\ell` between two linearly biased tracers.

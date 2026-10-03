@@ -41,7 +41,7 @@ class CMBLensingTracer(Tracer):
 
     _required_profile_type = MatterProfile
 
-    def __init__(self, profile=None, z_source=None):
+    def __init__(self, profile=None, *, z_source=None):
         super().__init__(profile=profile or NFWMatterProfile())
         self.z_source = z_source
 
@@ -59,7 +59,7 @@ class CMBLensingTracer(Tracer):
         obj.z_source = z_source
         return obj
 
-    def update(self, profile=None, z_source=None):
+    def update(self, *, profile=None, z_source=None):
         """
         Return a new CMBLensingTracer instance with updated attributes using PyTree logic.
 

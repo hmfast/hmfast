@@ -172,7 +172,7 @@ def _dPk_response(halo_model, k, z, profile1, profile2=None, include_1h=True, in
 # ------------------------------------------------------------------
 
 @partial(jax.jit, static_argnames=("n_z",))
-def cov_cng(tk, halo_model, l1, l2, tracer1, tracer2=None, tracer3=None, tracer4=None, z_range=None, n_z=100,
+def cov_cng(tk, halo_model, l1, l2, tracer1, tracer2=None, tracer3=None, tracer4=None, *, z_range=None, n_z=100,
             f_sky=1.0):
     """
     Connected non-Gaussian covariance between two angular power spectra
@@ -292,7 +292,7 @@ def _disc_var_transform(cosmology):
 
 
 @jax.jit
-def sigma2_b_disc(cosmology, z, f_sky=1.0):
+def sigma2_b_disc(cosmology, z, *, f_sky=1.0):
     """
     Variance of the linear density field over a circular footprint of sky
     fraction :math:`f_{\\rm sky}`, entering :func:`cov_ssc`,
@@ -338,7 +338,7 @@ def sigma2_b_disc(cosmology, z, f_sky=1.0):
 
 
 @partial(jax.jit, static_argnames=("n_z", "counterterms"))
-def cov_ssc(pk, halo_model, l1, l2, tracer1, tracer2=None, tracer3=None, tracer4=None, z_range=None, n_z=100,
+def cov_ssc(pk, halo_model, l1, l2, tracer1, tracer2=None, tracer3=None, tracer4=None, *, z_range=None, n_z=100,
             f_sky=1.0, sigma2_b=None, counterterms=None):
     """
     Super-sample covariance between two angular power spectra

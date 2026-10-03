@@ -119,7 +119,7 @@ class Cosmology:
         Source of the nonlinear :math:`P(k)`: the HMcode emulator (default), or halofit
         (Takahashi et al. 2012, with the Bird et al. 2012 neutrino correction) applied to the emulated linear :math:`P(k)`.
     """
-    def __init__(self, emulator_set="lcdm:v1",
+    def __init__(self, emulator_set="lcdm:v1", *,
                  H0=68.0, omega_cdm=0.12, omega_b=0.02246576, A_s=2.1053e-9, n_s=0.965, tau=0.0544,                       # LCDM
                  m_ncdm=None, N_ur=None, w0=None,                                                                           # wCDM, Neff, MNU
                  f_ede=None, z_c=None, theta_i=None, r=None,                                                                # EDE
@@ -200,7 +200,7 @@ class Cosmology:
         
         return obj
     
-    def update(self, H0=None, omega_cdm=None, omega_b=None, A_s=None, n_s=None,
+    def update(self, *, H0=None, omega_cdm=None, omega_b=None, A_s=None, n_s=None,
         tau=None, m_ncdm=None, N_ur=None, w0=None, f_ede=None, z_c=None,
         theta_i=None, r=None, T_cmb=None, extrapolate_z=None, extrapolate_k=None,
         ncdm_mode=None, pknl_mode=None):
@@ -764,7 +764,7 @@ class Cosmology:
         return Omega_m_z
 
     @partial(jax.jit, static_argnames=("prescription",))
-    def delta_c(self, z, prescription="EdS"):
+    def delta_c(self, z, *, prescription="EdS"):
         """
         Spherical-collapse threshold :math:`\\delta_c(z)`.
 
@@ -1031,8 +1031,8 @@ class Cosmology:
     # Matter power spectra
     # ------------------------------------------------------------------
 
-    @partial(jax.jit, static_argnums=(3,))
-    def pk(self, k, z, linear=True):
+    @partial(jax.jit, static_argnames=("linear",))
+    def pk(self, k, z, *, linear=True):
         """
         Get the matter power spectrum :math:`P(k, z)` interpolated at
         requested wavenumbers `k` and redshifts `z`.

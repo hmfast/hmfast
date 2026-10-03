@@ -98,7 +98,7 @@ class Z07GalaxyHODProfile(GalaxyHODProfile):
         vanishes, in physical :math:`M_{\\odot}`.
     """
 
-    def __init__(self, sigma_log10M=0.68, alpha_s=1.30, M1_prime=10**12.87, M_min=10**11.97, M0=0.0):        
+    def __init__(self, *, sigma_log10M=0.68, alpha_s=1.30, M1_prime=10**12.87, M_min=10**11.97, M0=0.0):        
         
         self.sigma_log10M, self.alpha_s, self.M1_prime, self.M_min, self.M0  = sigma_log10M, alpha_s, M1_prime, M_min, M0
 
@@ -112,9 +112,10 @@ class Z07GalaxyHODProfile(GalaxyHODProfile):
 
     @classmethod
     def _tree_unflatten(cls, aux, leaves):
-        return cls(*leaves)
+        sigma_log10M, alpha_s, M1_prime, M_min, M0 = leaves
+        return cls(sigma_log10M=sigma_log10M, alpha_s=alpha_s, M1_prime=M1_prime, M_min=M_min, M0=M0)
 
-    def update(self, sigma_log10M=None, alpha_s=None, M1_prime=None, M_min=None, M0=None):
+    def update(self, *, sigma_log10M=None, alpha_s=None, M1_prime=None, M_min=None, M0=None):
         """
         Return a new profile instance with updated HOD parameters.
 
@@ -254,7 +255,7 @@ class Z07GalaxyHODProfile(GalaxyHODProfile):
 
         Ntot = self.n_cen(halo_model, m) + self.n_sat(halo_model, m)
         dndlnm = jnp.reshape(halo_model.halo_mass_function.dndlnm(halo_model.cosmology, m, z, halo_model.mass_def), (len(m), len(z)))
-        bh = jnp.reshape(halo_model.halo_bias.bias(halo_model.cosmology, m, z, halo_model.mass_def, 1), (len(m), len(z)))
+        bh = jnp.reshape(halo_model.halo_bias.bias(halo_model.cosmology, m, z, halo_model.mass_def, order=1), (len(m), len(z)))
         ng = self.ng_bar(halo_model, z)
 
         bg_num = jnp.sum(dndlnm * bh * Ntot[:, None] * gl_w[:, None], axis=0)

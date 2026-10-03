@@ -43,7 +43,7 @@ class Pk:
         and 2-halo regimes in :meth:`pk_tot`; ``1.0`` recovers a plain sum.
     """
 
-    def __init__(self, include_1h=True, include_2h=True, k_damp=0.01, alpha_smooth=1.0):
+    def __init__(self, *, include_1h=True, include_2h=True, k_damp=0.01, alpha_smooth=1.0):
         """
         Parameters
         ----------

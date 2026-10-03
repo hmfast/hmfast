@@ -37,11 +37,11 @@ L_SHAPES = [
 
 
 def _cng(tk, t1, t2, t3, t4, l1=L_GRID, l2=L_GRID, f_sky=F_SKY):
-    return np.asarray(cov_cng(tk, HM, l1, l2, t1, t2, t3, t4, Z_RANGE, N_Z, f_sky))
+    return np.asarray(cov_cng(tk, HM, l1, l2, t1, t2, t3, t4, z_range=Z_RANGE, n_z=N_Z, f_sky=f_sky))
 
 
 def _ssc(t1, t2, t3, t4, f_sky=F_SKY):
-    return np.asarray(cov_ssc(PK, HM, L_GRID, L_GRID, t1, t2, t3, t4, Z_RANGE, N_Z, f_sky))
+    return np.asarray(cov_ssc(PK, HM, L_GRID, L_GRID, t1, t2, t3, t4, z_range=Z_RANGE, n_z=N_Z, f_sky=f_sky))
 
 
 class TestCovCng:
@@ -49,7 +49,7 @@ class TestCovCng:
     @pytest.mark.parametrize("l1,l2,expected_shape", L_SHAPES)
     def test_shape_matrix(self, l1, l2, expected_shape):
         g = GLENS_TRACER
-        out = jax.eval_shape(lambda: cov_cng(TK, HM, l1, l2, g, g, g, g, Z_RANGE, N_Z, F_SKY))
+        out = jax.eval_shape(lambda: cov_cng(TK, HM, l1, l2, g, g, g, g, z_range=Z_RANGE, n_z=N_Z, f_sky=F_SKY))
         assert out.shape == expected_shape
 
     # An auto covariance on a shared l grid is a symmetric matrix.
@@ -89,7 +89,7 @@ class TestCovSsc:
     @pytest.mark.parametrize("l1,l2,expected_shape", L_SHAPES)
     def test_shape_matrix(self, l1, l2, expected_shape):
         g = GLENS_TRACER
-        out = jax.eval_shape(lambda: cov_ssc(PK, HM, l1, l2, g, g, g, g, Z_RANGE, N_Z, F_SKY))
+        out = jax.eval_shape(lambda: cov_ssc(PK, HM, l1, l2, g, g, g, g, z_range=Z_RANGE, n_z=N_Z, f_sky=F_SKY))
         assert out.shape == expected_shape
 
     # An auto covariance on a shared l grid is a symmetric matrix.

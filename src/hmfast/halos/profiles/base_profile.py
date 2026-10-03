@@ -15,7 +15,7 @@ class HankelTransform:
     Reusable Hankel transform wrapper for JAX-based computation.
     """
 
-    def __init__(self, x, nu=0.5, pad_decades=2.0):
+    def __init__(self, x, *, nu=0.5, pad_decades=2.0):
 
         # Kept so a profile's pytree aux can carry this object alone, never the raw grid.
         self.x = x

@@ -139,7 +139,7 @@ class S12CIBProfile(CIBProfile):
     M_min : float
         Minimum halo mass :math:`M_{\\min}` entering the central and satellite terms in physical :math:`M_\\odot`.
     """
-    def __init__(self, nu, L0=6.4e-8, alpha=0.36, beta=1.75, gamma=1.7,
+    def __init__(self, nu, *, L0=6.4e-8, alpha=0.36, beta=1.75, gamma=1.7,
                  T0=24.4, M_eff=10**12.6, sigma2_LM=0.5, 
                  delta=3.6, z_p=1e100, M_min=10**11.5):
 
@@ -156,9 +156,11 @@ class S12CIBProfile(CIBProfile):
 
     @classmethod
     def _tree_unflatten(cls, aux, leaves):
-        return cls(*leaves)
+        nu, L0, alpha, beta, gamma, T0, M_eff, sigma2_LM, delta, z_p, M_min = leaves
+        return cls(nu, L0=L0, alpha=alpha, beta=beta, gamma=gamma, T0=T0, M_eff=M_eff, sigma2_LM=sigma2_LM,
+                   delta=delta, z_p=z_p, M_min=M_min)
 
-    def update(self, nu=None, L0=None, alpha=None, beta=None, gamma=None,
+    def update(self, *, nu=None, L0=None, alpha=None, beta=None, gamma=None,
                T0=None, M_eff=None, sigma2_LM=None, 
                delta=None, z_p=None, M_min=None):
         """
@@ -417,8 +419,8 @@ class S12CIBProfile(CIBProfile):
         return jnp.squeeze(j_bar / (4 * jnp.pi))
 
 
-    @partial(jax.jit, static_argnums=(3,))
-    def mean_intensity(self, halo_model, z_range, n_z):
+    @partial(jax.jit, static_argnames=("n_z",))
+    def mean_intensity(self, halo_model, *, z_range, n_z):
         """
         Compute the CIB mean intensity (monopole).
 
@@ -658,7 +660,7 @@ class M21CIBProfile(CIBProfile):
         in the luminosity-per-SFR units assumed by the Maniyar model. If not
         provided, it is read from the default auxiliary data files.
     """
-    def __init__(self, nu, eta_max=0.4028, z_c=1.5, tau=1.204, f_sub=0.134, 
+    def __init__(self, nu, *, eta_max=0.4028, z_c=1.5, tau=1.204, f_sub=0.134, 
                  M_min=10**11.5, M_eff=10**12.6, sigma2_LM=0.5, s_nu=None):
         self.nu = nu
         self.eta_max, self.z_c, self.tau, self.f_sub = eta_max, z_c, tau, f_sub
@@ -682,11 +684,12 @@ class M21CIBProfile(CIBProfile):
 
     @classmethod
     def _tree_unflatten(cls, aux, leaves):
-        *params, s_nu = leaves
-        return cls(*params, s_nu=s_nu)
+        nu, eta_max, z_c, tau, f_sub, M_min, M_eff, sigma2_LM, s_nu = leaves
+        return cls(nu, eta_max=eta_max, z_c=z_c, tau=tau, f_sub=f_sub, M_min=M_min, M_eff=M_eff,
+                   sigma2_LM=sigma2_LM, s_nu=s_nu)
 
 
-    def update(self, nu=None, eta_max=None, z_c=None, tau=None, f_sub=None, 
+    def update(self, *, nu=None, eta_max=None, z_c=None, tau=None, f_sub=None, 
                M_min=None, M_eff=None, sigma2_LM=None):
         """
         Return a new profile instance with updated CIB parameters.
@@ -934,8 +937,8 @@ class M21CIBProfile(CIBProfile):
         return jnp.squeeze(j_bar / (4 * jnp.pi))
 
 
-    @partial(jax.jit, static_argnums=(3,))
-    def mean_intensity(self, halo_model, z_range, n_z):
+    @partial(jax.jit, static_argnames=("n_z",))
+    def mean_intensity(self, halo_model, *, z_range, n_z):
         """
         Compute the CIB mean intensity (monopole).
 

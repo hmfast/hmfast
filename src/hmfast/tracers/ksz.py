@@ -33,7 +33,7 @@ class kSZTracer(Tracer):
     """
     _required_profile_type = DensityProfile
 
-    def __init__(self, profile=None, z_max=5.0):
+    def __init__(self, profile=None, *, z_max=5.0):
         super().__init__(profile=profile or B16DensityProfile())
         self.z_max = z_max
 
@@ -55,7 +55,7 @@ class kSZTracer(Tracer):
         obj.z_max = z_max
         return obj
 
-    def update(self, profile=None, z_max=None):
+    def update(self, *, profile=None, z_max=None):
         """
         Return a new kSZTracer instance with updated attributes using PyTree logic.
 

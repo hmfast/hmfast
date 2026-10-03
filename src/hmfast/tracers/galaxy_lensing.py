@@ -61,7 +61,7 @@ class GalaxyLensingTracer(Tracer):
     _required_profile_type = MatterProfile
 
 
-    def __init__(self, profile=None, dndz=None, ia_bias=None, has_shear=True):
+    def __init__(self, profile=None, *, dndz=None, ia_bias=None, has_shear=True):
 
         super().__init__(profile=profile or NFWMatterProfile())
 
@@ -116,7 +116,7 @@ class GalaxyLensingTracer(Tracer):
         obj.has_shear = has_shear
         return obj
 
-    def update(self, profile=None, dndz=None, ia_bias=None, has_shear=None):
+    def update(self, *, profile=None, dndz=None, ia_bias=None, has_shear=None):
         """
         Return a new GalaxyLensingTracer instance with updated attributes using PyTree logic.
 
