@@ -74,8 +74,8 @@ def _kernel_pair_effective(cosmology, tracer_a, tracer_b, z, l, z_lp, lp1h, lp3h
     return jnp.squeeze(ka * kb, axis=0)  # (Nl,) or (1,)
 
 
-def _dPk_response(halo_model, k, z, profile1, profile2=None,
-                   needs_counterterm1=None, needs_counterterm2=None):
+def _dPk_response(halo_model, k, z, profile1, profile2=None, include_1h=True, include_2h=True,
+                  needs_counterterm1=None, needs_counterterm2=None):
     """
     Halo-model power-spectrum response :math:`\\partial P_{u,v}(k,z) /
     \\partial\\delta_b`, the effective "trispectrum" entering the
@@ -93,9 +93,9 @@ def _dPk_response(halo_model, k, z, profile1, profile2=None,
     with ``bias_order=1``), the latter the plain product of first moments at
     matching :math:`k` for both legs.
 
-    If ``needs_counterterm1``/``needs_counterterm2`` mark :math:`u`/:math:`v`
-    as discrete number-counts observables (e.g. galaxy clustering/HOD) rather
-    than a continuous field, the number-counts counter-term is subtracted:
+    If :math:`u` or :math:`v` is a discrete number-counts observable
+    (a :class:`GalaxyHODProfile`) rather than a continuous field, the
+    number-counts counter-term is subtracted:
 
     .. math::
 
@@ -103,8 +103,7 @@ def _dPk_response(halo_model, k, z, profile1, profile2=None,
         (b_u+b_v)\\,P_{u,v}(k,z), \\qquad
         P_{u,v} = P_{\\rm lin}\\,I_1^1(k\\,|\\,u)\\,I_1^1(k\\,|\\,v) + I_1^{2,\\rm 2pt}(k\\,|\\,u,v)
 
-    where :math:`b_u = I_1^1(k\\,|\\,u)` (only included for the legs flagged
-    ``True``) and :math:`I_1^{2,\\rm 2pt}` is the unweighted pair integral
+    where :math:`b_u = I_1^1(k\\,|\\,u)` (only included for number-counts legs) and :math:`I_1^{2,\\rm 2pt}` is the unweighted pair integral
     :meth:`~hmfast.halos.HaloModel.mass_integral` at a shared :math:`k`, which
     uses the 1-halo second moment rather than a naive profile product.
 
@@ -119,14 +118,12 @@ def _dPk_response(halo_model, k, z, profile1, profile2=None,
         First profile (:math:`u`).
     profile2 : HaloProfile or None, default None
         Second profile (:math:`v`). If None, defaults to ``profile1``.
-    needs_counterterm1 : bool or None, default None
-        Whether ``profile1`` is a discrete number-counts observable requiring
-        the counter-term above. ``None`` (the default) auto-detects via
-        ``isinstance(profile1, GalaxyHODProfile)`` -- ``True`` for HOD-like
-        profiles, ``False`` for everything else (matter, lensing, pressure,
-        CIB). An explicit ``True``/``False`` always overrides auto-detection.
-    needs_counterterm2 : bool or None, default None
-        As ``needs_counterterm1``, but for ``profile2``.
+    include_1h, include_2h : bool, default True
+        Whether to keep the terms built from :math:`I_1^2`/:math:`I_1^{2,\\rm 2pt}` (1-halo)
+        and from :math:`P_{\\rm lin}` (2-halo) (static).
+    needs_counterterm1, needs_counterterm2 : bool or None, default None
+        Whether ``profile1``/``profile2`` gets the counter-term; None detects a
+        :class:`GalaxyHODProfile` (static).
 
     Returns
     -------
@@ -157,11 +154,12 @@ def _dPk_response(halo_model, k, z, profile1, profile2=None,
         lambda dp: jnp.interp(jnp.log(k_arr), jnp.log(k_fine), dp), in_axes=1, out_axes=1
     )(dlnp_fine)
 
-    response = (47.0 / 21.0 - dlnp_dlnk / 3.0) * pk_lin * i11_u * i11_v + i12_uv
+    pk_2h = pk_lin * i11_u * i11_v if include_2h else 0.0
+    response = (47.0 / 21.0 - dlnp_dlnk / 3.0) * pk_2h + (i12_uv if include_1h else 0.0)
 
     if needs_counterterm1 or needs_counterterm2:
         i02_uv = jnp.reshape(hm.mass_integral(k_arr, z_arr, (profile1, profile2), bias_order=0), (nk, nz))
-        P_uv = pk_lin * i11_u * i11_v + i02_uv
+        P_uv = pk_2h + (i02_uv if include_1h else 0.0)
         b_u = i11_u if needs_counterterm1 else 0.0
         b_v = i11_v if needs_counterterm2 else 0.0
         response = response - (b_u + b_v) * P_uv
@@ -173,86 +171,68 @@ def _dPk_response(halo_model, k, z, profile1, profile2=None,
 # Connected (non-Gaussian) angular power spectrum covariance
 # ------------------------------------------------------------------
 
-@partial(jax.jit, static_argnums=(9,))
-def cov_cng(tk, halo_model, tracer1, tracer2, tracer3, tracer4, l1, l2, z_range, n_z, f_sky=1.0):
+@partial(jax.jit, static_argnames=("n_z",))
+def cov_cng(tk, halo_model, l1, l2, tracer1, tracer2=None, tracer3=None, tracer4=None, z_range=None, n_z=100,
+            f_sky=1.0):
     """
-    Connected (non-Gaussian) covariance between two Limber-projected
-    angular power spectra :math:`C_{\\ell_1}^{12}` and
-    :math:`C_{\\ell_2}^{34}`, sourced by the halo-model trispectrum.
-
-    Under the Limber approximation, the two independent line-of-sight
-    integrals of the exact covariance collapse to a single integral
-    over comoving distance, since both multipoles map to a wavenumber
-    at the *same* :math:`\\chi`:
+    Connected non-Gaussian covariance between two angular power spectra
+    :math:`C_{\\ell_1}^{12}` and :math:`C_{\\ell_2}^{34}`,
 
     .. math::
 
-        {\\rm Cov}(\\ell_1,\\ell_2) = \\frac{1}{4\\pi f_{\\rm sky}}
-        \\int dz\\, \\frac{d\\chi/dz}{\\chi^6}\\,
-        W_1(z)\\, W_2(z)\\, W_3(z)\\, W_4(z)\\,
-        T\\!\\left(k_1, k_2, z\\right)
+        {\\rm Cov}(\\ell_1, \\ell_2) = \\frac{T_{\\ell_1 \\ell_2}}{4\\pi f_{\\rm sky}},
 
-    with :math:`k_1 = (\\ell_1 + 1/2)/\\chi(z)`,
-    :math:`k_2 = (\\ell_2 + 1/2)/\\chi(z)`, :math:`W_i` the tracer
-    kernels, and :math:`T = T_{1h} + T_{2h} + T_{3h} + T_{4h}` the full
-    halo-model trispectrum (see :meth:`~hmfast.stats.bk_tk.Tk.tk_1h`,
-    :meth:`~hmfast.stats.bk_tk.Tk.tk_2h`, :meth:`~hmfast.stats.bk_tk.Tk.tk_3h`,
-    :meth:`~hmfast.stats.bk_tk.Tk.tk_4h`).
+    where :math:`T_{\\ell_1 \\ell_2}` is the angular trispectrum, in the Limber approximation
 
-    Every ``der_bessel=0`` term of a tracer's kernel (density, tSZ, ...) enters
-    :math:`W_i(z)` directly, and a ``der_bessel=-1`` term (lensing, magnification bias,
-    intrinsic alignment) enters as :math:`W_i(z)\\, f^{(a)}_{\\ell}/(\\ell+1/2)^2`.
-    A ``der_bessel=2`` (RSD) term instead makes :math:`W_1(z)\\,
-    W_2(z)` (or :math:`W_3(z)\\,W_4(z)`) depend on :math:`\\ell_1` (or
-    :math:`\\ell_2`) too, via the same extended-Limber correction
-    (Chisari et al. 2019 Sec. 2.4.1) used by
-    :func:`~hmfast.stats.cl`
-    (see :func:`_extended_limber_grid_for_pair`,
-    :func:`_kernel_pair_effective`).
+    .. math::
+
+        T_{\\ell_1 \\ell_2} = \\int d\\chi\\,
+        \\frac{W_1(\\chi)\\, W_2(\\chi)\\, W_3(\\chi)\\, W_4(\\chi)}{\\chi^6}\\,
+        T\\!\\left(k_1 = \\frac{\\ell_1 + 1/2}{\\chi}, k_2 = \\frac{\\ell_2 + 1/2}{\\chi}, z(\\chi)\\right),
+
+    with :math:`W_i` the tracer kernels and :math:`T` the halo-model trispectrum,
+    with the terms selected by ``tk``.
 
     Parameters
     ----------
     tk : Tk
-        Trispectrum object; ``tk.include_1h``/``include_2h``/``include_3h``/
-        ``include_4h`` select which terms enter :math:`T` via :meth:`~hmfast.stats.bk_tk.Tk.tk_tot`.
+        Trispectrum object; ``tk.include_1h``/``include_2h``/``include_3h``/``include_4h`` select the terms.
     halo_model : HaloModel
+        Halo model object.
+    l1, l2 : float or jnp.ndarray
+        Multipoles of the first and second angular power spectrum, scalar or
+        shapes :math:`(N_{\\ell_1},)` and :math:`(N_{\\ell_2},)`.
     tracer1 : Tracer
         First tracer of the :math:`C_{\\ell_1}` pair.
-    tracer2 : Tracer or None
-        Second tracer of the :math:`C_{\\ell_1}` pair. If None,
-        defaults to ``tracer1``.
-    tracer3 : Tracer or None
-        First tracer of the :math:`C_{\\ell_2}` pair. If None,
-        defaults to ``tracer1``.
-    tracer4 : Tracer or None
-        Second tracer of the :math:`C_{\\ell_2}` pair. If None,
-        defaults to (the resolved) ``tracer3``.
-    l1, l2 : float or jnp.ndarray
-        Multipole grids for the first and second angular power
-        spectrum, respectively. Need not be the same length; the two
-        are broadcast into an :math:`(N_{\\ell_1}, N_{\\ell_2})` grid.
-    z_range : tuple
-        ``(z_min, z_max)`` spanning the Gauss-Legendre redshift integration grid.
-    n_z : int
-        Number of redshift-integration nodes (static: changing it triggers
-        recompilation; sweeping ``z_range`` alone does not).
+    tracer2 : Tracer or None, default None
+        Second tracer of the :math:`C_{\\ell_1}` pair. If None, defaults to ``tracer1``.
+    tracer3 : Tracer or None, default None
+        First tracer of the :math:`C_{\\ell_2}` pair. If None, defaults to ``tracer1``.
+    tracer4 : Tracer or None, default None
+        Second tracer of the :math:`C_{\\ell_2}` pair. If None, defaults to (the resolved) ``tracer3``.
+    z_range : tuple or None, default None
+        ``(z_min, z_max)`` of the redshift integration. If None, inferred from all
+        four tracers as in :func:`~hmfast.stats.cl`.
+    n_z : int, default 100
+        Number of redshift nodes (static).
     f_sky : float, default 1.0
         Observed sky fraction.
 
     Returns
     -------
-    array
-        Connected covariance with shape :math:`(N_{\\ell_1},
-        N_{\\ell_2})`, where singleton dimensions are squeezed before
-        return.
+    cov : jnp.ndarray
+        Covariance with shape :math:`(N_{\\ell_1}, N_{\\ell_2})`, where singleton
+        dimensions get squeezed before return.
     """
     hm = halo_model
-    logz, z_gl_w = gauss_legendre_nodes_weights(jnp.log(z_range[0]), jnp.log(z_range[1]), n_z)
-    z = jnp.exp(logz)
-    z_gl_w = z_gl_w * z  # Gauss-Legendre in ln(z); z spans orders of magnitude
+    l1, l2 = jnp.atleast_1d(l1), jnp.atleast_1d(l2)
     tracer2 = tracer2 if tracer2 is not None else tracer1
     tracer3 = tracer3 if tracer3 is not None else tracer1
     tracer4 = tracer4 if tracer4 is not None else tracer3
+    z_range = _cl._resolve_z_range(hm.cosmology, z_range, tracer1, tracer2, tracer3, tracer4)
+    logz, z_gl_w = gauss_legendre_nodes_weights(jnp.log(z_range[0]), jnp.log(z_range[1]), n_z)
+    z = jnp.exp(logz)
+    z_gl_w = z_gl_w * z  # Gauss-Legendre in ln(z); z spans orders of magnitude
 
     def get_cov_slice(z_i):
         chi = hm.cosmology.angular_diameter_distance(z_i) * (1.0 + z_i)
@@ -260,7 +240,10 @@ def cov_cng(tk, halo_model, tracer1, tracer2, tracer3, tracer4, l1, l2, z_range,
         k2 = (l2 + 0.5) / chi
 
         # Respects tk.include_1h/2h/3h/4h, so a partial Tk sources a partial covariance.
-        T = tk.tk_tot(hm, k1, k2, z_i, tracer1.profile, tracer2.profile, tracer3.profile, tracer4.profile)
+        T = jnp.reshape(
+            tk.tk_tot(hm, k1, k2, z_i, tracer1.profile, tracer2.profile, tracer3.profile, tracer4.profile),
+            (l1.size, l2.size),
+        )
 
         z_lp1, lp1h1, lp3h1, sqell1 = _extended_limber_grid_for_pair(
             hm, tracer1, tracer2, tracer1.profile, tracer2.profile, z_i, l1, chi
@@ -311,35 +294,31 @@ def _disc_var_transform(cosmology):
 @jax.jit
 def sigma2_b_disc(cosmology, z, f_sky=1.0):
     """
-    Variance of the projected linear density field over a circular
-    disc covering a sky fraction :math:`f_{\\rm sky}`, as a function of
-    redshift -- the super-sample variance entering :func:`cov_ssc`.
+    Variance of the linear density field over a circular footprint of sky
+    fraction :math:`f_{\\rm sky}`, entering :func:`cov_ssc`,
 
     .. math::
 
         \\sigma_B^2(z) = \\int_0^\\infty \\frac{k\\,dk}{2\\pi}\\,
-        P_{\\mathrm{L}}(k, z)\\, \\left[\\frac{2 J_1(kR(z))}{kR(z)}\\right]^2,
+        P_{\\rm lin}(k, z)\\, \\left[\\frac{2 J_1(kR)}{kR}\\right]^2,
+        \\qquad R(z) = \\chi(z) \\arccos(1 - 2 f_{\\rm sky}),
 
-    where :math:`R(z) = \\chi(z)\\arccos(1 - 2f_{\\rm sky})` is the
-    comoving transverse radius subtended by a circular footprint of
-    solid angle :math:`4\\pi f_{\\rm sky}`. Uses the same FFTLog
-    machinery (via ``mcfit``) as :meth:`~hmfast.cosmology.Cosmology.sigma_m`,
-    just with the 2D projected disc window in place of the 3D spherical top-hat.
+    by an FFTLog transform.
 
     Parameters
     ----------
     cosmology : Cosmology
-        Cosmology providing the linear :math:`P(k, z)` and :math:`\\chi(z)`.
+        Cosmology object.
     z : float or jnp.ndarray
-        Redshift(s).
+        Redshifts, scalar or shape :math:`(N_z,)`.
     f_sky : float, default 1.0
         Observed sky fraction.
 
     Returns
     -------
-    float or jnp.ndarray
-        :math:`\\sigma_B^2(z)`, with shape matching ``z`` (squeezed if
-        scalar).
+    sigma2_b : jnp.ndarray
+        Footprint variance with shape :math:`(N_z,)`, where singleton dimensions
+        get squeezed before return.
     """
     z_arr = jnp.atleast_1d(z)
     k_grid, _ = cosmology._pk_grid()
@@ -358,135 +337,112 @@ def sigma2_b_disc(cosmology, z, f_sky=1.0):
     return jnp.squeeze(jnp.exp(ln_var))
 
 
-@partial(jax.jit, static_argnums=(8,), static_argnames=("needs_counterterm1", "needs_counterterm2", "needs_counterterm3", "needs_counterterm4"))
-def cov_ssc(halo_model, tracer1, tracer2, tracer3, tracer4, l1, l2, z_range, n_z, f_sky=1.0,
-                    needs_counterterm1=None, needs_counterterm2=None,
-                    needs_counterterm3=None, needs_counterterm4=None):
+@partial(jax.jit, static_argnames=("n_z", "counterterms"))
+def cov_ssc(pk, halo_model, l1, l2, tracer1, tracer2=None, tracer3=None, tracer4=None, z_range=None, n_z=100,
+            f_sky=1.0, sigma2_b=None, counterterms=None):
     """
-    Super-sample covariance (SSC) between two Limber-projected angular
-    power spectra :math:`C_{\\ell_1}^{12}` and :math:`C_{\\ell_2}^{34}`.
-
-    Sourced by long-wavelength density modes larger than the survey
-    footprint, which are not measured directly but instead shift the
-    mean background density of the observed volume -- rescaling every
-    halo-model quantity inside it. Structurally a sibling of
-    :func:`cov_cng`: the same Limber-collapsed single
-    line-of-sight integral and tracer-kernel product, but with the real
-    trispectrum replaced by a factorised power-spectrum *response*
-    product, and one extra ingredient, the survey-footprint variance of
-    the background mode:
+    Super-sample covariance between two angular power spectra
+    :math:`C_{\\ell_1}^{12}` and :math:`C_{\\ell_2}^{34}`, from density modes larger
+    than the survey footprint. In the Limber approximation
 
     .. math::
 
-        {\\rm Cov}(\\ell_1,\\ell_2) =
-        \\int dz\\, \\frac{d\\chi/dz}{\\chi^4}\\,
-        W_1(z)\\, W_2(z)\\, W_3(z)\\, W_4(z)\\,
+        {\\rm Cov}(\\ell_1, \\ell_2) = \\int d\\chi\\,
+        \\frac{W_1(\\chi)\\, W_2(\\chi)\\, W_3(\\chi)\\, W_4(\\chi)}{\\chi^4}\\,
         \\sigma_B^2(z)\\,
-        \\frac{\\partial P_{12}(k_1,z)}{\\partial\\delta_b}\\,
-        \\frac{\\partial P_{34}(k_2,z)}{\\partial\\delta_b}
+        \\frac{\\partial P_{12}(k_1, z)}{\\partial \\delta_b}\\,
+        \\frac{\\partial P_{34}(k_2, z)}{\\partial \\delta_b},
 
-    with :math:`k_1 = (\\ell_1 + 1/2)/\\chi(z)`,
-    :math:`k_2 = (\\ell_2 + 1/2)/\\chi(z)`, :math:`W_i` the tracer
-    kernels, and :math:`\\sigma_B^2(z)` the disc-footprint variance (see
-    :func:`sigma2_b_disc`).
-
-    As in :func:`cov_cng`, a ``der_bessel=2`` (RSD) kernel term
-    makes :math:`W_1(z)\\,W_2(z)` (or :math:`W_3(z)\\,W_4(z)`)
-    :math:`\\ell`-dependent via the extended-Limber correction (see
-    :func:`_extended_limber_grid_for_pair`, :func:`_kernel_pair_effective`);
-    every ``der_bessel=0`` term (density, tSZ, ...) enters :math:`W_i(z)` directly,
-    and every ``der_bessel=-1`` term (lensing, magnification bias, IA) as
-    :math:`W_i(z)\\, f^{(a)}_{\\ell}/(\\ell+1/2)^2`.
-
-    For a profile pair :math:`(u,v)`, the response (Wagner et al. 2015;
-    Takada & Hu 2013) is
+    with :math:`k_i = (\\ell_i + 1/2)/\\chi`, :math:`W_i` the tracer kernels and
+    :math:`\\sigma_B^2(z)` the variance of the background mode over the footprint
+    (:func:`sigma2_b_disc` by default). The halo-model response of a profile pair
+    :math:`(u, v)` (Takada & Hu 2013) is
 
     .. math::
 
-        \\frac{\\partial P_{u,v}(k,z)}{\\partial\\delta_b} =
-        \\left(\\frac{47}{21} - \\frac{1}{3}\\frac{d\\ln P_{\\rm lin}}{d\\ln k}\\right)
-        P_{\\rm lin}(k,z)\\, I_1^1(k \\,|\\, u)\\, I_1^1(k \\,|\\, v)
+        \\frac{\\partial P_{uv}}{\\partial \\delta_b} =
+        \\left(\\frac{47}{21} - \\frac{1}{3}\\frac{d\\ln P_{\\rm lin}}{d\\ln k}\\right) P_{2h}
         + I_1^2(k \\,|\\, u, v)
-        \\; - \\; \\left[\\theta_u\\, I_1^1(k \\,|\\, u) + \\theta_v\\, I_1^1(k \\,|\\, v)\\right]
-        P_{u,v}(k,z)
+        - \\left(\\theta_u b_u + \\theta_v b_v\\right) P_{uv},
 
-    with :math:`P_{u,v}(k,z) = P_{\\rm lin}(k,z)\\, I_1^1(k \\,|\\, u)\\,
-    I_1^1(k \\,|\\, v) + I_1^{2,\\rm 2pt}(k \\,|\\, u, v)`, where
-    :math:`I_1^1(k\\,|\\,u) = \\int d\\ln M\\, (dn/d\\ln M)\\, b_1(M,z)\\,
-    u(k\\,|\\,M,z)` is the linearly-biased single-profile mass integral,
-    :math:`I_1^2` is the same integral with a naive product
-    :math:`u(k\\,|\\,M,z)\\,v(k\\,|\\,M,z)` in place of a single profile,
-    and :math:`I_1^{2,\\rm 2pt}` replaces that naive product with the
-    halo's joint 2-point cumulant of :math:`u,v` -- a shot-noise-aware
-    kernel that reduces to the naive product for continuous-field
-    profiles.
-
-    :math:`\\theta_u, \\theta_v \\in \\{0, 1\\}` flag whether
-    :math:`u`/:math:`v` is a discrete number-counts observable (e.g.
-    HOD), via ``needs_counterterm1``..``4`` below; the bracketed
-    counter-term vanishes when both are 0.
+    where :math:`I_1^2` is the bias-weighted 1-halo integral, :math:`b_u(k, z)` the
+    large-scale bias of :math:`u`, :math:`P_{uv} = P_{\\rm lin} b_u b_v + I_1^{2,\\rm 2pt}(k \\,|\\, u, v)`
+    with :math:`I_1^{2,\\rm 2pt}` the halo's 2-point pair integral (the profile product for
+    continuous fields), and :math:`\\theta_u \\in \\{0, 1\\}` switches on the number-count
+    counter-term (see ``counterterms``).
 
     Parameters
     ----------
+    pk : Pk
+        Power spectrum object; ``pk.include_1h``/``include_2h`` select the terms of the response.
     halo_model : HaloModel
+        Halo model object.
+    l1, l2 : float or jnp.ndarray
+        Multipoles of the first and second angular power spectrum, scalar or
+        shapes :math:`(N_{\\ell_1},)` and :math:`(N_{\\ell_2},)`.
     tracer1 : Tracer
         First tracer of the :math:`C_{\\ell_1}` pair.
-    tracer2 : Tracer or None
-        Second tracer of the :math:`C_{\\ell_1}` pair. If None,
-        defaults to ``tracer1``.
-    tracer3 : Tracer or None
-        First tracer of the :math:`C_{\\ell_2}` pair. If None,
-        defaults to ``tracer1``.
-    tracer4 : Tracer or None
-        Second tracer of the :math:`C_{\\ell_2}` pair. If None,
-        defaults to (the resolved) ``tracer3``.
-    l1, l2 : float or jnp.ndarray
-        Multipole grids for the first and second angular power
-        spectrum, respectively. Need not be the same length; the two
-        are broadcast into an :math:`(N_{\\ell_1}, N_{\\ell_2})` grid.
-    z_range : tuple
-        ``(z_min, z_max)`` spanning the Gauss-Legendre redshift integration grid.
-    n_z : int
-        Number of redshift-integration nodes (static: changing it triggers
-        recompilation; sweeping ``z_range`` alone does not).
+    tracer2 : Tracer or None, default None
+        Second tracer of the :math:`C_{\\ell_1}` pair. If None, defaults to ``tracer1``.
+    tracer3 : Tracer or None, default None
+        First tracer of the :math:`C_{\\ell_2}` pair. If None, defaults to ``tracer1``.
+    tracer4 : Tracer or None, default None
+        Second tracer of the :math:`C_{\\ell_2}` pair. If None, defaults to (the resolved) ``tracer3``.
+    z_range : tuple or None, default None
+        ``(z_min, z_max)`` of the redshift integration. If None, inferred from all
+        four tracers as in :func:`~hmfast.stats.cl`.
+    n_z : int, default 100
+        Number of redshift nodes (static).
     f_sky : float, default 1.0
-        Observed sky fraction. Also sets the disc footprint used for
-        :math:`\\sigma_B^2(z)`.
-    needs_counterterm1, needs_counterterm2, needs_counterterm3, needs_counterterm4 : bool or None, default None
-        Whether ``tracer1``/``tracer2``/``tracer3``/``tracer4``'s
-        profile is a discrete number-counts observable requiring the
-        SSC counter-term above (:math:`\\theta_u`/:math:`\\theta_v` for
-        the first/second response, respectively). ``None`` auto-detects
-        from the tracer's profile type.
+        Observed sky fraction, used only by the default ``sigma2_b``.
+    sigma2_b : tuple of jnp.ndarray or None, default None
+        :math:`\\sigma_B^2(z)` tabulated as ``(z, sigma2_b)``, each of shape :math:`(N,)`,
+        linearly interpolated in :math:`z` and held constant beyond the ends.
+        For gradients with respect to cosmology, compute it from the same ``Cosmology``.
+        If None, :func:`sigma2_b_disc` for a circular footprint of ``f_sky``.
+    counterterms : tuple of 4 bool or None, default None
+        :math:`\\theta` for ``tracer1``..``tracer4``, e.g. ``(1, 1, 0, 0)`` (static).
+        If None, a tracer gets the counter-term if its profile is a
+        :class:`GalaxyHODProfile`.
 
     Returns
     -------
-    array
-        Super-sample covariance with shape :math:`(N_{\\ell_1},
-        N_{\\ell_2})`, where singleton dimensions are squeezed before
-        return.
+    cov : jnp.ndarray
+        Covariance with shape :math:`(N_{\\ell_1}, N_{\\ell_2})`, where singleton
+        dimensions get squeezed before return.
     """
     hm = halo_model
-    logz, z_gl_w = gauss_legendre_nodes_weights(jnp.log(z_range[0]), jnp.log(z_range[1]), n_z)
-    z = jnp.exp(logz)
-    z_gl_w = z_gl_w * z  # Gauss-Legendre in ln(z); z spans orders of magnitude
+    l1, l2 = jnp.atleast_1d(l1), jnp.atleast_1d(l2)
     tracer2 = tracer2 if tracer2 is not None else tracer1
     tracer3 = tracer3 if tracer3 is not None else tracer1
     tracer4 = tracer4 if tracer4 is not None else tracer3
+    z_range = _cl._resolve_z_range(hm.cosmology, z_range, tracer1, tracer2, tracer3, tracer4)
+    logz, z_gl_w = gauss_legendre_nodes_weights(jnp.log(z_range[0]), jnp.log(z_range[1]), n_z)
+    z = jnp.exp(logz)
+    z_gl_w = z_gl_w * z  # Gauss-Legendre in ln(z); z spans orders of magnitude
+    if counterterms is None:
+        counterterms = (None,) * 4
+    elif len(counterterms) != 4:
+        raise ValueError(f"counterterms must have one entry per tracer (4); got {counterterms!r}.")
+    ct1, ct2, ct3, ct4 = (None if c is None else bool(c) for c in counterterms)
+    if sigma2_b is None:
+        sigma2_b_fn = lambda z_i: sigma2_b_disc(hm.cosmology, z_i, f_sky=f_sky)
+    else:
+        sigma2_b_fn = lambda z_i: jnp.interp(z_i, jnp.asarray(sigma2_b[0]), jnp.asarray(sigma2_b[1]))
 
     def get_cov_slice(z_i):
         chi = hm.cosmology.angular_diameter_distance(z_i) * (1.0 + z_i)
         k1 = (l1 + 0.5) / chi
         k2 = (l2 + 0.5) / chi
 
-        response1 = _dPk_response(
-            hm, k1, z_i, tracer1.profile, tracer2.profile,
-            needs_counterterm1=needs_counterterm1, needs_counterterm2=needs_counterterm2,
-        )  # (N_l1,)
-        response2 = _dPk_response(
-            hm, k2, z_i, tracer3.profile, tracer4.profile,
-            needs_counterterm1=needs_counterterm3, needs_counterterm2=needs_counterterm4,
-        )  # (N_l2,)
+        response1 = jnp.reshape(_dPk_response(
+            hm, k1, z_i, tracer1.profile, tracer2.profile, include_1h=pk.include_1h, include_2h=pk.include_2h,
+            needs_counterterm1=ct1, needs_counterterm2=ct2,
+        ), (l1.size,))  # (N_l1,)
+        response2 = jnp.reshape(_dPk_response(
+            hm, k2, z_i, tracer3.profile, tracer4.profile, include_1h=pk.include_1h, include_2h=pk.include_2h,
+            needs_counterterm1=ct3, needs_counterterm2=ct4,
+        ), (l2.size,))  # (N_l2,)
         response_outer = response1[:, None] * response2[None, :]  # (N_l1, N_l2)
 
         z_lp1, lp1h1, lp3h1, sqell1 = _extended_limber_grid_for_pair(
@@ -504,12 +460,12 @@ def cov_ssc(halo_model, tracer1, tracer2, tracer3, tracer4, l1, l2, z_range, n_z
         )  # (N_l2,)
 
         kernels = kernel12[:, None] * kernel34[None, :]  # (N_l1, N_l2)
-        sigma2_b = jnp.squeeze(sigma2_b_disc(hm.cosmology, z_i, f_sky=f_sky))
+        sigma2_b_i = jnp.squeeze(sigma2_b_fn(z_i))
         weight = jnp.squeeze(hm.cosmology.comoving_volume_element(z_i) / chi ** 6)
 
-        return response_outer * (kernels * weight * sigma2_b)
+        return response_outer * (kernels * weight * sigma2_b_i)
 
-    # No 1/(4*pi*f_sky) prefactor here -- f_sky's effect is already fully carried by sigma2_b_disc(cosmology, z, f_sky).
+    # No 1/(4*pi*f_sky) prefactor: the footprint enters only through sigma2_b.
     integrand = jax.vmap(get_cov_slice)(z)  # (Nz, N_l1, N_l2)
     cov = jnp.sum(integrand * z_gl_w[:, None, None], axis=0)
 

@@ -146,8 +146,8 @@ Not physical — only intended as a tiny runnable example users can adapt::
 
   pk_calc = Pk()
 
-  # Compute a tiny toy halo-model cl (1-halo + 2-halo). Second tracer None => autocorrelation of tracer1.
-  cl_toy = cl(pk_calc, hm, tracer1, None, l_grid, z_range, n_z)
+  # Compute a tiny toy halo-model cl (1-halo + 2-halo); with no second tracer this is the autocorrelation of tracer1.
+  cl_toy = cl(pk_calc, hm, l_grid, tracer1, z_range=z_range, n_z=n_z)
 
   print("cl shape:", cl_toy.shape)   # should be (N_ell,)
   print("cl (toy values):", cl_toy)

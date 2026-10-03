@@ -1,20 +1,15 @@
 """
 Unit tests for hmfast.halos.profiles: shape/squeeze conventions, update()/pytree
-rebuild behavior, mass-definition handling, JIT shape-polymorphism, gradients,
-and the numerical accuracy of the Hankel-transform path. See
-tests/benchmarks/benchmark_profiles.py for CCL/class_sz cross-checks.
+rebuild behavior, mass-definition handling and JIT shape-polymorphism.
+Gradients are checked in test_jax_transforms.py.
+See tests/benchmarks/benchmark_profiles.py for CCL/class_sz cross-checks and
+tests/benchmarks/benchmark_hankel.py for the Hankel-transform accuracy checks.
 """
-
-import functools
 
 import jax
 import jax.numpy as jnp
-import mcfit
-import numpy as np
 import pytest
-from scipy.integrate import quad
 
-from hmfast.halos import HaloModel
 from hmfast.halos.concentration import (
     B13Concentration,
     ConstantConcentration,
@@ -30,9 +25,11 @@ from hmfast.halos.profiles import (
     S12CIBProfile,
     Z07GalaxyHODProfile,
 )
-from hmfast.halos.profiles.base_profile import HaloProfile, HankelTransform
+from hmfast.halos.profiles.base_profile import HankelTransform
 from hmfast.halos.profiles.profiles_2pt import _fourier_2pt
 from hmfast.utils import gauss_legendre_nodes_weights
+
+from .._shared import halo_model, shared
 
 M_GRID = jnp.geomspace(1e10, 1e15, 40)
 
@@ -46,41 +43,26 @@ def _m_grid(hm):
 @pytest.fixture
 def hm200c(fixed_cosmology):
     """A single fixed HaloModel at 200c/D08, reused across non-mass-def-focused checks."""
-    return HaloModel(
+    return halo_model(
         cosmology=fixed_cosmology,
-        mass_def=MassDefinition(200, "critical"),
-        concentration=D08Concentration(),
+        mass_def=shared(MassDefinition, 200, "critical"),
+        concentration=shared(D08Concentration),
         m_range=(M_GRID[0], M_GRID[-1]),
         n_m=M_GRID.shape[0],
     )
-
-
-@pytest.fixture
-def hm500c(fixed_cosmology):
-    """A HaloModel at 500c/D08, the native mass definition of the GNFW accuracy checks."""
-    return HaloModel(cosmology=fixed_cosmology, mass_def=MassDefinition(500, "critical"), concentration=D08Concentration())
 
 
 @pytest.fixture
 def hm200c_oob(out_of_bounds_cosmology):
     """Same as hm200c but backed by an out-of-bounds cosmology, for NaN-propagation checks."""
-    return HaloModel(
+    return halo_model(
         cosmology=out_of_bounds_cosmology,
-        mass_def=MassDefinition(200, "critical"),
-        concentration=D08Concentration(),
+        mass_def=shared(MassDefinition, 200, "critical"),
+        concentration=shared(D08Concentration),
         m_range=(M_GRID[0], M_GRID[-1]),
         n_m=M_GRID.shape[0],
     )
 
-
-def _check_grad(f, x0, rtol=1e-2):
-    """jax.grad is finite and matches a scale-appropriate finite-difference estimate."""
-    x0 = jnp.asarray(x0, dtype=float)
-    g_auto = jax.grad(f)(x0)
-    assert jnp.isfinite(g_auto)
-    eps = jnp.maximum(1e-6, 1e-5 * jnp.abs(x0))
-    g_fd = (f(x0 + eps) - f(x0 - eps)) / (2 * eps)
-    assert jnp.isclose(g_auto, g_fd, rtol=rtol, atol=1e-8)
 
 
 # Shared 3-axis (r/k, m, z) shape-matrix inputs, extending test_halo_model.py's 2-axis
@@ -141,15 +123,15 @@ class TestHaloProfileBase:
     @pytest.mark.parametrize("r_key,m_key,z_key,expected_shape", SHAPE_MATRIX_3D)
     def test_u_r_nfw_shape_matrix(self, hm200c, r_key, m_key, z_key, expected_shape):
         nfw = NFWMatterProfile()
-        out = nfw._u_r_nfw(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key])
-        assert jnp.shape(out) == expected_shape
+        out = jax.eval_shape(lambda: nfw._u_r_nfw(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key]))
+        assert out.shape == expected_shape
 
     # _u_k_nfw's output shape follows the (k, m, z) broadcast-then-squeeze convention.
     @pytest.mark.parametrize("r_key,m_key,z_key,expected_shape", SHAPE_MATRIX_3D)
     def test_u_k_nfw_shape_matrix(self, hm200c, r_key, m_key, z_key, expected_shape):
         nfw = NFWMatterProfile()
-        _, out = nfw._u_k_nfw(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key])
-        assert jnp.shape(out) == expected_shape
+        _, out = jax.eval_shape(lambda: nfw._u_k_nfw(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key]))
+        assert out.shape == expected_shape
 
     # The unit-mass NFW profile vanishes outside r_delta*(1+z) and is positive just inside.
     def test_u_r_nfw_zero_beyond_r_delta(self, hm200c):
@@ -226,10 +208,10 @@ class TestFourier2pt:
     @pytest.mark.parametrize("r_key,m_key,z_key,expected_shape", SHAPE_MATRIX_3D)
     def test_shape_matrix(self, hm200c, r_key, m_key, z_key, expected_shape):
         hod1, hod2 = Z07GalaxyHODProfile(), Z07GalaxyHODProfile(alpha_s=1.5)
-        out = _fourier_2pt(
+        out = jax.eval_shape(lambda: _fourier_2pt(
             hm200c, hod1, hod2, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key]
-        )
-        assert jnp.shape(out) == expected_shape
+        ))
+        assert out.shape == expected_shape
 
 
 class TestNFWMatterProfile:
@@ -237,15 +219,15 @@ class TestNFWMatterProfile:
     @pytest.mark.parametrize("r_key,m_key,z_key,expected_shape", SHAPE_MATRIX_3D)
     def test_real_shape_matrix(self, hm200c, r_key, m_key, z_key, expected_shape):
         nfw = NFWMatterProfile()
-        out = nfw.real(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key])
-        assert jnp.shape(out) == expected_shape
+        out = jax.eval_shape(lambda: nfw.real(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key]))
+        assert out.shape == expected_shape
 
     # fourier()'s output shape follows the (k, m, z) broadcast-then-squeeze convention.
     @pytest.mark.parametrize("r_key,m_key,z_key,expected_shape", SHAPE_MATRIX_3D)
     def test_fourier_shape_matrix(self, hm200c, r_key, m_key, z_key, expected_shape):
         nfw = NFWMatterProfile()
-        out = nfw.fourier(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key])
-        assert jnp.shape(out) == expected_shape
+        out = jax.eval_shape(lambda: nfw.fourier(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key]))
+        assert out.shape == expected_shape
 
     # The mass-weighted real-space profile is positive and non-increasing with radius.
     def test_real_positive_and_nonincreasing_with_radius(self, hm200c):
@@ -289,26 +271,26 @@ class TestNFWMatterProfile:
         "md_a,md_b,conc",
         [
             (
-                MassDefinition(200, "critical"),
-                MassDefinition(200, "mean"),
-                D08Concentration(),
+                shared(MassDefinition, 200, "critical"),
+                shared(MassDefinition, 200, "mean"),
+                shared(D08Concentration),
             ),
             (
-                MassDefinition(200, "critical"),
-                MassDefinition("vir", "critical"),
-                B13Concentration(),
+                shared(MassDefinition, 200, "critical"),
+                shared(MassDefinition, "vir", "critical"),
+                shared(B13Concentration),
             ),
             (
-                MassDefinition(200, "mean"),
-                MassDefinition("vir", "critical"),
-                ConstantConcentration(c=5),
+                shared(MassDefinition, 200, "mean"),
+                shared(MassDefinition, "vir", "critical"),
+                shared(ConstantConcentration, c=5),
             ),
         ],
     )
     def test_mass_def_self_consistency_via_generic_kernel(
         self, fixed_cosmology, md_a, md_b, conc
     ):
-        hm_a = HaloModel(
+        hm_a = halo_model(
             cosmology=fixed_cosmology, mass_def=md_a, concentration=conc,
             m_range=(M_GRID[0], M_GRID[-1]), n_m=M_GRID.shape[0],
         )
@@ -320,30 +302,6 @@ class TestNFWMatterProfile:
         real_a = nfw.real(hm_a, r, m, z)
         real_b = nfw.real(hm_b, r, m_b, z)
         assert jnp.allclose(real_a, real_b, rtol=0.15)
-
-    class TestGradients:
-        # NFW has no own parameters -- H0 (via cosmology) is the only meaningful gradient path.
-        def test_real_grad_wrt_H0(self, hm200c):
-            nfw = NFWMatterProfile()
-            r, m, z = jnp.array(0.1), jnp.array(1e13), jnp.array(0.5)
-
-            def f(H0):
-                return nfw.real(
-                    hm200c.update(cosmology=hm200c.cosmology.update(H0=H0)), r, m, z
-                )
-
-            _check_grad(f, 67.5)
-
-        def test_fourier_grad_wrt_H0(self, hm200c):
-            nfw = NFWMatterProfile()
-            k, m, z = jnp.array(0.5), jnp.array(1e13), jnp.array(0.5)
-
-            def f(H0):
-                return nfw.fourier(
-                    hm200c.update(cosmology=hm200c.cosmology.update(H0=H0)), k, m, z
-                )
-
-            _check_grad(f, 67.5)
 
 
 class TestZ07GalaxyHODProfile:
@@ -366,29 +324,29 @@ class TestZ07GalaxyHODProfile:
     @pytest.mark.parametrize("z_key,expected_shape", Z_ONLY_CASES)
     def test_ng_bar_shape_matrix(self, hm200c, z_key, expected_shape):
         hod = Z07GalaxyHODProfile()
-        out = hod.ng_bar(hm200c, Z_VALS[z_key])
-        assert jnp.shape(out) == expected_shape
+        out = jax.eval_shape(lambda: hod.ng_bar(hm200c, Z_VALS[z_key]))
+        assert out.shape == expected_shape
 
     # galaxy_bias's output shape follows the z-only broadcast-then-squeeze convention.
     @pytest.mark.parametrize("z_key,expected_shape", Z_ONLY_CASES)
     def test_galaxy_bias_shape_matrix(self, hm200c, z_key, expected_shape):
         hod = Z07GalaxyHODProfile()
-        out = hod.galaxy_bias(hm200c, Z_VALS[z_key])
-        assert jnp.shape(out) == expected_shape
+        out = jax.eval_shape(lambda: hod.galaxy_bias(hm200c, Z_VALS[z_key]))
+        assert out.shape == expected_shape
 
     # real()'s output shape follows the (r, m, z) broadcast-then-squeeze convention.
     @pytest.mark.parametrize("r_key,m_key,z_key,expected_shape", SHAPE_MATRIX_3D)
     def test_real_shape_matrix(self, hm200c, r_key, m_key, z_key, expected_shape):
         hod = Z07GalaxyHODProfile()
-        out = hod.real(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key])
-        assert jnp.shape(out) == expected_shape
+        out = jax.eval_shape(lambda: hod.real(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key]))
+        assert out.shape == expected_shape
 
     # fourier()'s output shape follows the (k, m, z) broadcast-then-squeeze convention.
     @pytest.mark.parametrize("r_key,m_key,z_key,expected_shape", SHAPE_MATRIX_3D)
     def test_fourier_shape_matrix(self, hm200c, r_key, m_key, z_key, expected_shape):
         hod = Z07GalaxyHODProfile()
-        out = hod.fourier(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key])
-        assert jnp.shape(out) == expected_shape
+        out = jax.eval_shape(lambda: hod.fourier(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key]))
+        assert out.shape == expected_shape
 
     # ng_bar/galaxy_bias take no mass argument at all -- they always integrate over halo_model.m_range/n_m.
     def test_ng_bar_ignores_m_range_arg_not_exposed(self, hm200c):
@@ -471,26 +429,26 @@ class TestZ07GalaxyHODProfile:
         "md_a,md_b,conc",
         [
             (
-                MassDefinition(200, "critical"),
-                MassDefinition(200, "mean"),
-                D08Concentration(),
+                shared(MassDefinition, 200, "critical"),
+                shared(MassDefinition, 200, "mean"),
+                shared(D08Concentration),
             ),
             (
-                MassDefinition(200, "critical"),
-                MassDefinition("vir", "critical"),
-                B13Concentration(),
+                shared(MassDefinition, 200, "critical"),
+                shared(MassDefinition, "vir", "critical"),
+                shared(B13Concentration),
             ),
             (
-                MassDefinition(200, "mean"),
-                MassDefinition("vir", "critical"),
-                ConstantConcentration(c=5),
+                shared(MassDefinition, 200, "mean"),
+                shared(MassDefinition, "vir", "critical"),
+                shared(ConstantConcentration, c=5),
             ),
         ],
     )
     def test_mass_def_self_consistency_via_generic_kernel(
         self, fixed_cosmology, md_a, md_b, conc
     ):
-        hm_a = HaloModel(
+        hm_a = halo_model(
             cosmology=fixed_cosmology, mass_def=md_a, concentration=conc,
             m_range=(M_GRID[0], M_GRID[-1]), n_m=M_GRID.shape[0],
         )
@@ -503,66 +461,6 @@ class TestZ07GalaxyHODProfile:
         real_b = hod.real(hm_b, r, m_b, z)
         assert jnp.allclose(real_a, real_b, rtol=0.15)
 
-    class TestGradients:
-        @pytest.mark.parametrize(
-            "param,x0",
-            [
-                ("sigma_log10M", 0.68),
-                ("alpha_s", 1.30),
-                ("M1_prime", 10**12.87),
-                ("M_min", 10**11.97),
-                ("M0", 1e9),
-            ],
-        )
-        def test_ng_bar_grad_wrt_params(self, hm200c, param, x0):
-            hod = Z07GalaxyHODProfile()
-            z = jnp.array(0.5)
-
-            def f(x):
-                return hod.update(**{param: x}).ng_bar(hm200c, z)
-
-            _check_grad(f, x0)
-
-        @pytest.mark.parametrize(
-            "param,x0",
-            [
-                ("sigma_log10M", 0.68),
-                ("alpha_s", 1.30),
-                ("M1_prime", 10**12.87),
-                ("M_min", 10**11.97),
-                ("M0", 1e9),
-            ],
-        )
-        def test_galaxy_bias_grad_wrt_params(self, hm200c, param, x0):
-            hod = Z07GalaxyHODProfile()
-            z = jnp.array(0.5)
-
-            def f(x):
-                return hod.update(**{param: x}).galaxy_bias(hm200c, z)
-
-            _check_grad(f, x0)
-
-        @pytest.mark.parametrize(
-            "param,x0",
-            [
-                ("sigma_log10M", 0.68),
-                ("alpha_s", 1.30),
-                ("M1_prime", 10**12.87),
-                ("M_min", 10**11.97),
-                ("M0", 1e9),
-            ],
-        )
-        def test_real_grad_wrt_params(self, hm200c, param, x0):
-            hod = Z07GalaxyHODProfile()
-            r, z = jnp.array(0.1), jnp.array(0.5)
-
-            m = _m_grid(hm200c)
-
-            def f(x):
-                return hod.update(**{param: x}).real(hm200c, r, m, z).sum()
-
-            _check_grad(f, x0)
-
 
 class TestS12CIBProfile:
     # l_gal/l_sat/l_cen's output shapes follow the (m, z) broadcast-then-squeeze convention.
@@ -570,15 +468,15 @@ class TestS12CIBProfile:
     @pytest.mark.parametrize("m_key,z_key,expected_shape", SHAPE_MATRIX_2D)
     def test_per_halo_shape_matrix(self, hm200c, method, m_key, z_key, expected_shape):
         cib = S12CIBProfile(nu=100)
-        out = getattr(cib, method)(hm200c, M_VALS[m_key], Z_VALS[z_key])
-        assert jnp.shape(out) == expected_shape
+        out = jax.eval_shape(lambda: getattr(cib, method)(hm200c, M_VALS[m_key], Z_VALS[z_key]))
+        assert out.shape == expected_shape
 
     # mean_emissivity's output shape follows the z-only broadcast-then-squeeze convention.
     @pytest.mark.parametrize("z_key,expected_shape", Z_ONLY_CASES)
     def test_mean_emissivity_shape_matrix(self, hm200c, z_key, expected_shape):
         cib = S12CIBProfile(nu=100)
-        out = cib.mean_emissivity(hm200c, Z_VALS[z_key])
-        assert jnp.shape(out) == expected_shape
+        out = jax.eval_shape(lambda: cib.mean_emissivity(hm200c, Z_VALS[z_key]))
+        assert out.shape == expected_shape
 
     # mean_intensity always collapses to a scalar.
     def test_mean_intensity_is_scalar(self, hm200c):
@@ -590,15 +488,15 @@ class TestS12CIBProfile:
     @pytest.mark.parametrize("r_key,m_key,z_key,expected_shape", SHAPE_MATRIX_3D)
     def test_real_shape_matrix(self, hm200c, r_key, m_key, z_key, expected_shape):
         cib = S12CIBProfile(nu=100)
-        out = cib.real(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key])
-        assert jnp.shape(out) == expected_shape
+        out = jax.eval_shape(lambda: cib.real(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key]))
+        assert out.shape == expected_shape
 
     # fourier()'s output shape follows the (k, m, z) broadcast-then-squeeze convention.
     @pytest.mark.parametrize("r_key,m_key,z_key,expected_shape", SHAPE_MATRIX_3D)
     def test_fourier_shape_matrix(self, hm200c, r_key, m_key, z_key, expected_shape):
         cib = S12CIBProfile(nu=100)
-        out = cib.fourier(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key])
-        assert jnp.shape(out) == expected_shape
+        out = jax.eval_shape(lambda: cib.fourier(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key]))
+        assert out.shape == expected_shape
 
     # The central term is a Dirac delta at r=0 -- it contributes only at the r==0 slice.
     def test_real_central_term_is_delta_at_r_zero(self, hm200c):
@@ -615,10 +513,10 @@ class TestS12CIBProfile:
     # a smooth integrand, so it converges much faster with n_m than M21CIB's clamped one below.
     def test_l_sat_ngrid_tracks_halo_model_n_m(self, fixed_cosmology):
         cib = S12CIBProfile(nu=100)
-        hm_fine = HaloModel(
+        hm_fine = halo_model(
             cosmology=fixed_cosmology,
-            mass_def=MassDefinition(200, "critical"),
-            concentration=D08Concentration(),
+            mass_def=shared(MassDefinition, 200, "critical"),
+            concentration=shared(D08Concentration),
             m_range=(1e10, 1e15),
             n_m=100,
         )
@@ -667,26 +565,26 @@ class TestS12CIBProfile:
         "md_a,md_b,conc",
         [
             (
-                MassDefinition(200, "critical"),
-                MassDefinition(200, "mean"),
-                D08Concentration(),
+                shared(MassDefinition, 200, "critical"),
+                shared(MassDefinition, 200, "mean"),
+                shared(D08Concentration),
             ),
             (
-                MassDefinition(200, "critical"),
-                MassDefinition("vir", "critical"),
-                B13Concentration(),
+                shared(MassDefinition, 200, "critical"),
+                shared(MassDefinition, "vir", "critical"),
+                shared(B13Concentration),
             ),
             (
-                MassDefinition(200, "mean"),
-                MassDefinition("vir", "critical"),
-                ConstantConcentration(c=5),
+                shared(MassDefinition, 200, "mean"),
+                shared(MassDefinition, "vir", "critical"),
+                shared(ConstantConcentration, c=5),
             ),
         ],
     )
     def test_mass_def_self_consistency_via_generic_kernel(
         self, fixed_cosmology, md_a, md_b, conc
     ):
-        hm_a = HaloModel(
+        hm_a = halo_model(
             cosmology=fixed_cosmology, mass_def=md_a, concentration=conc,
             m_range=(M_GRID[0], M_GRID[-1]), n_m=M_GRID.shape[0],
         )
@@ -699,32 +597,6 @@ class TestS12CIBProfile:
         real_b = cib.real(hm_b, r, m_b, z)
         assert jnp.allclose(real_a, real_b, rtol=0.15)
 
-    class TestGradients:
-        # z_p (default 1e100) keeps _phi always on the same branch, so its gradient is
-        # structurally zero and is excluded here rather than tested as a trivial 0 ~= 0 check.
-        PARAMS = [
-            ("L0", 6.4e-8),
-            ("alpha", 0.36),
-            ("beta", 1.75),
-            ("gamma", 1.7),
-            ("T0", 24.4),
-            ("M_eff", 10**12.6),
-            ("sigma2_LM", 0.5),
-            ("delta", 3.6),
-            ("M_min", 10**11.5),
-            ("nu", 100.0),
-        ]
-
-        @pytest.mark.parametrize("param,x0", PARAMS)
-        def test_real_grad_wrt_params(self, hm200c, param, x0):
-            cib = S12CIBProfile(nu=100)
-            r, m, z = jnp.array(0.1), jnp.array(5e13), jnp.array(0.5)
-
-            def f(x):
-                return cib.update(**{param: x}).real(hm200c, r, m, z)
-
-            _check_grad(f, x0)
-
 
 class TestM21CIBProfile:
     # l_gal/l_sat/l_cen's output shapes follow the (m, z) broadcast-then-squeeze convention.
@@ -732,29 +604,29 @@ class TestM21CIBProfile:
     @pytest.mark.parametrize("m_key,z_key,expected_shape", SHAPE_MATRIX_2D)
     def test_per_halo_shape_matrix(self, hm200c, method, m_key, z_key, expected_shape):
         cib = M21CIBProfile(nu=100)
-        out = getattr(cib, method)(hm200c, M_VALS[m_key], Z_VALS[z_key])
-        assert jnp.shape(out) == expected_shape
+        out = jax.eval_shape(lambda: getattr(cib, method)(hm200c, M_VALS[m_key], Z_VALS[z_key]))
+        assert out.shape == expected_shape
 
     # mean_emissivity's output shape follows the z-only broadcast-then-squeeze convention.
     @pytest.mark.parametrize("z_key,expected_shape", Z_ONLY_CASES)
     def test_mean_emissivity_shape_matrix(self, hm200c, z_key, expected_shape):
         cib = M21CIBProfile(nu=100)
-        out = cib.mean_emissivity(hm200c, Z_VALS[z_key])
-        assert jnp.shape(out) == expected_shape
+        out = jax.eval_shape(lambda: cib.mean_emissivity(hm200c, Z_VALS[z_key]))
+        assert out.shape == expected_shape
 
     # real()'s output shape follows the (r, m, z) broadcast-then-squeeze convention.
     @pytest.mark.parametrize("r_key,m_key,z_key,expected_shape", SHAPE_MATRIX_3D)
     def test_real_shape_matrix(self, hm200c, r_key, m_key, z_key, expected_shape):
         cib = M21CIBProfile(nu=100)
-        out = cib.real(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key])
-        assert jnp.shape(out) == expected_shape
+        out = jax.eval_shape(lambda: cib.real(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key]))
+        assert out.shape == expected_shape
 
     # fourier()'s output shape follows the (k, m, z) broadcast-then-squeeze convention.
     @pytest.mark.parametrize("r_key,m_key,z_key,expected_shape", SHAPE_MATRIX_3D)
     def test_fourier_shape_matrix(self, hm200c, r_key, m_key, z_key, expected_shape):
         cib = M21CIBProfile(nu=100)
-        out = cib.fourier(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key])
-        assert jnp.shape(out) == expected_shape
+        out = jax.eval_shape(lambda: cib.fourier(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key]))
+        assert out.shape == expected_shape
 
     # With s_nu=None (default), the SED grid is loaded from disk into a 3-tuple of arrays.
     def test_default_construction_loads_sed_files(self):
@@ -802,10 +674,10 @@ class TestM21CIBProfile:
     # it still converges.
     def test_l_sat_ngrid_tracks_halo_model_n_m(self, fixed_cosmology):
         cib = M21CIBProfile(nu=100)
-        hm_fine = HaloModel(
+        hm_fine = halo_model(
             cosmology=fixed_cosmology,
-            mass_def=MassDefinition(200, "critical"),
-            concentration=D08Concentration(),
+            mass_def=shared(MassDefinition, 200, "critical"),
+            concentration=shared(D08Concentration),
             m_range=(1e10, 1e15),
             n_m=200,
         )
@@ -867,26 +739,26 @@ class TestM21CIBProfile:
         "md_a,md_b,conc",
         [
             (
-                MassDefinition(200, "critical"),
-                MassDefinition(200, "mean"),
-                D08Concentration(),
+                shared(MassDefinition, 200, "critical"),
+                shared(MassDefinition, 200, "mean"),
+                shared(D08Concentration),
             ),
             (
-                MassDefinition(200, "critical"),
-                MassDefinition("vir", "critical"),
-                B13Concentration(),
+                shared(MassDefinition, 200, "critical"),
+                shared(MassDefinition, "vir", "critical"),
+                shared(B13Concentration),
             ),
             (
-                MassDefinition(200, "mean"),
-                MassDefinition("vir", "critical"),
-                ConstantConcentration(c=5),
+                shared(MassDefinition, 200, "mean"),
+                shared(MassDefinition, "vir", "critical"),
+                shared(ConstantConcentration, c=5),
             ),
         ],
     )
     def test_mass_def_affects_only_kernel_not_luminosity(
         self, fixed_cosmology, md_a, md_b, conc
     ):
-        hm_a = HaloModel(
+        hm_a = halo_model(
             cosmology=fixed_cosmology, mass_def=md_a, concentration=conc,
             m_range=(M_GRID[0], M_GRID[-1]), n_m=M_GRID.shape[0],
         )
@@ -899,44 +771,21 @@ class TestM21CIBProfile:
         u_m_b = cib._u_r_nfw(hm_b, jnp.array(0.1), m, z)
         assert not jnp.isclose(u_m_a, u_m_b, rtol=1e-4)
 
-    class TestGradients:
-        # s_nu is static aux data, not a leaf -- excluded here since it is non-differentiable by design.
-        PARAMS = [
-            ("eta_max", 0.4028),
-            ("z_c", 1.5),
-            ("tau", 1.204),
-            ("f_sub", 0.134),
-            ("M_min", 10**11.5),
-            ("M_eff", 10**12.6),
-            ("sigma2_LM", 0.5),
-            ("nu", 100.0),
-        ]
-
-        @pytest.mark.parametrize("param,x0", PARAMS)
-        def test_real_grad_wrt_params(self, hm200c, param, x0):
-            cib = M21CIBProfile(nu=100)
-            r, m, z = jnp.array(0.1), jnp.array(5e13), jnp.array(0.5)
-
-            def f(x):
-                return cib.update(**{param: x}).real(hm200c, r, m, z)
-
-            _check_grad(f, x0)
-
 
 class TestB16DensityProfile:
     # real()'s output shape follows the (r, m, z) broadcast-then-squeeze convention.
     @pytest.mark.parametrize("r_key,m_key,z_key,expected_shape", SHAPE_MATRIX_3D)
     def test_real_shape_matrix(self, hm200c, r_key, m_key, z_key, expected_shape):
         b16 = B16DensityProfile()
-        out = b16.real(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key])
-        assert jnp.shape(out) == expected_shape
+        out = jax.eval_shape(lambda: b16.real(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key]))
+        assert out.shape == expected_shape
 
     # fourier()'s output shape follows the (k, m, z) broadcast-then-squeeze convention.
     @pytest.mark.parametrize("r_key,m_key,z_key,expected_shape", SHAPE_MATRIX_3D)
     def test_fourier_shape_matrix(self, hm200c, r_key, m_key, z_key, expected_shape):
         b16 = B16DensityProfile()
-        out = b16.fourier(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key])
-        assert jnp.shape(out) == expected_shape
+        out = jax.eval_shape(lambda: b16.fourier(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key]))
+        assert out.shape == expected_shape
 
     # x_range/n_x are always turned into a log-spaced grid, regardless of the requested bounds.
     def test_x_grid_is_log_spaced_from_range(self):
@@ -949,14 +798,6 @@ class TestB16DensityProfile:
         b16_2 = b16.update(x_range=(0.01, 5.0), n_x=8)
         assert jnp.array_equal(b16_2.x_grid, jnp.logspace(jnp.log10(0.01), jnp.log10(5.0), 8))
         assert b16_2._hankel is not b16._hankel
-
-    # _tree_unflatten bypasses the x_grid setter and trusts aux_data as-is -- no re-sort/rebuild.
-    def test_tree_unflatten_trusts_aux_data(self):
-        b16 = B16DensityProfile()
-        leaves, aux = b16._tree_flatten()
-        replacement = HankelTransform(aux[0].x[::-1], nu=0.5)
-        rt = B16DensityProfile._tree_unflatten((replacement,), leaves)
-        assert jnp.array_equal(rt.x_grid, replacement.x)
 
     # calibrate() with a named preset matches an explicit update() call with the same kwargs.
     @pytest.mark.parametrize("key", ["agn", "shock"])
@@ -984,15 +825,15 @@ class TestB16DensityProfile:
     @pytest.mark.parametrize(
         "md_b,shape_kwargs",
         [
-            (MassDefinition(500, "critical"), {}),
-            (MassDefinition("vir", "critical"), dict(A_rho0=3000.0, A_beta=4.2)),
+            (shared(MassDefinition, 500, "critical"), {}),
+            (shared(MassDefinition, "vir", "critical"), dict(A_rho0=3000.0, A_beta=4.2)),
         ],
     )
     def test_mass_def_invariance_given_proper_conversion(
         self, fixed_cosmology, md_b, shape_kwargs
     ):
-        md_a, conc = MassDefinition(200, "critical"), ConstantConcentration(c=5)
-        hm_a = HaloModel(
+        md_a, conc = shared(MassDefinition, 200, "critical"), shared(ConstantConcentration, c=5)
+        hm_a = halo_model(
             cosmology=fixed_cosmology, mass_def=md_a, concentration=conc,
             m_range=(M_GRID[0], M_GRID[-1]), n_m=M_GRID.shape[0],
         )
@@ -1032,46 +873,21 @@ class TestB16DensityProfile:
         assert jnp.all(jnp.isnan(b16.real(hm200c_oob, r, m, z)))
         assert jnp.all(jnp.isnan(b16.fourier(hm200c_oob, r, m, z)))
 
-    class TestGradients:
-        # x_grid is static aux data and x_out only enters a boolean mask (zero gradient by
-        # construction) -- both excluded in favor of the 9 differentiable shape parameters.
-        PARAMS = [
-            ("A_rho0", 4000.0),
-            ("A_alpha", 0.88),
-            ("A_beta", 3.83),
-            ("alpha_m_rho0", 0.29),
-            ("alpha_m_alpha", -0.03),
-            ("alpha_m_beta", 0.04),
-            ("alpha_z_rho0", -0.66),
-            ("alpha_z_alpha", 0.19),
-            ("alpha_z_beta", -0.025),
-        ]
-
-        @pytest.mark.parametrize("param,x0", PARAMS)
-        def test_real_grad_wrt_shape_params(self, hm200c, param, x0):
-            b16 = B16DensityProfile()
-            r, m, z = jnp.array(0.1), jnp.array(5e13), jnp.array(0.5)
-
-            def f(x):
-                return b16.update(**{param: x}).real(hm200c, r, m, z)
-
-            _check_grad(f, x0)
-
 
 class TestGNFWPressureProfile:
     # real()'s output shape follows the (r, m, z) broadcast-then-squeeze convention.
     @pytest.mark.parametrize("r_key,m_key,z_key,expected_shape", SHAPE_MATRIX_3D)
     def test_real_shape_matrix(self, hm200c, r_key, m_key, z_key, expected_shape):
         gnfw = GNFWPressureProfile()
-        out = gnfw.real(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key])
-        assert jnp.shape(out) == expected_shape
+        out = jax.eval_shape(lambda: gnfw.real(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key]))
+        assert out.shape == expected_shape
 
     # fourier() (the shared PressureProfile.fourier) output shape follows the same convention.
     @pytest.mark.parametrize("r_key,m_key,z_key,expected_shape", SHAPE_MATRIX_3D)
     def test_fourier_shape_matrix(self, hm200c, r_key, m_key, z_key, expected_shape):
         gnfw = GNFWPressureProfile()
-        out = gnfw.fourier(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key])
-        assert jnp.shape(out) == expected_shape
+        out = jax.eval_shape(lambda: gnfw.fourier(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key]))
+        assert out.shape == expected_shape
 
     # x_range/n_x are always turned into a log-spaced grid, regardless of the requested bounds.
     def test_x_grid_is_log_spaced_from_range(self):
@@ -1091,15 +907,15 @@ class TestGNFWPressureProfile:
     @pytest.mark.parametrize(
         "md_b,shape_kwargs",
         [
-            (MassDefinition(500, "critical"), {}),
-            (MassDefinition("vir", "critical"), dict(P0=6.0, beta=4.5)),
+            (shared(MassDefinition, 500, "critical"), {}),
+            (shared(MassDefinition, "vir", "critical"), dict(P0=6.0, beta=4.5)),
         ],
     )
     def test_mass_def_sensitivity_no_internal_renorm(
         self, fixed_cosmology, md_b, shape_kwargs
     ):
-        md_a, conc = MassDefinition(200, "critical"), ConstantConcentration(c=5)
-        hm_a = HaloModel(
+        md_a, conc = shared(MassDefinition, 200, "critical"), shared(ConstantConcentration, c=5)
+        hm_a = halo_model(
             cosmology=fixed_cosmology, mass_def=md_a, concentration=conc,
             m_range=(M_GRID[0], M_GRID[-1]), n_m=M_GRID.shape[0],
         )
@@ -1151,45 +967,21 @@ class TestGNFWPressureProfile:
         assert jnp.all(jnp.isnan(gnfw.real(hm200c_oob, r, m, z)))
         assert jnp.all(jnp.isnan(gnfw.fourier(hm200c_oob, r, m, z)))
 
-    class TestGradients:
-        # x_grid is static aux data and x_out only enters a boolean mask (zero gradient by
-        # construction) -- both excluded in favor of the 8 differentiable shape parameters.
-        PARAMS = [
-            ("P0", 8.130),
-            ("c500", 1.156),
-            ("alpha", 1.0620),
-            ("beta", 5.4807),
-            ("gamma", 0.3292),
-            ("B", 1.4),
-            ("alpha_P", 0.12),
-            ("P0_hexp", -1.0),
-        ]
-
-        @pytest.mark.parametrize("param,x0", PARAMS)
-        def test_real_grad_wrt_shape_params(self, hm200c, param, x0):
-            gnfw = GNFWPressureProfile()
-            r, m, z = jnp.array(0.1), jnp.array(5e13), jnp.array(0.5)
-
-            def f(x):
-                return gnfw.update(**{param: x}).real(hm200c, r, m, z)
-
-            _check_grad(f, x0)
-
 
 class TestB12PressureProfile:
     # real()'s output shape follows the (r, m, z) broadcast-then-squeeze convention.
     @pytest.mark.parametrize("r_key,m_key,z_key,expected_shape", SHAPE_MATRIX_3D)
     def test_real_shape_matrix(self, hm200c, r_key, m_key, z_key, expected_shape):
         b12 = B12PressureProfile()
-        out = b12.real(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key])
-        assert jnp.shape(out) == expected_shape
+        out = jax.eval_shape(lambda: b12.real(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key]))
+        assert out.shape == expected_shape
 
     # fourier() (the shared PressureProfile.fourier) output shape follows the same convention.
     @pytest.mark.parametrize("r_key,m_key,z_key,expected_shape", SHAPE_MATRIX_3D)
     def test_fourier_shape_matrix(self, hm200c, r_key, m_key, z_key, expected_shape):
         b12 = B12PressureProfile()
-        out = b12.fourier(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key])
-        assert jnp.shape(out) == expected_shape
+        out = jax.eval_shape(lambda: b12.fourier(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key]))
+        assert out.shape == expected_shape
 
     # x_range/n_x are always turned into a log-spaced grid, regardless of the requested bounds.
     def test_x_grid_is_log_spaced_from_range(self):
@@ -1221,15 +1013,15 @@ class TestB12PressureProfile:
     @pytest.mark.parametrize(
         "md_b,shape_kwargs",
         [
-            (MassDefinition(500, "critical"), {}),
-            (MassDefinition("vir", "critical"), dict(A_P0=15.0, A_beta=4.0)),
+            (shared(MassDefinition, 500, "critical"), {}),
+            (shared(MassDefinition, "vir", "critical"), dict(A_P0=15.0, A_beta=4.0)),
         ],
     )
     def test_mass_def_invariance_given_proper_conversion(
         self, fixed_cosmology, md_b, shape_kwargs
     ):
-        md_a, conc = MassDefinition(200, "critical"), ConstantConcentration(c=5)
-        hm_a = HaloModel(
+        md_a, conc = shared(MassDefinition, 200, "critical"), shared(ConstantConcentration, c=5)
+        hm_a = halo_model(
             cosmology=fixed_cosmology, mass_def=md_a, concentration=conc,
             m_range=(M_GRID[0], M_GRID[-1]), n_m=M_GRID.shape[0],
         )
@@ -1249,7 +1041,7 @@ class TestB12PressureProfile:
         b12 = B12PressureProfile()
         m, z = jnp.array([1e13, 1e14]), jnp.array([0.3, 1.0])
         r_scale = b12._fourier_radius_scale(hm200c, m, z)
-        mass_def_200c = MassDefinition(200, "critical")
+        mass_def_200c = shared(MassDefinition, 200, "critical")
         m200c = mass_translator(hm200c.mass_def, mass_def_200c, hm200c.concentration)(
             hm200c.cosmology, m, z
         )
@@ -1273,31 +1065,6 @@ class TestB12PressureProfile:
         assert jnp.all(jnp.isnan(b12.real(hm200c_oob, r, m, z)))
         assert jnp.all(jnp.isnan(b12.fourier(hm200c_oob, r, m, z)))
 
-    class TestGradients:
-        # x_grid is static aux data and x_out only enters a boolean mask (zero gradient by
-        # construction) -- both excluded in favor of the 9 differentiable shape parameters.
-        PARAMS = [
-            ("A_P0", 18.1),
-            ("A_xc", 0.497),
-            ("A_beta", 4.35),
-            ("alpha_m_P0", 0.154),
-            ("alpha_m_xc", -0.00865),
-            ("alpha_m_beta", 0.0393),
-            ("alpha_z_P0", -0.758),
-            ("alpha_z_xc", 0.731),
-            ("alpha_z_beta", 0.415),
-        ]
-
-        @pytest.mark.parametrize("param,x0", PARAMS)
-        def test_real_grad_wrt_shape_params(self, hm200c, param, x0):
-            b12 = B12PressureProfile()
-            r, m, z = jnp.array(0.1), jnp.array(5e13), jnp.array(0.5)
-
-            def f(x):
-                return b12.update(**{param: x}).real(hm200c, r, m, z)
-
-            _check_grad(f, x0)
-
 
 class TestJitRetraceAwareness:
     # Two separately-constructed, value-identical profile instances give numerically identical
@@ -1317,168 +1084,3 @@ class TestJitRetraceAwareness:
         assert p1 is not p2
         r, m, z = jnp.array(0.1), jnp.array(1e13), jnp.array(0.5)
         assert jnp.allclose(p1.real(hm200c, r, m, z), p2.real(hm200c, r, m, z))
-
-
-# ---------------------------------------------------------------------------------------------------------------------
-# Numerical accuracy of the generic Hankel path, HaloProfile._fourier_via_hankel_transform (GNFW, B12, B16).
-# Every test compares against an independent truth -- the analytic truncated-NFW transform, or a quad integral of the
-# truncated GNFW -- never another halo-model code. Thresholds are ~2x the error measured when written (noted per test),
-# so a change that degrades the transform by ~2x fails; lower them when accuracy improves. Errors are the maximum
-# absolute error over the targets divided by u(q -> 0).
-# ---------------------------------------------------------------------------------------------------------------------
-
-# Off-grid targets in the dimensionless wavenumber q = k r_scale (1+z).
-Q = np.geomspace(1e-2, 20.0, 97)
-Q_LOW = np.geomspace(1e-4, 1e-2, 9)
-GNFW_SHAPE = dict(c500=1.81, alpha=1.062, beta=4.13, gamma=0.3292)
-X_MIN, X_MAX = 1e-5, 4.0
-
-
-def _gnfw_shape(x):
-    c, a, b, g = GNFW_SHAPE["c500"], GNFW_SHAPE["alpha"], GNFW_SHAPE["beta"], GNFW_SHAPE["gamma"]
-    return (c * x) ** -g * (1.0 + (c * x) ** a) ** ((g - b) / a)
-
-
-def _gnfw_truth_at(q, x_out):
-    """int_0^x_out x^2 f(x) j0(q x) dx, to ~1e-12."""
-    if q < 1e-8:
-        return quad(lambda x: x * x * _gnfw_shape(x), 1e-14, x_out, limit=500, epsabs=0, epsrel=1e-13)[0]
-    return quad(lambda x: x * _gnfw_shape(x) / q, 1e-14, x_out, weight="sin", wvar=q,
-                limit=2000, epsabs=0, epsrel=1e-13)[0]
-
-
-@functools.lru_cache(maxsize=None)
-def _gnfw_truth(x_out, which="Q"):
-    qs = Q if which == "Q" else Q_LOW
-    return _gnfw_truth_at(0.0, x_out), np.array([_gnfw_truth_at(q, x_out) for q in qs])
-
-
-def _gnfw(n_x, x_out, B=1.0):
-    return GNFWPressureProfile(x_range=(X_MIN, X_MAX), n_x=n_x, B=B, x_out=x_out, **GNFW_SHAPE)
-
-
-def _gnfw_u(hm, n_x, x_out, q, m=1e14, z=0.0):
-    """hmfast's GNFW transform at q, divided by its constant prefactor so it compares to the truth."""
-    p = _gnfw(n_x, x_out)
-    m1, z1 = jnp.atleast_1d(m), jnp.atleast_1d(z)
-    rs = float(jnp.squeeze(p._fourier_radius_scale(hm, m1, z1)))
-    amp = float(jnp.squeeze(p.real(hm, jnp.array([0.5 * rs * (1 + z)]), m, z))) / _gnfw_shape(0.5)
-    u = np.asarray(p.fourier(hm, jnp.asarray(q / (rs * (1 + z))), m, z))
-    return u / (4 * np.pi * (rs * (1 + z)) ** 3 * amp)
-
-
-def gnfw_error(hm, n_x, x_out, which="Q"):
-    u0, truth = _gnfw_truth(x_out, which)
-    u = _gnfw_u(hm, n_x, x_out, Q if which == "Q" else Q_LOW)
-    return np.max(np.abs(u - truth)) / u0
-
-
-def mcfit_ideal_error(n_x, pad_decades=2.0):
-    """Best achievable with mcfit on the same padded grid: x_out on the last node at half weight, read at mcfit's own nodes."""
-    x = np.logspace(np.log10(X_MIN), np.log10(X_MAX), n_x)
-    h = np.log(x[1] / x[0])
-    n_pad = int(np.ceil(pad_decades * np.log(10) / h))
-    F = _gnfw_shape(x) * x**0.5
-    F[-1] *= 0.5
-    q, G = mcfit.Hankel(x[0] * np.exp(h * np.arange(n_x + n_pad)), nu=0.5, lowring=True, backend="jax")(
-        jnp.asarray(np.concatenate([F, np.zeros(n_pad)])), extrap=False)
-    q, G = np.asarray(q), np.asarray(G)
-    sel = (q > Q[0]) & (q < Q[-1])
-    u = (G * np.sqrt(np.pi / (2 * q)))[sel]
-    truth = np.array([_gnfw_truth_at(v, X_MAX) for v in q[sel]])
-    return np.max(np.abs(u - truth)) / _gnfw_truth(X_MAX)[0]
-
-
-def nfw_error(hm, n_x, x_max, m, z):
-    """Truncated NFW pushed through the generic Hankel path, against its analytic transform."""
-    nfw = NFWMatterProfile()
-    x = jnp.logspace(np.log10(X_MIN), np.log10(x_max), n_x)
-    nfw._hankel, nfw.x_grid, nfw.x_out = HankelTransform(x, nu=0.5), x, 1.0  # x = r / r_delta, truncated at r_delta
-    m1, z1 = jnp.atleast_1d(m), jnp.atleast_1d(z)
-    r_delta = jnp.reshape(hm.mass_def.r_delta(hm.cosmology, m1, z1), (1, 1))
-    k = jnp.asarray(Q) / (r_delta[0, 0] * (1 + z))
-    u_hankel = np.asarray(HaloProfile._fourier_via_hankel_transform(nfw, hm, k, m1, z1, r_delta))
-    u_exact = np.asarray(nfw.fourier(hm, k, m, z))
-    return np.max(np.abs(u_hankel - u_exact)) / np.max(np.abs(u_exact))
-
-
-NFW_HALOS = [(1e12, 0.0), (1e14, 0.5), (1e15, 1.0)]
-
-
-class TestHankelAgainstAnalyticNFW:
-    # x_out = 1 on the last grid node (measured max over halos: 1.5e-3 at n_x=100).
-    @pytest.mark.parametrize("m,z", NFW_HALOS)
-    def test_truncation_on_grid_edge(self, hm200c, m, z):
-        assert nfw_error(hm200c, 100, 1.0, m, z) < 3e-3
-
-    # x_out = 1 between nodes of a grid running to 1.5 (measured max over halos: 3.2e-3 at n_x=100).
-    @pytest.mark.parametrize("m,z", NFW_HALOS)
-    def test_truncation_between_nodes(self, hm200c, m, z):
-        assert nfw_error(hm200c, 100, 1.5, m, z) < 6e-3
-
-    # Second-order convergence: doubling n_x cuts the error by >= 3 (measured 4.7).
-    def test_convergence_rate(self, hm200c):
-        e = [nfw_error(hm200c, n, 1.0, 1e14, 0.5) for n in (100, 200, 400)]
-        assert e[0] / e[1] > 3 and e[1] / e[2] > 3
-
-
-class TestHankelAgainstQuadGNFW:
-    # x_out on the grid edge, the GNFW default (measured 5.2e-4 / 1.3e-4 at n_x=100 / 200).
-    @pytest.mark.parametrize("n_x,tol", [(100, 1e-3), (200, 2.6e-4)])
-    def test_truncation_on_grid_edge(self, hm500c, n_x, tol):
-        assert gnfw_error(hm500c, n_x, X_MAX) < tol
-
-    # x_out between nodes (measured 1.7e-3 / 1.3e-4 at n_x=100 / 200).
-    @pytest.mark.parametrize("n_x,tol", [(100, 3.4e-3), (200, 2.7e-4)])
-    def test_truncation_between_nodes(self, hm500c, n_x, tol):
-        assert gnfw_error(hm500c, n_x, 3.0) < tol
-
-    # x_out just inside the last node, where it is not snapped onto it (measured 2.4e-3 at n_x=100).
-    def test_truncation_just_inside_node(self, hm500c):
-        assert gnfw_error(hm500c, 100, X_MAX * (1 - 1e-3)) < 5e-3
-
-    # Second-order convergence: doubling n_x cuts the error by >= 3 (measured 4.1).
-    def test_convergence_rate(self, hm500c):
-        e = [gnfw_error(hm500c, n, X_MAX) for n in (100, 200, 400)]
-        assert e[0] / e[1] > 3 and e[1] / e[2] > 3
-
-    # Below mcfit's native q range, where the zero padding and the q -> 0 anchor take over (measured 3.8e-4).
-    def test_low_q(self, hm500c):
-        assert gnfw_error(hm500c, 100, X_MAX, which="low") < 8e-4
-
-
-class TestHankelMatchesMcfit:
-    # hmfast adds no significant error on top of mcfit's own (measured ratio 1.09-1.11).
-    @pytest.mark.parametrize("n_x", [100, 200, 400])
-    def test_no_loss_relative_to_mcfit(self, hm500c, n_x):
-        assert gnfw_error(hm500c, n_x, X_MAX) / mcfit_ideal_error(n_x) < 1.25
-
-
-class TestHankelEdgeCases:
-    # x_out = inf truncates at the grid edge, so it must equal x_out = x_max (round-off in real() must not drop the node).
-    def test_untruncated_equals_truncated_at_grid_edge(self, hm500c):
-        u_inf = _gnfw_u(hm500c, 100, jnp.inf, Q)
-        u_edge = _gnfw_u(hm500c, 100, X_MAX, Q)
-        assert np.allclose(u_inf, u_edge, rtol=1e-9, atol=0)
-
-    # x_out a few ulps below the last node snaps onto it; real() must still see that node as inside (1.8e-2 if it doesn't).
-    def test_node_kept_when_x_out_rounds_below_it(self, hm500c):
-        u_below = _gnfw_u(hm500c, 100, X_MAX * (1 - 1e-14), Q)
-        u_edge = _gnfw_u(hm500c, 100, X_MAX, Q)
-        assert np.allclose(u_below, u_edge, rtol=1e-9, atol=0)
-
-    # Far beyond the native grid the transform clamps to its last value rather than extrapolating.
-    def test_clamps_above_native_grid(self, hm500c):
-        u = _gnfw_u(hm500c, 100, X_MAX, np.array([1e7, 1e9]))
-        assert np.all(np.isfinite(u)) and u[0] == u[1]
-
-
-class TestHankelSmoothness:
-    # d ln u / d ln B varies smoothly along a dense sweep in B, so the interpolation onto q = k r_500 has no kinks
-    # (measured max second difference 1.3e-4; linear interpolation gives 2.2e-2).
-    def test_autodiff_derivative_has_no_kinks_in_B(self, hm500c):
-        k = jnp.array([0.3, 1.0, 3.0])
-        p = _gnfw(100, X_MAX)
-        dlnu_dlnB = jax.vmap(jax.jacfwd(lambda lnB: jnp.log(p.update(B=jnp.exp(lnB)).fourier(hm500c, k, 1e14, 0.0))))
-        d = np.asarray(dlnu_dlnB(jnp.linspace(0.0, np.log(1.5), 201)))
-        assert np.max(np.abs(d[2:] - 2 * d[1:-1] + d[:-2])) < 2.5e-4

@@ -1,8 +1,8 @@
 """
 Unit tests for hmfast.tracers: the profile-type compatibility guardrail
 (e.g. CMB lensing must not accept a pressure profile), dndz normalization,
-kernel shape/squeeze conventions, z_max truncation, NaN propagation, and
-gradients.
+kernel shape/squeeze conventions, z_max truncation and NaN propagation.
+Gradients are checked in test_jax_transforms.py.
 """
 
 import jax
@@ -166,7 +166,7 @@ class TestKernelShapeAndSqueeze:
         terms = tracer.kernel(fixed_cosmology, z_vals[z_key])
         assert isinstance(terms, list) and len(terms) >= 1
         for weight, der_bessel, der_angles in terms:
-            assert jnp.shape(weight) == expected_shape
+            assert weight.shape == expected_shape
             assert isinstance(der_bessel, int) and der_bessel >= -1
             assert isinstance(der_angles, int) and der_angles in (0, 1, 2)
 
@@ -260,40 +260,6 @@ class TestKernelNaNPropagation:
         assert jnp.all(jnp.isfinite(out))
 
 
-def _check_grad(f, x0, rtol=1e-2):
-    """jax.grad is finite and matches a scale-appropriate finite-difference estimate."""
-    x0 = jnp.asarray(x0, dtype=float)
-    g_auto = jax.grad(f)(x0)
-    assert jnp.isfinite(g_auto)
-    eps = jnp.maximum(1e-6, 1e-5 * jnp.abs(x0))
-    g_fd = (f(x0 + eps) - f(x0 - eps)) / (2 * eps)
-    assert jnp.isclose(g_auto, g_fd, rtol=rtol, atol=1e-8)
-
-
-class TestKernelGradients:
-    # jax.grad of kernel() wrt H0 (via cosmology) is finite and matches a finite-difference estimate.
-    @pytest.mark.parametrize(
-        "tracer_cls", [CMBLensingTracer, GalaxyLensingTracer, GalaxyTracer]
-    )
-    def test_kernel_grad_wrt_H0(self, fixed_cosmology, tracer_cls):
-        tracer = _build_default(tracer_cls)
-        z = jnp.array(0.5)
-
-        def f(H0):
-            return _kernel_scalar(tracer, fixed_cosmology.update(H0=H0), z)
-
-        _check_grad(f, fixed_cosmology.H0)
-
-    # kSZTracer needs a finite z_max and a z safely inside velocity_dispersion's valid z range.
-    def test_ksz_kernel_grad_wrt_H0(self, fixed_cosmology):
-        tracer = kSZTracer(z_max=3.0)
-        z = jnp.array(1.0)
-
-        def f(H0):
-            return _kernel_scalar(tracer, fixed_cosmology.update(H0=H0), z)
-
-        _check_grad(f, fixed_cosmology.H0)
-
 
 class TestGalaxyLensingEfficiency:
     # I_s(z) is exactly zero at/beyond the source distribution's maximum redshift.
@@ -333,18 +299,6 @@ class TestMagnificationBias:
             _kernel_scalar(biased_tracer, fixed_cosmology, z),
         )
 
-    # jax.grad of kernel() wrt the magnification-bias slope is finite and matches finite differences.
-    def test_kernel_grad_wrt_mag_bias_amplitude(self, fixed_cosmology):
-        z = jnp.array(0.5)
-
-        def f(s):
-            tracer = GalaxyTracer(
-                dndz=_SYNTHETIC_DNDZ, mag_bias=(jnp.array([0.0, 2.0]), jnp.array([s, s]))
-            )
-            return _kernel_scalar(tracer, fixed_cosmology, z)
-
-        _check_grad(f, 0.6)
-
 
 class TestIntrinsicAlignment:
     # Default ia_bias is A_IA(z)=0, which makes the intrinsic-alignment term vanish.
@@ -364,18 +318,6 @@ class TestIntrinsicAlignment:
             _kernel_scalar(default_tracer, fixed_cosmology, z),
             _kernel_scalar(ia_tracer, fixed_cosmology, z),
         )
-
-    # jax.grad of kernel() wrt the IA amplitude is finite and matches finite differences.
-    def test_kernel_grad_wrt_ia_amplitude(self, fixed_cosmology):
-        z = jnp.array(0.5)
-
-        def f(a):
-            tracer = GalaxyLensingTracer(
-                dndz=_SYNTHETIC_DNDZ, ia_bias=(jnp.array([0.0, 2.0]), jnp.array([a, a]))
-            )
-            return _kernel_scalar(tracer, fixed_cosmology, z)
-
-        _check_grad(f, 1.0)
 
 
 class TestDefaultProfileMatchesRequiredType:

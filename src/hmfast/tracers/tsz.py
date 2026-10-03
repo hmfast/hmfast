@@ -80,6 +80,10 @@ class tSZTracer(Tracer):
 
     # --- End JAX PyTree Registration ---
         
+    def _z_max(self, cosmology):
+        """Redshift above which every kernel term vanishes."""
+        return self.z_max
+
     def _kernel_primary(self, cosmology, z):
 
         """

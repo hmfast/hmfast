@@ -9,13 +9,14 @@ import jax.numpy as jnp
 import pytest
 
 from hmfast.cosmology import Cosmology
-from hmfast.halos import HaloModel
 from hmfast.halos.concentration import (
     B13Concentration,
     ConstantConcentration,
     D08Concentration,
 )
 from hmfast.halos.massdef import MassDefinition
+
+from ._shared import FIXED_COSMOLOGY, halo_model as _halo_model, shared
 
 
 def pytest_collection_modifyitems(config, items):
@@ -34,14 +35,7 @@ def fixed_cosmology():
     One fixed, documented cosmology used everywhere instead of random sampling,
     so tolerances (especially CCL-comparison ones) are reproducible across runs.
     """
-    return Cosmology(
-        emulator_set="lcdm:v1",
-        H0=67.5,
-        omega_cdm=0.12,
-        omega_b=0.022,
-        A_s=2.1e-9,
-        n_s=0.965,
-    )
+    return FIXED_COSMOLOGY
 
 
 @pytest.fixture(scope="session")
@@ -50,14 +44,7 @@ def out_of_bounds_cosmology():
     A cosmology with n_s outside lcdm:v1's trained bounds (0.8812-1.0492),
     used to verify NaN propagation through emulator-dependent quantities.
     """
-    return Cosmology(
-        emulator_set="lcdm:v1",
-        H0=67.5,
-        omega_cdm=0.12,
-        omega_b=0.022,
-        A_s=2.1e-9,
-        n_s=5.0,
-    )
+    return FIXED_COSMOLOGY.update(n_s=5.0)
 
 
 @pytest.fixture
@@ -83,16 +70,16 @@ def z_grid():
 def mass_def(request):
     """Parametrized across the four mass definitions compare_ccl.ipynb benchmarks (200c/200m/500c/vir)."""
     delta, reference = request.param
-    return MassDefinition(delta=delta, reference=reference)
+    return shared(MassDefinition, delta, reference)
 
 
 @pytest.fixture
 def halo_model(fixed_cosmology, mass_def):
     """A HaloModel per mass_def, pairing each with a different concentration class."""
-    conc = {200: D08Concentration(), "vir": B13Concentration()}.get(
-        mass_def.delta, ConstantConcentration(c=5)
+    conc = {200: shared(D08Concentration), "vir": shared(B13Concentration)}.get(
+        mass_def.delta, shared(ConstantConcentration, c=5)
     )
-    return HaloModel(
+    return _halo_model(
         cosmology=fixed_cosmology,
         mass_def=mass_def,
         concentration=conc,
@@ -118,6 +105,6 @@ def other_emulator_cosmology(request):
     that set's data isn't downloaded locally, rather than assuming it always is.
     """
     try:
-        return Cosmology(emulator_set=request.param)
+        return shared(Cosmology, emulator_set=request.param)
     except Exception as exc:
         pytest.skip(f"{request.param} emulator files not available locally: {exc}")
