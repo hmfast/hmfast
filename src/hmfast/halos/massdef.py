@@ -282,7 +282,7 @@ def _convert_m_delta(cosmology, m, z, mass_def_old, mass_def_new, c_old, max_ite
 	return jnp.squeeze(results.reshape(mm.shape))
 
 
-def mass_translator(mass_def_old, mass_def_new, concentration, max_iter=20):
+def mass_translator(mass_def_old, mass_def_new, concentration, *, max_iter=20):
 	"""
 	Build a mass-conversion callable for fixed source and target definitions.
 

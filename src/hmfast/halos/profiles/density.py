@@ -91,6 +91,7 @@ class B16DensityProfile(DensityProfile):
 
     def __init__(
         self,
+        *,
         x_range=(1e-2, 1.0),
         n_x=100,
         x_out=1.0,
@@ -173,6 +174,7 @@ class B16DensityProfile(DensityProfile):
 
     def update(
         self,
+        *,
         x_out=None,
         A_rho0=None,
         A_alpha=None,

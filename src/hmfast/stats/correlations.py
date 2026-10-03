@@ -95,7 +95,7 @@ def corr_3d(cosmology, k, pk, r):
     return _fftlog_interp("P2xi", k, pk, r, 0, cosmology.extrapolate_k)
 
 
-def corr_angular(cosmology, l, cl, theta, type="NN"):
+def corr_angular(cosmology, l, cl, theta, *, type="NN"):
     """
     Flat-sky angular correlation function of a tabulated angular power spectrum,
 

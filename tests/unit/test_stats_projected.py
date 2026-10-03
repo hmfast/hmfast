@@ -38,18 +38,18 @@ class TestCl:
     # cl follows the l broadcast-then-squeeze convention.
     @pytest.mark.parametrize("l_key,expected_shape", L_SHAPES)
     def test_shape_matrix(self, l_key, expected_shape):
-        out = jax.eval_shape(lambda: cl(PK, HM, L_VALS[l_key], GLENS_TRACER, GLENS_TRACER, Z_RANGE, N_Z))
+        out = jax.eval_shape(lambda: cl(PK, HM, L_VALS[l_key], GLENS_TRACER, GLENS_TRACER, z_range=Z_RANGE, n_z=N_Z))
         assert out.shape == expected_shape
 
     # The 1-halo and 2-halo spectra add up to the total: the projection is linear in P(k).
     def test_halo_terms_add_up(self):
-        c = lambda pk: cl(pk, HM, L_GRID, GLENS_TRACER, None, Z_RANGE, N_Z)  # noqa: E731
+        c = lambda pk: cl(pk, HM, L_GRID, GLENS_TRACER, None, z_range=Z_RANGE, n_z=N_Z)  # noqa: E731
         np.testing.assert_allclose(c(PK_1H) + c(PK_2H), c(PK), rtol=1e-12)
 
     # On large scales the 2-halo matter spectrum reduces to the linear-bias spectrum with b = 1.
     def test_2h_matches_linear_bias_on_large_scales(self):
-        c_2h = cl(PK_2H, HM, L_LOW, GLENS_TRACER, None, Z_RANGE, N_Z)
-        c_lin = cl_linbias(COSMO, L_LOW, GLENS_TRACER, None, Z_RANGE, N_Z, linear=True)
+        c_2h = cl(PK_2H, HM, L_LOW, GLENS_TRACER, None, z_range=Z_RANGE, n_z=N_Z)
+        c_lin = cl_linbias(COSMO, L_LOW, GLENS_TRACER, None, z_range=Z_RANGE, n_z=N_Z, linear=True)
         np.testing.assert_allclose(c_2h, c_lin, rtol=1e-3)
 
 
@@ -57,30 +57,30 @@ class TestClLinbias:
     # cl_linbias follows the l broadcast-then-squeeze convention.
     @pytest.mark.parametrize("l_key,expected_shape", L_SHAPES)
     def test_shape_matrix(self, l_key, expected_shape):
-        out = jax.eval_shape(lambda: cl_linbias(COSMO, L_VALS[l_key], GAL_TRACER_BIASED, GLENS_TRACER, Z_RANGE, N_Z))
+        out = jax.eval_shape(lambda: cl_linbias(COSMO, L_VALS[l_key], GAL_TRACER_BIASED, GLENS_TRACER, z_range=Z_RANGE, n_z=N_Z))
         assert out.shape == expected_shape
 
     # A cross spectrum does not depend on which tracer is passed first.
     def test_cross_symmetric_in_tracers(self):
         np.testing.assert_allclose(
-            cl_linbias(COSMO, L_GRID, GAL_TRACER_BIASED, GLENS_TRACER, Z_RANGE, N_Z),
-            cl_linbias(COSMO, L_GRID, GLENS_TRACER, GAL_TRACER_BIASED, Z_RANGE, N_Z),
+            cl_linbias(COSMO, L_GRID, GAL_TRACER_BIASED, GLENS_TRACER, z_range=Z_RANGE, n_z=N_Z),
+            cl_linbias(COSMO, L_GRID, GLENS_TRACER, GAL_TRACER_BIASED, z_range=Z_RANGE, n_z=N_Z),
             rtol=1e-12,
         )
 
     # Doubling a density-only galaxy bias quadruples its auto spectrum and doubles its cross with lensing.
     def test_bias_scaling(self):
         g1, g2 = _galaxy_with_bias(1.0), _galaxy_with_bias(2.0)
-        auto = lambda g: cl_linbias(COSMO, L_GRID, g, None, Z_RANGE, N_Z)  # noqa: E731
-        cross = lambda g: cl_linbias(COSMO, L_GRID, g, GLENS_TRACER, Z_RANGE, N_Z)  # noqa: E731
+        auto = lambda g: cl_linbias(COSMO, L_GRID, g, None, z_range=Z_RANGE, n_z=N_Z)  # noqa: E731
+        cross = lambda g: cl_linbias(COSMO, L_GRID, g, GLENS_TRACER, z_range=Z_RANGE, n_z=N_Z)  # noqa: E731
         np.testing.assert_allclose(auto(g2), 4.0 * auto(g1), rtol=1e-12)
         np.testing.assert_allclose(cross(g2), 2.0 * cross(g1), rtol=1e-12)
 
     # Multipoles at or above l_limber use the Limber engine exactly; those below it go through the non-Limber one.
     def test_limber_split(self):
         l_limber = 100.0
-        limber = np.asarray(cl_linbias(COSMO, L_GRID, GAL_TRACER_BIASED, None, Z_RANGE, N_Z))
-        split = np.asarray(cl_linbias(COSMO, L_GRID, GAL_TRACER_BIASED, None, Z_RANGE, N_Z, l_limber=l_limber))
+        limber = np.asarray(cl_linbias(COSMO, L_GRID, GAL_TRACER_BIASED, None, z_range=Z_RANGE, n_z=N_Z))
+        split = np.asarray(cl_linbias(COSMO, L_GRID, GAL_TRACER_BIASED, None, z_range=Z_RANGE, n_z=N_Z, l_limber=l_limber))
         high = np.asarray(L_GRID) >= l_limber
         assert high.any() and (~high).any()
         np.testing.assert_allclose(split[high], limber[high], rtol=1e-12)

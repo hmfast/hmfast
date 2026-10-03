@@ -133,8 +133,8 @@ case("TW10SubHaloMassFunction.dndlnmu",
      lambda p: TW10SubHaloMassFunction().dndlnmu(cosmo(p), M_GRID, M_GRID / 10.0))
 case("JvdB14SubHaloMassFunction.dndlnmu",
      lambda p: JvdB14SubHaloMassFunction().dndlnmu(cosmo(p), M_GRID, M_GRID / 10.0))
-case("T10HaloBias.bias[order=1]", lambda p: BIAS.bias(cosmo(p), M_GRID, Z_GRID, MD_200M, 1))
-case("T10HaloBias.bias[order=2]", lambda p: BIAS.bias(cosmo(p), M_GRID, Z_GRID, MD_200M, 2))
+case("T10HaloBias.bias[order=1]", lambda p: BIAS.bias(cosmo(p), M_GRID, Z_GRID, MD_200M, order=1))
+case("T10HaloBias.bias[order=2]", lambda p: BIAS.bias(cosmo(p), M_GRID, Z_GRID, MD_200M, order=2))
 case("ConstantConcentration.c_delta",
      lambda p: shared(ConstantConcentration, c=5.0).c_delta(cosmo(p), M_GRID, Z_GRID, MD_200C))
 case("D08Concentration.c_delta", lambda p: CONC.c_delta(cosmo(p), M_GRID, Z_GRID, MD_200C))
@@ -167,7 +167,7 @@ case("S12CIBProfile.l_gal", lambda p: CIB.l_gal(halo_model(p), M_GRID, Z_GRID))
 case("S12CIBProfile.l_sat", lambda p: CIB.l_sat(halo_model(p), M_GRID, Z_GRID))
 case("S12CIBProfile.l_cen", lambda p: CIB.l_cen(halo_model(p), M_GRID, Z_GRID))
 case("S12CIBProfile.mean_emissivity", lambda p: CIB.mean_emissivity(halo_model(p), Z_GRID))
-case("S12CIBProfile.mean_intensity", lambda p: CIB.mean_intensity(halo_model(p), Z_RANGE, N_Z))
+case("S12CIBProfile.mean_intensity", lambda p: CIB.mean_intensity(halo_model(p), z_range=Z_RANGE, n_z=N_Z))
 
 # --- tracers ---------------------------------------------------------------------
 for _name, _tracer in [
@@ -191,18 +191,18 @@ case("Pk.pk_tot[1h only]",
 case("corr_3d[pk_tot]", lambda p: corr_3d(cosmo(p), K_FFT, PK.pk_tot(halo_model(p), K_FFT, Z_SINGLE, NFW), R_GRID))
 case("corr_3d[pk_nl]", lambda p: corr_3d(cosmo(p), K_FFT, cosmo(p).pk(K_FFT, Z_GRID, linear=False), R_GRID))
 case("cl[limber]",
-     lambda p: cl(PK, halo_model(p), L_GRID, GAL_TRACER, GAL_TRACER, Z_RANGE, N_Z))
+     lambda p: cl(PK, halo_model(p), L_GRID, GAL_TRACER, GAL_TRACER, z_range=Z_RANGE, n_z=N_Z))
 CASES.append(pytest.param(
-    lambda p: cl(PK, halo_model(p), L_GRID, GAL_TRACER, GAL_TRACER, Z_RANGE, N_Z, l_limber=100.0),
+    lambda p: cl(PK, halo_model(p), L_GRID, GAL_TRACER, GAL_TRACER, z_range=Z_RANGE, n_z=N_Z, l_limber=100.0),
     id="cl[non-limber]", marks=_NEEDS_LOGGAMMA))
 case("cl[1h only]",
-     lambda p: cl(Pk(k_damp=0.0, include_2h=False), halo_model(p), L_GRID, GAL_TRACER, GAL_TRACER, Z_RANGE, N_Z))
+     lambda p: cl(Pk(k_damp=0.0, include_2h=False), halo_model(p), L_GRID, GAL_TRACER, GAL_TRACER, z_range=Z_RANGE, n_z=N_Z))
 case("cl_linbias",
-     lambda p: cl_linbias(cosmo(p), L_GRID, GAL_TRACER_BIASED, GAL_TRACER_BIASED, Z_RANGE, N_Z))
+     lambda p: cl_linbias(cosmo(p), L_GRID, GAL_TRACER_BIASED, GAL_TRACER_BIASED, z_range=Z_RANGE, n_z=N_Z))
 for _type in ("NN", "NG", "GG+", "GG-"):
     case(f"corr_angular[{_type}]",
          (lambda t: lambda p: corr_angular(
-             cosmo(p), L_FFT, cl_linbias(cosmo(p), L_FFT, GLENS_TRACER, GLENS_TRACER, Z_RANGE, N_Z), THETA_GRID, type=t))(_type))
+             cosmo(p), L_FFT, cl_linbias(cosmo(p), L_FFT, GLENS_TRACER, GLENS_TRACER, z_range=Z_RANGE, n_z=N_Z), THETA_GRID, type=t))(_type))
 
 # --- higher-order statistics and covariances -------------------------------------
 case("Bk.bk_1h",
@@ -226,10 +226,10 @@ case("Tk.tk_tot[2h only]",
          halo_model(p), K_GRID_BT, K_GRID_BT, Z_SINGLE, NFW))
 case("cov_cng",
      lambda p: cov_cng(TK, halo_model(p), L_GRID[:3], L_GRID[:3], GAL_TRACER, None, None, None,
-                       Z_RANGE, N_Z))
+                       z_range=Z_RANGE, n_z=N_Z))
 case("cov_ssc",
      lambda p: cov_ssc(PK, halo_model(p), L_GRID[:3], L_GRID[:3], GAL_TRACER, None, None, None,
-                       Z_RANGE, N_Z, f_sky=0.4))
+                       z_range=Z_RANGE, n_z=N_Z, f_sky=0.4))
 case("sigma2_b_disc", lambda p: sigma2_b_disc(cosmo(p), Z_GRID, f_sky=0.4))
 
 
@@ -397,22 +397,22 @@ def _hod_galaxy(e):
 def _cl_gy(e):
     t_g = GAL_TRACER.update(profile=HOD.update(alpha_s=e[5]))
     t_y = TSZ_TRACER.update(profile=GNFW.update(beta=e[6]))
-    return cl(PK, halo_model(e[:5]), L_GRID, t_g, t_y, Z_RANGE, N_Z)
+    return cl(PK, halo_model(e[:5]), L_GRID, t_g, t_y, z_range=Z_RANGE, n_z=N_Z)
 
 
 LOG_PARAMS = jnp.log(PARAMS)
 GRADIENT_CASES = {
-    "cl_yy": (lambda th: (lambda e: cl(PK, halo_model(e[:5]), L_GRID, _gnfw_tsz(e), _gnfw_tsz(e), Z_RANGE, N_Z))(jnp.exp(th)),
+    "cl_yy": (lambda th: (lambda e: cl(PK, halo_model(e[:5]), L_GRID, _gnfw_tsz(e), _gnfw_tsz(e), z_range=Z_RANGE, n_z=N_Z))(jnp.exp(th)),
               jnp.concatenate([LOG_PARAMS, jnp.log(jnp.array([6.41, 4.13, 1.4]))])),
-    "cl_gg": (lambda th: (lambda e: cl(PK, halo_model(e[:5]), L_GRID, _hod_galaxy(e), _hod_galaxy(e), Z_RANGE, N_Z))(jnp.exp(th)),
+    "cl_gg": (lambda th: (lambda e: cl(PK, halo_model(e[:5]), L_GRID, _hod_galaxy(e), _hod_galaxy(e), z_range=Z_RANGE, n_z=N_Z))(jnp.exp(th)),
               jnp.concatenate([LOG_PARAMS, jnp.log(jnp.array([1.0, 1e13, 0.2]))])),
     "cl_gy": (lambda th: _cl_gy(jnp.exp(th)), jnp.concatenate([LOG_PARAMS, jnp.log(jnp.array([1.0, 4.13]))])),
-    "cl_kgkg": (lambda th: cl(PK, halo_model(jnp.exp(th)), L_GRID, GLENS_TRACER, GLENS_TRACER, Z_RANGE, N_Z), LOG_PARAMS),
+    "cl_kgkg": (lambda th: cl(PK, halo_model(jnp.exp(th)), L_GRID, GLENS_TRACER, GLENS_TRACER, z_range=Z_RANGE, n_z=N_Z), LOG_PARAMS),
     "pk_mm": (lambda th: (lambda hm: PK.pk_1h(hm, K_GRID, Z_SINGLE, NFW) + PK.pk_2h(hm, K_GRID, Z_SINGLE, NFW))(
         halo_model(jnp.exp(th))), LOG_PARAMS),
-    "cl_kgkg_nl[hmcode]": (lambda th: cl_linbias(cosmo(jnp.exp(th), "hmcode"), L_GRID, GLENS_TRACER, GLENS_TRACER, Z_RANGE, N_Z,
+    "cl_kgkg_nl[hmcode]": (lambda th: cl_linbias(cosmo(jnp.exp(th), "hmcode"), L_GRID, GLENS_TRACER, GLENS_TRACER, z_range=Z_RANGE, n_z=N_Z,
                                                  linear=False), LOG_PARAMS),
-    "cl_kgkg_nl[halofit]": (lambda th: cl_linbias(cosmo(jnp.exp(th), "halofit"), L_GRID, GLENS_TRACER, GLENS_TRACER, Z_RANGE, N_Z,
+    "cl_kgkg_nl[halofit]": (lambda th: cl_linbias(cosmo(jnp.exp(th), "halofit"), L_GRID, GLENS_TRACER, GLENS_TRACER, z_range=Z_RANGE, n_z=N_Z,
                                                   linear=False), LOG_PARAMS),
 }
 

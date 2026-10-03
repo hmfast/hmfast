@@ -117,6 +117,7 @@ class GNFWPressureProfile(PressureProfile):
 
     def __init__(
         self,
+        *,
         x_range=(1e-5, 4.0),
         n_x=100,
         P0=8.130,
@@ -193,6 +194,7 @@ class GNFWPressureProfile(PressureProfile):
 
     def update(
         self,
+        *,
         P0=None,
         c500=None,
         alpha=None,
@@ -418,6 +420,7 @@ class B12PressureProfile(PressureProfile):
 
     def __init__(
         self,
+        *,
         x_range=(1e-4, 1e1),
         n_x=100,
         A_P0=18.1,
@@ -501,6 +504,7 @@ class B12PressureProfile(PressureProfile):
 
     def update(
         self,
+        *,
         A_P0=None,
         A_xc=None,
         A_beta=None,

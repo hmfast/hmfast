@@ -481,7 +481,7 @@ class TestS12CIBProfile:
     # mean_intensity always collapses to a scalar.
     def test_mean_intensity_is_scalar(self, hm200c):
         cib = S12CIBProfile(nu=100)
-        out = cib.mean_intensity(hm200c, (0.1, 1.0), 5)
+        out = cib.mean_intensity(hm200c, z_range=(0.1, 1.0), n_z=5)
         assert jnp.shape(out) == ()
 
     # real()'s output shape follows the (r, m, z) broadcast-then-squeeze convention.
@@ -557,7 +557,7 @@ class TestS12CIBProfile:
         assert jnp.all(jnp.isnan(cib.real(hm200c_oob, r, m, z)))
         assert jnp.all(jnp.isnan(cib.fourier(hm200c_oob, r, m, z)))
         assert jnp.all(jnp.isnan(cib.mean_emissivity(hm200c_oob, z)))
-        assert jnp.isnan(cib.mean_intensity(hm200c_oob, (float(z[0]), float(z[-1])), 5))
+        assert jnp.isnan(cib.mean_intensity(hm200c_oob, z_range=(float(z[0]), float(z[-1])), n_z=5))
 
     # real() at mass_def A vs. mass_def B (mass properly converted) agree within a loose
     # tolerance -- the satellite term traces the same generic NFW kernel as NFW/HOD above.

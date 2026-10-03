@@ -168,7 +168,7 @@ class Bk:
         low-k suppression factor.
     """
 
-    def __init__(self, include_1h=True, include_2h=True, include_3h=True, k_damp=0.01):
+    def __init__(self, *, include_1h=True, include_2h=True, include_3h=True, k_damp=0.01):
         """
         Parameters
         ----------
@@ -549,7 +549,7 @@ class Tk:
         Whether :meth:`tk_tot` includes the 4-halo term.
     """
 
-    def __init__(self, include_1h=True, include_2h=True, include_3h=True, include_4h=True):
+    def __init__(self, *, include_1h=True, include_2h=True, include_3h=True, include_4h=True):
         """
         Parameters
         ----------

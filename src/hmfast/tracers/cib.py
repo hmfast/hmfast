@@ -31,7 +31,7 @@ class CIBTracer(Tracer):
 
     _required_profile_type = CIBProfile
 
-    def __init__(self, profile=None, z_max=5.0):
+    def __init__(self, profile=None, *, z_max=5.0):
         super().__init__(profile=profile or S12CIBProfile(nu=100))
         self.z_max = z_max
 
@@ -51,7 +51,7 @@ class CIBTracer(Tracer):
         obj.z_max = z_max
         return obj
 
-    def update(self, profile=None, z_max=None):
+    def update(self, *, profile=None, z_max=None):
         """
         Return a new CIBTracer instance with updated attributes using PyTree logic.
 
