@@ -232,7 +232,7 @@ def log_interp1d_extrap(x, xp, fp):
     return jnp.exp(log_f)
 
 
-def _cubic_interp_uniform(x, x0, dx, fp, left, right):
+def cubic_interp_uniform(x, x0, dx, fp, left, right):
     """
     Cubic convolution interpolation (Keys 1981, a = -1/2) of data on a uniform grid, along its first axis.
 
@@ -355,4 +355,4 @@ def hankel_transform(x, f, q, x_out=jnp.inf):
 
     # Cubic in ln q on the native grid, with the q -> 0 value below it.
     lq = np.log(q_native)
-    return 4.0 * jnp.pi * _cubic_interp_uniform(jnp.log(q), lq[0], lq[1] - lq[0], u, jnp.sum(moment, axis=0)[None], u[-1][None])
+    return 4.0 * jnp.pi * cubic_interp_uniform(jnp.log(q), lq[0], lq[1] - lq[0], u, jnp.sum(moment, axis=0)[None], u[-1][None])

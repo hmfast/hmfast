@@ -116,12 +116,68 @@ class TestCorrAngular:
 
     # corr_angular follows the theta broadcast-then-squeeze convention, keeping trailing axes of the input.
     @pytest.mark.parametrize(
-        "theta,trailing,expected_shape",
-        [(jnp.array(0.5), (), ()), (THETA_EVAL, (), (8,)), (THETA_EVAL, (3,), (8, 3))],
+        "theta,trailing,kw,expected_shape",
+        [(jnp.array(0.5), (), {}, ()), (THETA_EVAL, (), {}, (8,)), (THETA_EVAL, (3,), {}, (8, 3)),
+         (0.5, (), {"fullsky": True}, ()), (THETA_EVAL, (3,), {"fullsky": True}, (8, 3)),
+         (THETA_EVAL, (3,), {"fullsky": True, "bin_average": True}, (7, 3))],
     )
-    def test_shape_matrix(self, theta, trailing, expected_shape):
+    def test_shape_matrix(self, theta, trailing, kw, expected_shape):
         c = jnp.ones(L_GAUSS.shape + trailing)
-        assert jax.eval_shape(lambda: corr_angular(COSMO, L_GAUSS, c, theta)).shape == expected_shape
+        assert jax.eval_shape(lambda: corr_angular(COSMO, L_GAUSS, c, theta, **kw)).shape == expected_shape
+
+    # The full sky equals the exact sum over integer l of the analytic C_l times Legendre/Jacobi-polynomial Wigner-d.
+    @pytest.mark.parametrize("typ,m", [("NN", None), ("NG", 0), ("GG+", 2), ("GG-", -2)])
+    def test_fullsky_matches_direct_sum(self, typ, m):
+        from scipy.special import eval_jacobi, eval_legendre, gammaln
+
+        theta = np.array([0.3, 5.0, 40.0, 120.0])
+        got = np.asarray(corr_angular(COSMO, L_GAUSS, _gaussian_cl(), theta, type=typ, fullsky=True))
+        ell = np.arange(1 if m is None else 2, 1001)  # spin-2 d^l vanish below l = 2; the Gaussian C_l is ~0 above 1000
+        c = np.exp(-0.5 * (ell * SIGMA) ** 2)
+        for t, g in zip(np.deg2rad(theta), got):
+            x, s2, c2 = np.cos(t), np.sin(t / 2), np.cos(t / 2)
+            if m is None:
+                d = eval_legendre(ell, x)
+            else:
+                norm = np.exp(0.5 * (gammaln(ell + 3) + gammaln(ell - 1) - gammaln(ell + m + 1) - gammaln(ell - m + 1)))
+                d = norm * s2 ** (2 - m) * c2 ** (2 + m) * eval_jacobi(ell - 2, 2 - m, 2 + m, x)
+            np.testing.assert_allclose(g, np.sum((2 * ell + 1) / (4 * np.pi) * c * d), rtol=1e-6, atol=1e-6 * np.abs(got).max())
+
+    # At small angles the full sky reduces to the flat-sky Gaussian pair, with l + 1/2 <-> flat-sky l.
+    def test_fullsky_small_angle_limit(self):
+        c = jnp.exp(-0.5 * ((L_GAUSS + 0.5) * SIGMA) ** 2)
+        w = np.asarray(corr_angular(COSMO, L_GAUSS, c, THETA_EVAL, type="NN", fullsky=True))
+        theta = np.deg2rad(np.asarray(THETA_EVAL))
+        truth = np.exp(-0.5 * (theta / SIGMA) ** 2) / (2 * np.pi * SIGMA**2)
+        assert np.all(np.abs(w - truth) <= 1e-3 * truth.max())
+
+    # Bin averages match Gauss-Legendre quadrature in cos(theta) (i.e. by solid angle) of point values.
+    @pytest.mark.parametrize("typ", ["NN", "NG", "GG+", "GG-"])
+    def test_bin_average_matches_quadrature(self, typ):
+        edges, kw = np.array([0.2, 0.5, 1.5, 20.0]), dict(type=typ, fullsky=True)
+        got = np.asarray(corr_angular(COSMO, L_GAUSS, _gaussian_cl(), edges, bin_average=True, **kw))
+        t, w = np.polynomial.legendre.leggauss(400)
+        x = np.cos(np.deg2rad(edges))
+        for i, (lo, hi) in enumerate(zip(x[1:], x[:-1])):
+            th = np.rad2deg(np.arccos(0.5 * (hi - lo) * t + 0.5 * (hi + lo)))
+            v = np.asarray(corr_angular(COSMO, L_GAUSS, _gaussian_cl(), th, **kw))
+            np.testing.assert_allclose(got[i], 0.5 * w @ v, rtol=1e-8, atol=1e-12 * np.abs(got).max())
+
+    # Full sky and bin averaging are jittable and differentiable in C_l.
+    def test_fullsky_jit_grad(self):
+        f = jax.jit(lambda c: corr_angular(COSMO, L_GAUSS, c, THETA_EVAL, type="GG-", fullsky=True, bin_average=True).sum())
+        assert np.all(np.isfinite(np.asarray(jax.grad(f)(_gaussian_cl()))))
+
+    # Bin averaging needs the full sky, bin edges must increase, and full-sky angles must be concrete and below 180 deg.
+    def test_rejects_bad_fullsky_theta(self):
+        with pytest.raises(ValueError):
+            corr_angular(COSMO, L_GAUSS, _gaussian_cl(), THETA_EVAL, bin_average=True)
+        with pytest.raises(ValueError):
+            corr_angular(COSMO, L_GAUSS, _gaussian_cl(), THETA_EVAL[::-1], fullsky=True, bin_average=True)
+        with pytest.raises(ValueError):
+            corr_angular(COSMO, L_GAUSS, _gaussian_cl(), 180.0, fullsky=True)
+        with pytest.raises(ValueError):
+            jax.jit(lambda t: corr_angular(COSMO, L_GAUSS, _gaussian_cl(), t, fullsky=True))(THETA_EVAL)
 
     # Unknown spin combinations are rejected.
     def test_rejects_unknown_type(self):

@@ -1,6 +1,6 @@
 """
 Benchmarks for the projected statistics in hmfast.stats: the halo-model angular power spectrum `cl`, the linear-bias
-`cl_linbias`, their non-Limber branch, and `corr_angular`.
+`cl_linbias`, their non-Limber branch, and `corr_angular` (flat and full sky).
 
 The CCL reference is a CosmologyCalculator fed hmfast's own background (chi, H), growth (D, f) and P(k), with
 ncdm_mode="m" and the same profiles, mass function, bias and mass range, so residuals measure the projection: the
@@ -476,6 +476,39 @@ class TestCorrAngular:
         t1, t2 = {"NN": (galaxy, None), "NG": (galaxy, shear)}.get(typ, (shear, None))
         c = np.asarray(cl_linbias(s.cosmo, jnp.asarray(ell), t1, t2, n_z=N_Z, linear=False))
         got = np.asarray(corr_angular(s.cosmo, ell, c, theta, type=typ))
+        want = pyccl.correlation(s.ccl_lin, ell=ell, C_ell=c, theta=theta, type=typ, method="fftlog")
+        keep = np.abs(want) > 1e-2 * np.max(np.abs(want))
+        assert rel_err(got[keep], want[keep]) < tol
+
+    # Full-sky NN and NG against CCL's Legendre sum over 0.1-60 deg (measured 7.4e-5, 5.1e-6; NN from CCL's l = 0, 1
+    # terms). The C_l are tapered at low and high l since CCL extrapolates them to l = 0 and ELL_MAX_CORR, which is
+    # lowered to l_max as CCL's spin-2 sum costs ~l_max^2; CCL weights NG by P_l^2 / (l(l+1)), not sqrt((l-2)!/(l+2)!),
+    # so its input is rescaled to match.
+    @pytest.mark.parametrize("typ,tol", [("NN", 1.5e-4), ("NG", 1e-5)])
+    def test_corr_angular_fullsky_legendre(self, s, typ, tol):
+        ell, theta = np.geomspace(2, 1e4, 256), np.geomspace(0.1, 60.0, 12)
+        galaxy, shear = s.galaxy(bias=(s.z_g, 1.0 + s.z_g), lin=True)[0], s.shear(lin=True)[0]
+        taper = (1.0 - np.exp(-((ell / 10.0) ** 2))) * np.exp(-((ell / 3e3) ** 2))
+        c = taper * np.asarray(cl_linbias(s.cosmo, jnp.asarray(ell), galaxy, galaxy if typ == "NN" else shear, n_z=N_Z,
+                                          linear=False))
+        got = np.asarray(corr_angular(s.cosmo, ell, c, theta, type=typ, fullsky=True))
+        c_ccl = c if typ == "NN" else c * ell * (ell + 1) / np.sqrt((ell - 1) * ell * (ell + 1) * (ell + 2))
+        params = s.ccl_lin.cosmo.spline_params
+        ell_max_corr, params.ELL_MAX_CORR = params.ELL_MAX_CORR, ell[-1]
+        try:
+            want = pyccl.correlation(s.ccl_lin, ell=ell, C_ell=c_ccl, theta=theta, type=typ, method="legendre")
+        finally:
+            params.ELL_MAX_CORR = ell_max_corr
+        keep = np.abs(want) > 1e-2 * np.max(np.abs(want))
+        assert rel_err(got[keep], want[keep]) < tol
+
+    # Full-sky xi+- against CCL's flat-sky FFTLog below 1 deg, where the flat sky holds (measured 1.2e-2, 1.4e-2);
+    # CCL has no full-sky xi+-, so this checks sign and normalisation rather than accuracy.
+    @pytest.mark.parametrize("typ,tol", [("GG+", 2.5e-2), ("GG-", 3e-2)])
+    def test_corr_angular_fullsky_shear_small_angle(self, s, typ, tol):
+        ell, theta = np.geomspace(2, 3e4, 256), np.geomspace(3.0, 60.0, 10) / 60.0
+        c = np.asarray(cl_linbias(s.cosmo, jnp.asarray(ell), s.shear(lin=True)[0], n_z=N_Z, linear=False))
+        got = np.asarray(corr_angular(s.cosmo, ell, c, theta, type=typ, fullsky=True))
         want = pyccl.correlation(s.ccl_lin, ell=ell, C_ell=c, theta=theta, type=typ, method="fftlog")
         keep = np.abs(want) > 1e-2 * np.max(np.abs(want))
         assert rel_err(got[keep], want[keep]) < tol
