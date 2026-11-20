@@ -10,9 +10,23 @@ _EMULATOR_SET_TO_MODEL = {
     "ede:v1": "ede-v1",
     "mnu-3states:v1": "mnu-3states",
     "ede:v2": "ede-v2",
+    "ede:v3": "ede-v3",
 }
 
 COSMOPOWER_MODELS = {
+    "ede-v3": [
+        "growth-and-distances/DAZ_v3.npz",
+        "growth-and-distances/HZ_v3.npz",
+        "growth-and-distances/S8Z_v3.npz",
+        "derived-parameters/DER_v3.npz",
+        "PK/PKL_v3.npz",
+        "PK/PKNL_v3.npz",
+        "TTTEEE/TT_v3.npz",
+        "TTTEEE/rTE_v3.npz",
+        "TTTEEE/EE_v3.npz",
+        "PP/PP_v3.npz",
+        "BB/BB_v3.npz",
+    ],
     "ede-v2": [
         "growth-and-distances/DAZ_v2.npz",
         "growth-and-distances/HZ_v2.npz",
@@ -194,7 +208,7 @@ def download_emulators(emulator_set="all", skip_existing=True):
     ----------
     emulator_set : str or sequence of str, default="all"
         Accepted values are ``"lcdm:v1"``, ``"mnu:v1"``, ``"neff:v1"``,
-        ``"wcdm:v1"``, ``"ede:v1"``, ``"mnu-3states:v1"``, ``"ede:v2"``,
+        ``"wcdm:v1"``, ``"ede:v1"``, ``"mnu-3states:v1"``, ``"ede:v2"``, ``"ede:v3"``,
         or ``"all"`` to download every available set at once.
     skip_existing : bool, default=True
         If `True`, files already present on disk are not downloaded again.

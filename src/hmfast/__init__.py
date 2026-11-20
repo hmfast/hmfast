@@ -12,7 +12,7 @@ __email__ = "pj407@cam.ac.uk"
 
 from .download import data_path, download_emulators
 
-download_emulators(emulator_set=["lcdm:v1", "ede:v2"], skip_existing=True)
+download_emulators(emulator_set=["lcdm:v1", "ede:v3"], skip_existing=True)
 
 
 from . import halos

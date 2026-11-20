@@ -76,14 +76,14 @@ DLNZ = 2.5e-3
 
 def class_run(cosmology, z_max_pk=20.0):
     """CLASS with `cosmology`'s parameters and its emulator set's training settings: Fermi-Dirac massive states (three
-    degenerate ones for mnu-3states:v1) and the set's N_ur."""
+    degenerate ones for mnu-3states:v1 and the ede sets) and the set's N_ur."""
     params = {
         "output": "mPk", "P_k_max_1/Mpc": 60.0, "z_max_pk": z_max_pk,
         "H0": cosmology.H0, "omega_cdm": cosmology.omega_cdm, "omega_b": cosmology.omega_b, "A_s": cosmology.A_s,
         "n_s": cosmology.n_s, "tau_reio": cosmology.tau, "N_ur": float(cosmology.N_ur),
     }
     if float(cosmology.m_ncdm) > 0:
-        deg = 3.0 if cosmology.emulator_set == "mnu-3states:v1" else 1.0
+        deg = 3.0 if cosmology.emulator_set == "mnu-3states:v1" or cosmology.emulator_set.startswith("ede") else 1.0
         params.update(N_ncdm=1, m_ncdm=float(cosmology.m_ncdm), deg_ncdm=deg)
     if float(cosmology.w0) != -1.0:
         params.update(Omega_Lambda=0.0, w0_fld=float(cosmology.w0), wa_fld=0.0)
@@ -390,6 +390,65 @@ class TestEmulatorSetsClass:
         assert rel_err(cosmo.growth_factor(jnp.asarray(Z_PK)), class_growth(class_set, Z_PK)[0]) < 4e-4
         got = cosmo.growth_rate(jnp.asarray(Z_GROWTH_RATE))
         assert rel_err(got, class_growth(class_set, Z_GROWTH_RATE)[1]) < 1e-3
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# ede:v3, the default set, at its LCDM-equivalent point against CLASS in LCDM with the same three degenerate neutrinos.
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def ede_v3(fixed_cosmology):
+    f = fixed_cosmology
+    try:
+        return CosmoPowerCosmology("ede:v3", H0=f.H0, omega_cdm=f.omega_cdm, omega_b=f.omega_b, A_s=f.A_s, n_s=f.n_s,
+                                   m_ncdm=0.02, f_ede=0.001, ncdm_mode="m", extrapolate_z=True)
+    except Exception as exc:
+        pytest.skip(f"ede:v3 emulator files not available locally: {exc}")
+
+
+@pytest.fixture(scope="module")
+def class_ede_v3(ede_v3):
+    if classy is None:
+        pytest.skip("requires classy")
+    c = class_run(ede_v3, z_max_pk=25.0)
+    yield c
+    c.struct_cleanup()
+    c.empty()
+
+
+class TestEDEv3Class:
+    pytestmark = REQUIRES_CLASS
+
+    # growth_factor to z = 25, beyond the emulated z_max_pk = 20 (measured 5.3e-5).
+    def test_growth_factor(self, ede_v3, class_ede_v3):
+        z = np.array([1.0, 5.0, 10.0, 20.0, 25.0])
+        assert rel_err(ede_v3.growth_factor(jnp.asarray(z)), class_growth(class_ede_v3, z)[0]) < 1.1e-4
+
+    # P_lin extrapolated below the emulated k_min = 5e-4 and above k_max = 10 / Mpc (measured 6.9e-4 and 2.4e-3).
+    @pytest.mark.parametrize("k,tol", [((1e-4, 2e-4, 4e-4), 1.4e-3), ((15.0, 20.0, 30.0, 50.0), 5e-3)])
+    def test_pk_k_extrapolation(self, ede_v3, class_ede_v3, k, tol):
+        for z in (0.0, 1.0):
+            got = np.ravel(ede_v3.pk(jnp.asarray(k), jnp.array([z]), linear=True))
+            assert rel_err(got, [class_ede_v3.pk_lin(ki, z) for ki in k]) < tol
+
+    # TE is emulated through r_l = TE / sqrt(TT EE): |r_l| < 1, and r_l against CLASS's for 30 <= l <= 3000, which does
+    # not depend on the C_l normalisation (measured max |difference| 5.8e-3, with |r_l| up to 0.66).
+    def test_te_correlation_coefficient(self, ede_v3):
+        if classy is None:
+            pytest.skip("requires classy")
+        c = class_run(ede_v3)
+        c.set({"output": "tCl,pCl,lCl,mPk", "lensing": "yes", "non_linear": "hmcode", "hmcode_version": "2020",
+               "l_max_scalars": 3000})
+        c.compute()
+        ell = np.arange(30, 3001)
+        cls = c.lensed_cl(3000)
+        c.struct_cleanup()
+        c.empty()
+        tt, ee, te = (np.asarray(ede_v3.cl_cmb(s, jnp.asarray(ell))) for s in ("TT", "EE", "TE"))
+        r = te / np.sqrt(tt * ee)
+        assert np.all(np.abs(r) < 1.0)
+        assert np.max(np.abs(r - cls["te"][ell] / np.sqrt(cls["tt"][ell] * cls["ee"][ell]))) < 1.2e-2
 
 
 # ---------------------------------------------------------------------------------------------------------------------

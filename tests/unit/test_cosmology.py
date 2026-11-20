@@ -246,6 +246,13 @@ class TestExtrapolateZ:
         assert jnp.isnan(D_unflagged)
         assert jnp.isfinite(D_flagged)
 
+    # growth_factor does not depend on the other requested redshifts: the growth ODE is seeded in radiation domination.
+    def test_growth_factor_independent_of_requested_redshifts(self, fixed_cosmology):
+        cosmo_ext = fixed_cosmology.update(extrapolate_z=True)
+        z = jnp.array([0.5, 3.0, 10.0])
+        assert jnp.allclose(cosmo_ext.growth_factor(z), cosmo_ext.growth_factor(jnp.append(z, 1000.0))[:3],
+                            rtol=1e-12, atol=0.0)
+
     # growth_rate and velocity_dispersion follow extrapolate_z; sigma8 is NaN beyond the background grid regardless.
     def test_growth_and_velocity_dispersion_extrapolate_but_sigma8_does_not(self, fixed_cosmology):
         cosmo_ext = fixed_cosmology.update(extrapolate_z=True)

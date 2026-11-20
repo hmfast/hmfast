@@ -11,7 +11,6 @@ import mcfit
 import numpy as np
 
 from hmfast.halos.profiles.hod import GalaxyHODProfile
-from hmfast.utils import log_interp1d_extrap
 
 from . import projected_cl as _cl
 from .pk import Pk as _Pk
@@ -261,7 +260,7 @@ def cov_cng(tk, halo_model, l1, l2, tracer1, tracer2=None, tracer3=None, tracer4
 # Super-sample covariance
 # ------------------------------------------------------------------
 
-# Decades of power-law P_lin below the emulator's k_min: the output radii then reach ~1e6 Mpc, past chi(z) * pi.
+# Decades of P_lin below the cosmology's k_min: the output radii then reach ~1e6 Mpc, past chi(z) * pi.
 _DISC_VAR_LOW_K_DECADES = 2
 
 
@@ -309,11 +308,8 @@ def sigma2_b_disc(cosmology, z, *, f_sky=1.0):
         get squeezed before return.
     """
     z_arr = jnp.atleast_1d(z)
-    k_grid = np.geomspace(*cosmology.k_range, cosmology.n_k)
-    pk_grid = jnp.reshape(cosmology.pk(k_grid, z_arr, linear=True), (len(k_grid), len(z_arr)))
     transform, k_ext = _disc_var_transform(cosmology)
-    # Power-law continuation of P_lin below k_min, whatever the cosmology returns there.
-    pk_ext = jax.vmap(lambda pk_i: log_interp1d_extrap(k_ext, k_grid, pk_i), in_axes=1, out_axes=1)(pk_grid)
+    pk_ext = jnp.reshape(cosmology.pk(k_ext, z_arr, linear=True), (len(k_ext), len(z_arr)))
 
     R_grid, var_grid = jax.vmap(transform, in_axes=1, out_axes=(0, 0))(pk_ext)
     R_grid = R_grid[0]  # same R grid for every z -- only depends on k_grid

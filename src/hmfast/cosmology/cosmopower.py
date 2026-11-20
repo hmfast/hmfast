@@ -15,6 +15,19 @@ from hmfast import data_path
 from hmfast.utils import Const, dopri5_integrate, log_interp1d_extrap
 
 
+def _eh_nowiggle(k, h, Omega_m, Omega_b, n_s, T_cmb=2.7255):
+    """
+    Unnormalised no-wiggle linear power spectrum shape :math:`k^{n_s} T_0^2(k)` of Eisenstein & Hu (1998), for
+    ``k`` in :math:`\\mathrm{Mpc}^{-1}` and total matter and baryon densities ``Omega_m``, ``Omega_b`` today.
+    """
+    om_h2, ob_h2, f_b = Omega_m * h**2, Omega_b * h**2, Omega_b / Omega_m
+    s = 44.5 * jnp.log(9.83 / om_h2) / jnp.sqrt(1.0 + 10.0 * ob_h2**0.75)  # sound horizon in Mpc
+    alpha = 1.0 - 0.328 * jnp.log(431.0 * om_h2) * f_b + 0.38 * jnp.log(22.3 * om_h2) * f_b**2
+    q = k / h * (T_cmb / 2.7) ** 2 / (Omega_m * h * (alpha + (1.0 - alpha) / (1.0 + (0.43 * k * s) ** 4)))
+    L0 = jnp.log(2.0 * jnp.e + 1.8 * q)
+    return k**n_s * (L0 / (L0 + (14.2 + 731.0 / (1.0 + 62.5 * q)) * q**2)) ** 2
+
+
 class _NoTFUnpickler(pickle.Unpickler):
     """Unpickler that reads TensorFlow's ListWrapper, pickled into cosmopower .npz files, as a plain list."""
 
@@ -87,7 +100,7 @@ _PARAMS = {
     "m_ncdm": ("m_ncdm", None, 0.06, (0.0, 2.0)),
     "N_ur": ("N_ur", None, None, (0.49, 4.49)),
     "w0": ("w0_fld", None, -1.0, (-2.0, -0.33)),
-    "f_ede": ("fEDE", None, 0.1, (0.001, 0.5)),
+    "f_ede": ("fEDE", None, 0.001, (0.001, 0.5)),
     "z_c": ("log10z_c", jnp.log10, 3162.278, (1e3, 10**4.3)),
     "theta_i": ("thetai_scf", None, 1.57, (0.1, 3.1)),
     "r": ("r", None, 0.01, (0.0, 0.3)),
@@ -107,6 +120,7 @@ class _EmulatorSet:
     bounds: tuple = (("n_s", (0.8, 1.2)),)  # training ranges that differ from _PARAMS
     z_max_pk: float = 5.0
     v2: bool = False  # log10 background outputs, and P(k) k^3 on 5e-4 < k < 10 Mpc^-1
+    te_from_r: bool = False  # TE emulated as atanh(TE / sqrt(TT EE)), network rTE
     extrapolate_z: bool = False
     extrapolate_k: bool = True
 
@@ -120,6 +134,8 @@ class _EmulatorSet:
         return ("H0", "omega_cdm", "omega_b", "A_s", "n_s", "tau", *self.free)
 
     def fiducial(self, name):
+        if name == "m_ncdm":
+            return 0.06 / self.deg_ncdm  # 0.06 eV in total, shared by the massive states
         return self.N_ur if name == "N_ur" else _PARAMS[name][2]
 
     def fixed(self):
@@ -145,7 +161,7 @@ class _EmulatorSet:
 
     def network(self, key):
         folder = {"DER": "derived-parameters", "PKL": "PK", "PKNL": "PK", "TT": "TTTEEE", "EE": "TTTEEE",
-                  "TE": "TTTEEE", "PP": "PP"}.get(key, "growth-and-distances")
+                  "TE": "TTTEEE", "rTE": "TTTEEE", "PP": "PP"}.get(key, "growth-and-distances")
         cache_key = (self.subdir, self.suffix, key)
         if cache_key not in self._networks:
             # Keep the weights concrete even when first reached under a trace.
@@ -178,9 +194,14 @@ class _EmulatorSet:
         inputs = self.inputs(p)
         k_grid, pk_fac = self.k_grid()
 
+        # Extrapolated as a ratio to the Eisenstein-Hu shape; nonlinear P(k) bends too much above k_max for a power law.
+        h, Om = p["H0"] / 100.0, self.cosmology(p).omega_x(0.0, "matter")
+        ref = lambda kk: _eh_nowiggle(kk, h, Om, p["omega_b"] / h**2, p["n_s"])
+        fit = {} if key == "PKL" else {"windows": (0.2, 0.2), "high_degree": 3}
+
         def one_z(z_i):
             pk = 10.0 ** self.network(key).predictions({**inputs, "z_pk_save_nonclass": z_i}) * pk_fac
-            return log_interp1d_extrap(k, k_grid, pk)
+            return log_interp1d_extrap(k, k_grid, pk / ref(k_grid), **fit) * ref(k)
 
         return self.mask(p, jax.vmap(one_z, out_axes=1)(z))
 
@@ -203,11 +224,15 @@ class _EmulatorSet:
         rho_crit_0 = cosmo.rho_x(0.0, "critical")
         rho_cb = lambda zz: cosmo.rho_x(zz, "matter") - cosmo.rho_x(zz, "neutrinos_massive")
 
-        # Seed well past any requested z so the solution has room to relax onto the growing mode.
-        z_start = jax.lax.stop_gradient(4.0 * jnp.maximum(jnp.max(z), self.z_max_pk))
+        # Seed deep in radiation domination (10x the photon-matter equality redshift, or past any requested z), so the
+        # result does not depend on the requested redshifts and any error in the seed has decayed by late times.
+        rho_r = lambda zz: sum(cosmo.rho_x(zz, s) for s in ("radiation", "neutrinos_rel", "neutrinos_massive"))
+        z_eq = rho_cb(0.0) / cosmo.rho_x(0.0, "radiation")
+        z_start = jax.lax.stop_gradient(jnp.maximum(4.0 * jnp.maximum(jnp.max(z), self.z_max_pk), 10.0 * z_eq))
         x_start = -jnp.log1p(z_start)
-        # Growing-mode rate with radiation and matter (Meszaros), f = 1.5 y / (1 + 1.5 y) for y = rho_cb / rho_r.
-        y = rho_cb(z_start) / (cosmo.rho_x(z_start, "radiation") + cosmo.rho_x(z_start, "neutrinos_rel"))
+        # Growing-mode rate with radiation and matter (Meszaros), f = 1.5 y / (1 + 1.5 y) for y = rho_cb / rho_r;
+        # massive neutrinos are still relativistic at the seed.
+        y = rho_cb(z_start) / rho_r(z_start)
         f_start = 1.5 * y / (1.0 + 1.5 * y)
 
         def growth_coeffs(x):
@@ -301,6 +326,8 @@ _SETS = {s.name: s for s in (
     _EmulatorSet("mnu-3states:v1", "mnu-3states", "v1", free=("m_ncdm",), deg_ncdm=3.0, N_ur=0.00641),
     _EmulatorSet("ede:v2", "ede", "v2", free=_EDE, deg_ncdm=3.0, N_ur=0.00641, bounds=_EDE_BOUNDS, z_max_pk=20.0,
                  v2=True),
+    _EmulatorSet("ede:v3", "ede", "v3", free=_EDE, deg_ncdm=3.0, N_ur=0.00641, bounds=_EDE_BOUNDS, z_max_pk=20.0,
+                 v2=True, te_from_r=True),
 )}
 
 
@@ -323,6 +350,7 @@ class CosmoPowerCosmology(Cosmology):
     ``ede:v1``          ``m_ncdm``, ``N_ur``, ``f_ede``, ``z_c``,        3                   5
                         ``theta_i``, ``r``
     ``ede:v2``          as ``ede:v1``                                    3                   20
+    ``ede:v3``          as ``ede:v1``                                    3                   20
     ==================  ===============================================  ==================  ==============
 
     The background is valid to :math:`z = 20`. The set's ``z_max_pk`` is also its
@@ -332,19 +360,19 @@ class CosmoPowerCosmology(Cosmology):
     Parameters
     ----------
     emulator_set : str
-        Emulator set, one of the table above (default ``"lcdm:v1"``).
+        Emulator set, one of the table above (default ``"ede:v3"``).
     H0, omega_cdm, omega_b, A_s, n_s, tau, m_ncdm, N_ur, w0, f_ede, z_c, theta_i, r : float or None
         As in :class:`~hmfast.cosmology.Cosmology`, for the parameters the set varies (table above); None takes the
-        fiducial value (``tau`` 0.0544, ``m_ncdm`` 0.06, ``N_ur`` giving :math:`N_\\mathrm{eff} = 3.046`, ``w0`` -1,
-        ``f_ede`` 0.1, ``z_c`` 3162.278, ``theta_i`` 1.57, ``r`` 0.01). A set that does not vary ``m_ncdm``, ``N_ur`` or ``w0`` fixes them at 0.06 eV,
+        fiducial value (``tau`` 0.0544, ``m_ncdm`` 0.06 eV in total, ``N_ur`` giving :math:`N_\\mathrm{eff} = 3.046`,
+        ``w0`` -1, ``f_ede`` 0.001, the ΛCDM-equivalent value, ``z_c`` 3162.278, ``theta_i`` 1.57, ``r`` 0.01). A set that does not vary ``m_ncdm``, ``N_ur`` or ``w0`` fixes them at 0.06 eV,
         2.0328 (0.00641 for ``mnu-3states:v1``, so :math:`N_\\mathrm{eff} = 3.046`) and -1, and has no ``f_ede``,
         ``z_c``, ``theta_i`` or ``r``; setting any of these raises a ``TypeError``.
         Every set is flat (``Omega_k`` = 0) with ``wa`` = 0, ``T_cmb`` = 2.7255 K and ``T_ncdm`` = 0.71611.
     ncdm_mode : {"cb", "m"}
         As in :class:`~hmfast.cosmology.Cosmology`.
     extrapolate_k : bool
-        If True (default), :math:`P(k)` is extrapolated as a power law in log-log beyond the emulators'
-        wavenumber range; if False, it is NaN there.
+        If True (default), :math:`P(k)` is extrapolated beyond the emulators' wavenumber range by its ratio to
+        the Eisenstein & Hu (1998) no-wiggle shape, fitted at the edges; if False, it is NaN there.
     extrapolate_z : bool
         If True, redshifts above the emulators' range are extrapolated with an FLRW :math:`H(z)` from
         :meth:`~hmfast.cosmology.Cosmology.rho_x`, matched to the emulators at the top of the range, and
@@ -353,10 +381,10 @@ class CosmoPowerCosmology(Cosmology):
 
     Examples
     --------
-    >>> cosmo = CosmoPowerCosmology("ede:v2", f_ede=0.08)
+    >>> cosmo = CosmoPowerCosmology("ede:v3", f_ede=0.08)
     """
 
-    def __init__(self, emulator_set="lcdm:v1", *,
+    def __init__(self, emulator_set="ede:v3", *,
                  H0=68.0, omega_cdm=0.12, omega_b=0.02246576, A_s=2.1053e-9, n_s=0.965, tau=0.0544,
                  m_ncdm=None, N_ur=None, w0=None, f_ede=None, z_c=None, theta_i=None, r=None,
                  ncdm_mode="cb", extrapolate_k=True, extrapolate_z=False):
@@ -412,7 +440,7 @@ class CosmoPowerCosmology(Cosmology):
 
         Examples
         --------
-        >>> cosmo = CosmoPowerCosmology("ede:v2").update(f_ede=0.08, extrapolate_z=True)
+        >>> cosmo = CosmoPowerCosmology("ede:v3").update(f_ede=0.08, extrapolate_z=True)
         """
         obj = super().update(**changes)
         settings = {"extrapolate_z": extrapolate_z, "extrapolate_k": extrapolate_k}
@@ -462,9 +490,13 @@ class CosmoPowerCosmology(Cosmology):
     @partial(jax.jit, static_argnums=(1,))
     def _cl_jit(self, s, l):
         emu = self._functions
-        net = emu.network(s)
         inputs = emu.inputs(self.params)
-        cl = net.predictions(inputs) if s == "TE" else net.ten_to_predictions(inputs)
+        if s == "TE" and emu.te_from_r:
+            tt, ee = (emu.network(x).ten_to_predictions(inputs) for x in ("TT", "EE"))
+            cl = jnp.tanh(emu.network("rTE").predictions(inputs)) * jnp.sqrt(tt * ee)
+        else:
+            net = emu.network(s)
+            cl = net.predictions(inputs) if s == "TE" else net.ten_to_predictions(inputs)
         if s == "PP":
             cl = cl / (2.0 * jnp.pi)
         ell = jnp.arange(2, cl.shape[0] + 2)

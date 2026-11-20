@@ -189,46 +189,42 @@ def lambertw(x, k=0, max_steps=5):
     return _lambertwk0(x, max_steps=max_steps)
 
 
-@jax.jit
-def log_interp1d_extrap(x, xp, fp):
+def log_interp1d_extrap(x, xp, fp, windows=(0.2, 1.0), high_degree=1):
     """
-    Interpolate positive 1D data in log-log space and extrapolate using the
-    endpoint log-slopes.
+    Interpolate positive 1D data in log-log space and extrapolate least-squares fits over the end windows: of
+    :math:`\ln f = a + b x^2` below ``xp[0]``, the leading correction to a constant as :math:`x \to 0`, and of
+    :math:`\ln f` as a polynomial of degree ``high_degree`` in :math:`\ln x` above ``xp[-1]``.
 
     Parameters
     ----------
     x : float or jnp.ndarray
         Evaluation points. Must be strictly positive.
-    xp : jnp.ndarray
-        Monotonic sample points. Must be strictly positive.
+    xp : np.ndarray
+        Concrete, increasing sample points. Must be strictly positive.
     fp : jnp.ndarray
         Positive function values sampled on ``xp``.
+    windows : tuple of float
+        Widths in dex of the low and high end windows the fits use (default (0.2, 1.0)).
+    high_degree : int
+        Degree in :math:`\ln x` of the fit above ``xp[-1]`` (default 1, a power law).
 
     Returns
     -------
     jnp.ndarray
         Interpolated or extrapolated values with the same shape as ``x``.
     """
-    x = jnp.asarray(x)
-    xp = jnp.asarray(xp)
-    fp = jnp.asarray(fp)
+    x, log_fp = jnp.asarray(x), jnp.log(jnp.asarray(fp))
+    log_xp = np.log(np.asarray(xp))
+    lo = log_xp <= log_xp[0] + windows[0] * np.log(10.0)
+    hi = log_xp >= log_xp[-1] - windows[1] * np.log(10.0)
+
+    # Least-squares coefficients through the pseudo-inverse of each static design matrix, so linear in fp.
+    c_lo = np.linalg.pinv(np.stack([np.ones(lo.sum()), np.exp(2 * log_xp[lo])], axis=1)) @ log_fp[lo]
+    c_hi = np.linalg.pinv(np.vander(log_xp[hi], high_degree + 1)) @ log_fp[hi]
 
     log_x = jnp.log(x)
-    log_xp = jnp.log(xp)
-    log_fp = jnp.log(fp)
-
-    left_slope = (log_fp[1] - log_fp[0]) / (log_xp[1] - log_xp[0])
-    right_slope = (log_fp[-1] - log_fp[-2]) / (log_xp[-1] - log_xp[-2])
-
-    log_f_interp = jnp.interp(log_x, log_xp, log_fp)
-    log_f_left = log_fp[0] + left_slope * (log_x - log_xp[0])
-    log_f_right = log_fp[-1] + right_slope * (log_x - log_xp[-1])
-
-    log_f = jnp.where(
-        x < xp[0],
-        log_f_left,
-        jnp.where(x > xp[-1], log_f_right, log_f_interp),
-    )
+    log_f = jnp.where(x < xp[0], c_lo[0] + c_lo[1] * x**2,
+                      jnp.where(x > xp[-1], jnp.polyval(c_hi, log_x), jnp.interp(log_x, log_xp, log_fp)))
     return jnp.exp(log_f)
 
 
